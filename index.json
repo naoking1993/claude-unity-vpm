@@ -1,0 +1,31 @@
+{
+  "name": "Claude-Unity 接続キット (MCP for Unity)",
+  "id": "io.github.naoking1993.claude-unity-kit.vpm",
+  "author": "naoking1993",
+  "url": "https://naoking1993.github.io/claude-unity-vpm/index.json",
+  "packages": {
+    "com.coplaydev.unity-mcp": {
+      "versions": {
+        "9.7.1": {
+          "name": "com.coplaydev.unity-mcp",
+          "displayName": "MCP for Unity",
+          "version": "9.7.1",
+          "description": "AIアシスタント(Claude等)とUnity Editorを接続するブリッジ。© CoplayDev, MIT License。配布元: https://github.com/CoplayDev/unity-mcp （本リポジトリは公式tarballを参照する非公式ミラーです）",
+          "unity": "2021.3",
+          "author": {
+            "name": "CoplayDev",
+            "url": "https://github.com/CoplayDev/unity-mcp"
+          },
+          "license": "MIT",
+          "licensesUrl": "https://github.com/CoplayDev/unity-mcp/blob/main/LICENSE",
+          "dependencies": {
+            "com.unity.nuget.newtonsoft-json": "3.0.2",
+            "com.unity.test-framework": "1.1.31"
+          },
+          "url": "https://package.openupm.com/com.coplaydev.unity-mcp/-/com.coplaydev.unity-mcp-9.7.1.tgz",
+          "zipSHA256": "b8d860ccb6c8c8b10054dc708d8880aca792dfbeff6590e651b1db15c1d9fee4"
+        }
+      }
+    }
+  }
+}
