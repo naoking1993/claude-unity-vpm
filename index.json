@@ -22,8 +22,8 @@
             "com.unity.nuget.newtonsoft-json": "3.0.2",
             "com.unity.test-framework": "1.1.31"
           },
-          "url": "https://package.openupm.com/com.coplaydev.unity-mcp/-/com.coplaydev.unity-mcp-9.7.1.tgz",
-          "zipSHA256": "b8d860ccb6c8c8b10054dc708d8880aca792dfbeff6590e651b1db15c1d9fee4"
+          "url": "https://naoking1993.github.io/claude-unity-vpm/com.coplaydev.unity-mcp-9.7.1.zip",
+          "zipSHA256": "a3eee339e8af3a15cbd676a6f6dd78984eb4ce451b38196ea48ecc726cd81831"
         }
       }
     }
