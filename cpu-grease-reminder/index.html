@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>グリス塗り替えリマインダー</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --card: #ffffff;
+    --text: #1a1d21;
+    --text-sub: #5c6570;
+    --border: #dde1e6;
+    --accent: #2563eb;
+    --accent-soft: #eff6ff;
+    --ok: #16a34a;
+    --ok-soft: #f0fdf4;
+    --warn: #d97706;
+    --warn-soft: #fffbeb;
+    --danger: #dc2626;
+    --danger-soft: #fef2f2;
+    --shadow: 0 1px 3px rgba(0,0,0,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171b;
+      --card: #1e2329;
+      --text: #e8eaed;
+      --text-sub: #9aa4b0;
+      --border: #333a43;
+      --accent: #5b8def;
+      --accent-soft: #1c2940;
+      --ok: #4ade80;
+      --ok-soft: #14291b;
+      --warn: #fbbf24;
+      --warn-soft: #2e2410;
+      --danger: #f87171;
+      --danger-soft: #331717;
+      --shadow: 0 1px 3px rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", Meiryo, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  header {
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  header h1 { font-size: 1.1rem; margin: 0; display: flex; align-items: center; gap: 8px; }
+  main { max-width: 860px; margin: 0 auto; padding: 20px 16px 60px; }
+
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    font: inherit;
+    font-size: .85rem;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 7px 14px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  button.danger-btn { color: var(--danger); }
+  button.small { padding: 4px 10px; font-size: .78rem; }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+  .card h2 { font-size: 1rem; margin: 0 0 4px; }
+  .meta { color: var(--text-sub); font-size: .82rem; }
+
+  .status-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+  .badge {
+    display: inline-block;
+    padding: 3px 12px;
+    border-radius: 999px;
+    font-size: .8rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .badge.ok     { background: var(--ok-soft);     color: var(--ok); }
+  .badge.warn   { background: var(--warn-soft);   color: var(--warn); }
+  .badge.danger { background: var(--danger-soft); color: var(--danger); }
+  .days-left { font-size: 1.4rem; font-weight: 700; }
+  .days-left small { font-size: .8rem; font-weight: 400; color: var(--text-sub); }
+
+  .bar {
+    height: 8px;
+    border-radius: 999px;
+    background: var(--border);
+    overflow: hidden;
+    margin: 6px 0 10px;
+  }
+  .bar > div { height: 100%; border-radius: 999px; transition: width .3s; }
+  .bar.ok > div     { background: var(--ok); }
+  .bar.warn > div   { background: var(--warn); }
+  .bar.danger > div { background: var(--danger); }
+
+  .temp-alert {
+    background: var(--danger-soft);
+    color: var(--danger);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: .83rem;
+    margin: 8px 0;
+  }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+
+  details { margin-top: 10px; }
+  summary { cursor: pointer; font-size: .85rem; color: var(--text-sub); user-select: none; }
+  .temp-list { list-style: none; padding: 0; margin: 8px 0; font-size: .85rem; }
+  .temp-list li {
+    display: flex; align-items: center; gap: 10px;
+    padding: 4px 0; border-bottom: 1px dashed var(--border);
+  }
+  .temp-list .delta-up { color: var(--danger); }
+  .temp-list .delta-ok { color: var(--ok); }
+  .temp-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .history-list { list-style: none; padding: 0; margin: 8px 0; font-size: .83rem; color: var(--text-sub); }
+
+  dialog {
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--card);
+    color: var(--text);
+    padding: 24px;
+    width: min(480px, calc(100vw - 32px));
+    box-shadow: 0 10px 40px rgba(0,0,0,.25);
+  }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  dialog h2 { margin: 0 0 16px; font-size: 1.05rem; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: .82rem; font-weight: 600; margin-bottom: 4px; }
+  .field input, .field select, .field textarea {
+    font: inherit;
+    font-size: .9rem;
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .field .hint { font-size: .75rem; color: var(--text-sub); margin-top: 3px; }
+  .field-row { display: flex; gap: 10px; }
+  .field-row .field { flex: 1; }
+  .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+
+  .empty {
+    text-align: center;
+    padding: 48px 20px;
+    color: var(--text-sub);
+  }
+  .empty .big { font-size: 2.4rem; margin-bottom: 8px; }
+
+  .guide { font-size: .84rem; color: var(--text-sub); }
+  .guide table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+  .guide th, .guide td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; font-weight: normal; }
+  .guide th { background: var(--bg); }
+
+  input[type="temp-num"] { width: 90px; }
+  footer { text-align: center; font-size: .75rem; color: var(--text-sub); padding: 20px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🧊 グリス塗り替えリマインダー</h1>
+  <div class="toolbar">
+    <button class="primary" onclick="openDeviceDialog()">＋ デバイスを追加</button>
+    <button onclick="exportJson()" title="バックアップ用JSONを保存">書き出し</button>
+    <button onclick="document.getElementById('importFile').click()" title="バックアップJSONを読み込み">読み込み</button>
+    <input type="file" id="importFile" accept=".json" style="display:none" onchange="importJson(event)">
+  </div>
+</header>
+
+<main>
+  <div id="deviceList"></div>
+
+  <div class="card guide">
+    <h2>📋 塗り替え時期の目安</h2>
+    <table>
+      <tr><th>グリスの種類</th><th>目安</th><th>備考</th></tr>
+      <tr><td>標準グリス（付属品・安価品）</td><td>1〜2年</td><td>乾燥しやすい</td></tr>
+      <tr><td>高性能グリス（Kryonaut 等）</td><td>約1年</td><td>高温環境ではポンプアウト・乾燥が早い</td></tr>
+      <tr><td>長寿命グリス（MX-4 / MX-6 等）</td><td>2〜3年</td><td>メーカー公称はさらに長いが実用上の目安</td></tr>
+      <tr><td>相変化シート（PTM7950 等）</td><td>5年〜</td><td>塗り替えほぼ不要とされる</td></tr>
+      <tr><td>液体金属</td><td>約2年</td><td>ニッケルメッキ以外の銅・アルミには使用不可</td></tr>
+    </table>
+    <p>経過時間はあくまで目安です。<strong>本当のサインは温度</strong>：同じ負荷で塗布直後より <strong>+8〜10°C</strong> 上がっていたら、期限前でも塗り替えを検討してください。各デバイスの「温度ログ」に負荷時温度を記録すると、基準からの上昇を自動でチェックします。毎日高負荷（ゲーム・エンコード・ローカルLLM等）で使うPCは、目安より短めの間隔をおすすめします。</p>
+  </div>
+</main>
+
+<footer>データはこのブラウザの localStorage にのみ保存されます。機種変更・ブラウザ変更の前に「書き出し」でバックアップしてください。</footer>
+
+<!-- デバイス追加/編集ダイアログ -->
+<dialog id="deviceDialog">
+  <h2 id="dialogTitle">デバイスを追加</h2>
+  <form id="deviceForm" method="dialog">
+    <div class="field">
+      <label for="fName">デバイス名</label>
+      <input id="fName" required placeholder="例: メインPC CPU (Ryzen 9 7950X)">
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="fKind">部位</label>
+        <select id="fKind">
+          <option>CPU</option>
+          <option>GPU</option>
+          <option>その他</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="fApplied">塗布日</label>
+        <input id="fApplied" type="date" required>
+      </div>
+    </div>
+    <div class="field">
+      <label for="fGreaseType">グリスの種類</label>
+      <select id="fGreaseType" onchange="onGreaseTypeChange()">
+        <option value="standard">標準グリス（付属品・安価品）… 18ヶ月</option>
+        <option value="highperf">高性能グリス（Kryonaut 等）… 12ヶ月</option>
+        <option value="longlife">長寿命グリス（MX-4 / MX-6 等）… 30ヶ月</option>
+        <option value="ptm">相変化シート（PTM7950 等）… 60ヶ月</option>
+        <option value="liquidmetal">液体金属… 24ヶ月</option>
+        <option value="custom">カスタム（月数を指定）</option>
+      </select>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="fGreaseName">製品名（任意）</label>
+        <input id="fGreaseName" placeholder="例: MX-6">
+      </div>
+      <div class="field">
+        <label for="fInterval">交換間隔（ヶ月）</label>
+        <input id="fInterval" type="number" min="1" max="120" required>
+        <div class="hint">高負荷常用なら短めに</div>
+      </div>
+    </div>
+    <div class="field">
+      <label for="fBaseTemp">塗布直後の負荷時温度（°C・任意）</label>
+      <input id="fBaseTemp" type="number" min="0" max="120" step="0.5" placeholder="例: 78">
+      <div class="hint">これを基準に温度ログの上昇をチェックします</div>
+    </div>
+    <div class="field">
+      <label for="fNotes">メモ（任意）</label>
+      <textarea id="fNotes" rows="2" placeholder="例: 塗り方は米粒法、次回はヘラ塗りを試す"></textarea>
+    </div>
+    <div class="dialog-actions">
+      <button type="button" onclick="document.getElementById('deviceDialog').close()">キャンセル</button>
+      <button type="submit" class="primary">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+'use strict';
+
+const STORE_KEY = 'grease-reminder-v1';
+const PRESETS = {
+  standard:    { label: '標準グリス',   months: 18 },
+  highperf:    { label: '高性能グリス', months: 12 },
+  longlife:    { label: '長寿命グリス', months: 30 },
+  ptm:         { label: '相変化シート', months: 60 },
+  liquidmetal: { label: '液体金属',     months: 24 },
+  custom:      { label: 'カスタム',     months: 24 },
+};
+const TEMP_WARN_DELTA = 8; // 基準温度からこの値(°C)以上上がったら警告
+
+let state = load();
+let editingId = null;
+
+function load() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) { console.error(e); }
+  return { devices: [] };
+}
+function save() {
+  localStorage.setItem(STORE_KEY, JSON.stringify(state));
+}
+function uid() {
+  return 'd' + Math.random().toString(36).slice(2, 10);
+}
+function todayStr() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function addMonths(dateStr, months) {
+  const d = new Date(dateStr + 'T00:00:00');
+  d.setMonth(d.getMonth() + months);
+  return d;
+}
+function daysBetween(a, b) {
+  return Math.round((b - a) / 86400000);
+}
+function fmtDate(d) {
+  return d.getFullYear() + '/' + (d.getMonth() + 1) + '/' + d.getDate();
+}
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// ---------- 描画 ----------
+function render() {
+  const list = document.getElementById('deviceList');
+  if (!state.devices.length) {
+    list.innerHTML = `
+      <div class="card empty">
+        <div class="big">🖥️</div>
+        <p>デバイスが未登録です。<br>「＋ デバイスを追加」から、CPU や GPU のグリス塗布日を登録してください。</p>
+      </div>`;
+    return;
+  }
+
+  // 期限が近い順に表示
+  const sorted = [...state.devices].sort((a, b) => dueDate(a) - dueDate(b));
+
+  list.innerHTML = sorted.map(dev => {
+    const due = dueDate(dev);
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const left = daysBetween(now, due);
+    const total = daysBetween(new Date(dev.appliedOn + 'T00:00:00'), due);
+    const elapsedRatio = Math.min(100, Math.max(0, 100 * (1 - left / total)));
+
+    let cls = 'ok', label = '✅ まだ大丈夫';
+    if (left < 0)        { cls = 'danger'; label = '🔴 塗り替え時期を過ぎています'; }
+    else if (left <= 30) { cls = 'warn';   label = '🟡 そろそろ塗り替え'; }
+
+    const preset = PRESETS[dev.greaseType] || PRESETS.custom;
+    const greaseDisp = dev.greaseName ? `${preset.label}（${esc(dev.greaseName)}）` : preset.label;
+
+    // 温度警告
+    let tempAlert = '';
+    const lastTemp = (dev.tempLogs || []).slice(-1)[0];
+    if (dev.baseTemp != null && lastTemp && lastTemp.temp - dev.baseTemp >= TEMP_WARN_DELTA) {
+      tempAlert = `<div class="temp-alert">🌡️ 負荷時温度が基準より <strong>+${(lastTemp.temp - dev.baseTemp).toFixed(1)}°C</strong> 上昇しています（${esc(String(dev.baseTemp))}°C → ${esc(String(lastTemp.temp))}°C）。期限前でも塗り替えを検討してください。</div>`;
+    }
+
+    const tempRows = (dev.tempLogs || []).slice().reverse().map(t => {
+      let delta = '';
+      if (dev.baseTemp != null) {
+        const d = t.temp - dev.baseTemp;
+        delta = `<span class="${d >= TEMP_WARN_DELTA ? 'delta-up' : 'delta-ok'}">${d >= 0 ? '+' : ''}${d.toFixed(1)}°C</span>`;
+      }
+      return `<li><span>${esc(t.date)}</span><strong>${esc(String(t.temp))}°C</strong>${delta}
+        <button class="small" onclick="deleteTempLog('${dev.id}','${esc(t.date)}',${t.temp})" title="削除">✕</button></li>`;
+    }).join('');
+
+    const historyRows = (dev.history || []).slice().reverse().map(h =>
+      `<li>${esc(h.appliedOn)} に塗布${h.greaseName ? '（' + esc(h.greaseName) + '）' : ''}</li>`
+    ).join('');
+
+    return `
+    <div class="card">
+      <h2>${dev.kind === 'GPU' ? '🎮' : dev.kind === 'CPU' ? '⚙️' : '🔧'} ${esc(dev.name)}</h2>
+      <div class="meta">${greaseDisp} ・ 塗布日 ${esc(dev.appliedOn)} ・ 交換間隔 ${dev.intervalMonths}ヶ月 → 期限 ${fmtDate(due)}</div>
+      <div class="status-row">
+        <span class="badge ${cls}">${label}</span>
+        <span class="days-left">${left >= 0 ? `あと ${left} <small>日</small>` : `${-left} <small>日超過</small>`}</span>
+      </div>
+      <div class="bar ${cls}"><div style="width:${elapsedRatio}%"></div></div>
+      ${tempAlert}
+      ${dev.notes ? `<div class="meta">📝 ${esc(dev.notes)}</div>` : ''}
+      <div class="actions">
+        <button class="primary small" onclick="markRepasted('${dev.id}')">✨ 塗り替えた</button>
+        <button class="small" onclick="downloadIcs('${dev.id}')" title="カレンダーに予定を登録できる .ics を保存">📅 カレンダー登録用 .ics</button>
+        <button class="small" onclick="openDeviceDialog('${dev.id}')">編集</button>
+        <button class="small danger-btn" onclick="deleteDevice('${dev.id}')">削除</button>
+      </div>
+      <details>
+        <summary>🌡️ 温度ログ（${(dev.tempLogs || []).length}件）${dev.baseTemp != null ? ` — 基準 ${dev.baseTemp}°C` : ''}</summary>
+        <div class="temp-form">
+          <input type="date" id="tempDate-${dev.id}" value="${todayStr()}">
+          <input type="number" id="tempVal-${dev.id}" min="0" max="120" step="0.5" placeholder="負荷時°C" style="width:110px">
+          <button class="small" onclick="addTempLog('${dev.id}')">記録</button>
+        </div>
+        <ul class="temp-list">${tempRows || '<li class="meta">まだ記録がありません</li>'}</ul>
+      </details>
+      ${historyRows ? `<details><summary>🕐 塗り替え履歴（${dev.history.length}件）</summary><ul class="history-list">${historyRows}</ul></details>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function dueDate(dev) {
+  return addMonths(dev.appliedOn, dev.intervalMonths);
+}
+
+// ---------- デバイス CRUD ----------
+function openDeviceDialog(id) {
+  editingId = id || null;
+  const dev = id ? state.devices.find(d => d.id === id) : null;
+  document.getElementById('dialogTitle').textContent = dev ? 'デバイスを編集' : 'デバイスを追加';
+  document.getElementById('fName').value = dev ? dev.name : '';
+  document.getElementById('fKind').value = dev ? dev.kind : 'CPU';
+  document.getElementById('fApplied').value = dev ? dev.appliedOn : todayStr();
+  document.getElementById('fGreaseType').value = dev ? dev.greaseType : 'standard';
+  document.getElementById('fGreaseName').value = dev ? (dev.greaseName || '') : '';
+  document.getElementById('fInterval').value = dev ? dev.intervalMonths : PRESETS.standard.months;
+  document.getElementById('fBaseTemp').value = dev && dev.baseTemp != null ? dev.baseTemp : '';
+  document.getElementById('fNotes').value = dev ? (dev.notes || '') : '';
+  document.getElementById('deviceDialog').showModal();
+}
+
+function onGreaseTypeChange() {
+  const type = document.getElementById('fGreaseType').value;
+  if (type !== 'custom') {
+    document.getElementById('fInterval').value = PRESETS[type].months;
+  }
+}
+
+document.getElementById('deviceForm').addEventListener('submit', () => {
+  const baseTempRaw = document.getElementById('fBaseTemp').value;
+  const data = {
+    name: document.getElementById('fName').value.trim(),
+    kind: document.getElementById('fKind').value,
+    appliedOn: document.getElementById('fApplied').value,
+    greaseType: document.getElementById('fGreaseType').value,
+    greaseName: document.getElementById('fGreaseName').value.trim(),
+    intervalMonths: Math.max(1, parseInt(document.getElementById('fInterval').value, 10) || 24),
+    baseTemp: baseTempRaw === '' ? null : parseFloat(baseTempRaw),
+    notes: document.getElementById('fNotes').value.trim(),
+  };
+  if (editingId) {
+    Object.assign(state.devices.find(d => d.id === editingId), data);
+  } else {
+    state.devices.push({ id: uid(), tempLogs: [], history: [], ...data });
+  }
+  save();
+  render();
+});
+
+function deleteDevice(id) {
+  const dev = state.devices.find(d => d.id === id);
+  if (!confirm(`「${dev.name}」を削除しますか？（温度ログ・履歴も消えます）`)) return;
+  state.devices = state.devices.filter(d => d.id !== id);
+  save();
+  render();
+}
+
+function markRepasted(id) {
+  const dev = state.devices.find(d => d.id === id);
+  if (!confirm(`「${dev.name}」を今日の日付で塗り替え済みにしますか？\n（現在の塗布日は履歴に残ります）`)) return;
+  dev.history = dev.history || [];
+  dev.history.push({ appliedOn: dev.appliedOn, greaseName: dev.greaseName });
+  dev.appliedOn = todayStr();
+  dev.tempLogs = [];
+  dev.baseTemp = null;
+  save();
+  render();
+  alert('塗り替えお疲れさまでした！🎉\n温度が落ち着いたら、負荷時温度を「塗布直後の基準温度」として編集画面で記録しておくのがおすすめです。');
+}
+
+// ---------- 温度ログ ----------
+function addTempLog(id) {
+  const dev = state.devices.find(d => d.id === id);
+  const date = document.getElementById('tempDate-' + id).value;
+  const temp = parseFloat(document.getElementById('tempVal-' + id).value);
+  if (!date || isNaN(temp)) { alert('日付と温度を入力してください。'); return; }
+  dev.tempLogs = dev.tempLogs || [];
+  dev.tempLogs.push({ date, temp });
+  dev.tempLogs.sort((a, b) => a.date.localeCompare(b.date));
+  save();
+  render();
+}
+function deleteTempLog(id, date, temp) {
+  const dev = state.devices.find(d => d.id === id);
+  const i = dev.tempLogs.findIndex(t => t.date === date && t.temp === temp);
+  if (i >= 0) dev.tempLogs.splice(i, 1);
+  save();
+  render();
+}
+
+// ---------- .ics 書き出し ----------
+function downloadIcs(id) {
+  const dev = state.devices.find(d => d.id === id);
+  const due = dueDate(dev);
+  const y = due.getFullYear(), m = String(due.getMonth() + 1).padStart(2, '0'), d = String(due.getDate()).padStart(2, '0');
+  const next = new Date(due); next.setDate(next.getDate() + 1);
+  const y2 = next.getFullYear(), m2 = String(next.getMonth() + 1).padStart(2, '0'), d2 = String(next.getDate()).padStart(2, '0');
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  const summary = `グリス塗り替え: ${dev.name}`;
+  const desc = `${PRESETS[dev.greaseType]?.label || ''}${dev.greaseName ? '（' + dev.greaseName + '）' : ''} を ${dev.appliedOn} に塗布してから ${dev.intervalMonths}ヶ月が経過します。負荷時温度も確認しましょう。`;
+  const ics = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//grease-reminder//JP',
+    'BEGIN:VEVENT',
+    `UID:${dev.id}-${y}${m}${d}@grease-reminder`,
+    `DTSTAMP:${stamp}`,
+    `DTSTART;VALUE=DATE:${y}${m}${d}`,
+    `DTEND;VALUE=DATE:${y2}${m2}${d2}`,
+    `SUMMARY:${icsEscape(summary)}`,
+    `DESCRIPTION:${icsEscape(desc)}`,
+    'BEGIN:VALARM',
+    'ACTION:DISPLAY',
+    'DESCRIPTION:グリス塗り替え時期です',
+    'TRIGGER:-P7D',
+    'END:VALARM',
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n');
+  downloadFile(`grease-${dev.name.replace(/[\\/:*?"<>|\s]+/g, '_')}.ics`, ics, 'text/calendar');
+}
+function icsEscape(s) {
+  return s.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+}
+
+// ---------- バックアップ ----------
+function exportJson() {
+  downloadFile('grease-reminder-backup.json', JSON.stringify(state, null, 2), 'application/json');
+}
+function importJson(ev) {
+  const file = ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      if (!Array.isArray(data.devices)) throw new Error('devices がありません');
+      if (!confirm(`${data.devices.length} 件のデバイスを読み込みます。現在のデータは上書きされます。よろしいですか？`)) return;
+      state = data;
+      save();
+      render();
+    } catch (e) {
+      alert('読み込みに失敗しました: ' + e.message);
+    }
+    ev.target.value = '';
+  };
+  reader.readAsText(file);
+}
+function downloadFile(name, content, mime) {
+  const blob = new Blob([content], { type: mime + ';charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+render();
+</script>
+</body>
+</html>
