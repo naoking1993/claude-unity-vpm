@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(*.zip)",
+      "Read(**/*.zip)",
+      "Read(**/*.unitypackage)",
+      "Read(**/*.tgz)",
+      "Read(**/*.tar.gz)",
+      "Read(**/*.7z)",
+      "Read(**/*.dll)",
+      "Read(**/*.fbx)",
+      "Read(**/node_modules/**)",
+      "Read(**/.git/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/read-guard.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/bash-guard.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

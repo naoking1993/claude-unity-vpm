@@ -1,0 +1,5 @@
+# セッション引き継ぎメモ（一時ファイル）
+.claude/notes/
+
+# 個人用ローカル設定
+.claude/settings.local.json
