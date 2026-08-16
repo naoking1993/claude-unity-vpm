@@ -55,9 +55,24 @@ description: Claude Codeのトークン消費を抑えつつ精度を保つ運�
 - 一括変更は 1 件だけ試して結果を確認してから残りに適用する。
 - 失敗した操作を同じ引数で盲目的にリトライしない。原因を 1 つ特定してから再試行。
 
+## 8. MCP運用（ツール定義と呼び出し回数）
+
+- **MCPツール定義は毎セッションの固定費**。MCPサーバーはグローバル設定に置かず、
+  必要なプロジェクトのスコープ（プロジェクト側の `.mcp.json`）に限定する。
+  Unity MCP は Unity プロジェクトでのみ読み込む（このリポジトリでは不要）。
+- `/context` で「MCP tools」の占有トークンを確認し、使っていないサーバーは無効化する。
+- **多数の個別ツール呼び出しは、1回のバッチ実行に置き換える**。ツール呼び出しの
+  中間結果は毎回コンテキストに積もる。大量の同種操作（多数の GameObject・
+  マテリアル操作など）は個別の MCP 呼び出しを繰り返さず、スクリプト
+  （Unity なら C# エディタスクリプト 1 本）を実行して結果サマリーだけ受け取る。
+  中間結果が載らないぶん文脈汚染が減り、精度も上がる。
+- 手順が固まった定型の MCP 作業はスキルに落とし、探索的な呼び出しを減らす。
+
 ## 参照記事
 
 - [Claude Codeのトークン消費を半減させる5フェーズ運用術（yamato_snow / Zenn）](https://zenn.dev/yamato_snow/articles/8eff833984b842)
 - [Claude Code / GitHub Copilot のトークン消費を手軽に削減する2つのツール（rairaii / Qiita）](https://qiita.com/rairaii/items/0ea0ebf709eb00230b93)
 - [Claude Codeがすぐ制限に当たる人へ。トークンを減らす使い方まとめ（hantani / note）](https://note.com/hantani/n/n7eac5c4d3e3c)
 - [Claude Codeのトークン消費を減らす5つの方法（yurukusa / Qiita）](https://qiita.com/yurukusa/items/435810e1e8a046c99916)
+- [Token-Efficient Enterprise Claude Workflows（CData）](https://www.cdata.com/blog/token-efficient-enterprise-claude-workflows)
+- [Claude Code SkillsでMCPのトークン消費を削減する（DevelopersIO）](https://dev.classmethod.jp/articles/claude-code-skills-mcp-token-reduction/)

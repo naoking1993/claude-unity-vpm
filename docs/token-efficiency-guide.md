@@ -37,6 +37,9 @@
 5. **ログは全文貼らず該当行±周辺のみ**。Linter で先に絞る
 6. **セッション中に CLAUDE.md / settings.json を書き換えない**
    （プロンプトキャッシュが無効化され 10〜20 倍のコスト差）
+7. **MCPサーバーはプロジェクトスコープに限定し、大量の同種操作はバッチ実行に**
+   （ツール定義は毎セッションの固定費。個別呼び出しの繰り返しは中間結果が
+   コンテキストに積もるため、スクリプト1本の実行に置き換える）
 
 ## 他プロジェクトへの導入方法
 
@@ -75,3 +78,7 @@ hooks はシェルスクリプトのため、Git Bash / WSL がある環境で�
    — トークンが飛ぶ原因（履歴・ソース読み・ログ読み）と /clear・/compact の使い分け
 4. [Claude Codeのトークン消費を減らす5つの方法（yurukusa / Qiita）](https://qiita.com/yurukusa/items/435810e1e8a046c99916)
    — effort調整・CLAUDE.md短縮・キャッシュ保護・hooksによる自動制御
+5. [Token-Efficient Enterprise Claude Workflows（CData）](https://www.cdata.com/blog/token-efficient-enterprise-claude-workflows)
+   — MCPツール定義のスコープ絞り込み・計算をエンジン側へ押し出す設計
+6. [Claude Code SkillsでMCPのトークン消費を削減する（DevelopersIO）](https://dev.classmethod.jp/articles/claude-code-skills-mcp-token-reduction/)
+   — MCPの多段呼び出しをコード実行1回にまとめ、中間結果をコンテキストに載せない
