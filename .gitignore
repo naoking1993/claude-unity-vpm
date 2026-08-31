@@ -2,3 +2,6 @@
 # skills/hair-modeling/scripts/ を直接実行・import すると出る
 __pycache__/
 *.py[cod]
+
+# skill-creator の評価ワークスペース（反復ごとの中間生成物）
+*-workspace/
