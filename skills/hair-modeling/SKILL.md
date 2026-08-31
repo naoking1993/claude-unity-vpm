@@ -1,6 +1,6 @@
 ---
 name: hair-modeling
-description: Blender上の髪型メッシュ（VRChatアバター用ヘアアセット）のリバースエンジニアリング・構造の数値化・再現レシピ化と、将来の「指示から髪型を生成する」ための知見蓄積の方法論。Use this skill whenever the user asks Claude to analyze, measure, reverse-engineer, compare, or (re)create hair in Blender — 「この髪型を解析して」「髪をリバースエンジニアリングして」「房の数を数えて」「房の幅/長さ/UV/ウェイト/法線を調べて」「髪型をレシピ化して」「samples/patterns.md を更新して」「同じ構造の髪を作って」「髪型を生成して」「前髪/サイド/後ろ髪の構造」— or mentions ヘアカード・房・毛先・ヘアメッシュ・法線転写・髪ボーン, or a hair asset is open in Blender (GUI or Blender MCP) even for a single measurement. Always run scripts/inspect_hair.py instead of eyeballing; never state strand counts, widths, or UV layout from a screenshot alone. Check references/verified-facts.md BEFORE assuming Blender API behavior, classification thresholds, FBX import behavior, or head-reference settings already verified there.
+description: Blender上の髪型メッシュ（VRChatアバター用ヘアアセット）のリバースエンジニアリング・構造の数値化・再現レシピ化と、将来の「指示から髪型を生成する」ための知見蓄積の方法論。Use this skill whenever the user asks Claude to analyze, measure, reverse-engineer, compare, or (re)create hair in Blender — 「この髪型を解析して」「髪をリバースエンジニアリングして」「房の数を数えて」「房の幅/長さ/UV/ウェイト/法線を調べて」「髪型をレシピ化して」「samples/patterns.md を更新して」「同じ構造の髪を作って」「髪型を生成して」「前髪/サイド/後ろ髪の構造」「黒蛇基準で」— or mentions 黒蛇（本スキルの基準サンプルの髪アセット名）・ヘアカード・房・毛先・ヘアメッシュ・法線転写・髪ボーン, or a hair asset is open in Blender (GUI or Blender MCP) even for a single measurement. Always run scripts/inspect_hair.py instead of eyeballing; never state strand counts, widths, or UV layout from a screenshot alone. Check references/verified-facts.md BEFORE assuming Blender API behavior, classification thresholds, FBX import behavior, or head-reference settings already verified there. 正規化基準・語彙基準は基準サンプル黒蛇に合わせる（SKILL.md「基準サンプル: 黒蛇」）。
 ---
 
 # 髪型のリバースエンジニアリングと生成レシピ化（Blender）
@@ -49,6 +49,9 @@ samples の各項目は次の 3 種のどれかを明示する:
 「ふんわりした前髪」は再現できない。「前髪 9 房、根元幅/毛先幅比 3.2（中央値）、
 長さ 0.4〜0.6（頭幅比）、turn 20〜40°（turn_v2）」なら再現できる。samples とレシピは
 数値と JSON キーで書き、形容詞は使わない。
+ただし **turn は曲がりの「量」であって「向き」ではない**（前に垂れる房と横に流れる房が同じ
+turn 20.3° になる例を実測で作れた）。レシピに turn を書くときは region と併記し、
+C字/S字の別は `turn_net_deg` で示す。
 
 ## 原則4: 一般化を挟む（特定商品の再現手順を書かない）
 
@@ -83,6 +86,25 @@ samples の各項目は次の 3 種のどれかを明示する:
 5. 使用アバターごとに頭部基準の推奨設定（`head_object` または `head_vertex_group`）と
    `front_axis` の実際の向きを記録。
 6. 全て verified-facts.md へ（事実 / 出典=実測 / 検証日）。
+
+## 基準サンプル: 黒蛇
+
+本スキルの**基準サンプルは「黒蛇」**（髪アセット名）。記録は `references/samples/黒蛇.md`。
+「基準」とは次の4つを黒蛇に合わせるという意味で、サンプルが増えても基準は黒蛇のまま動かさない。
+
+1. **正規化基準** — 黒蛇.md の 0節に記録した頭部基準（`head_object` / `head_vertex_group` /
+   `head_bbox_override`）と `front_axis` が既定。以後のサンプルは同じ**取り方**で頭部基準を取る。
+   別アバターで同じ取り方ができない場合は、そのサンプルの 0節に「黒蛇と基準が違う」と明記する。
+   基準が違うサンプル同士では `*_norm`（頭幅=1.0 の正規化値）を直接比較しない。
+2. **版基準** — 黒蛇は inspect_hair.py **0.2.0 以降**（turn_v2）で測る。版が違う JSON は
+   turn / straightness の定義が違うので比較不可（`compare_hair_json.py` が警告を出す）。
+3. **語彙基準** — 領域名・系統名・房の呼び方は黒蛇.md で使った語に揃える。patterns.md も同じ語で書く。
+4. **往復検証の基準** — 第3段（往復検証）の比較対象は黒蛇。`compare_hair_json.py` の ★ は
+   黒蛇のレシピの欠落候補として黒蛇.md に追記する。
+
+**現状: 黒蛇は未測定。** Blender で `inspect_hair.py` を走らせて黒蛇.md を埋めるまで、
+黒蛇の数値（房数・幅・長さ・turn・UV・ウェイト）を patterns.md にもレシピにも会話にも書かない。
+埋め方は黒蛇.md の「実測の走らせ方」にある。原則0（初回実測プロトコル）は黒蛇で実施する。
 
 ## 手順
 

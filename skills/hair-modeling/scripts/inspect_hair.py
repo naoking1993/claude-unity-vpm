@@ -438,10 +438,22 @@ def _slab_fit(P, c, T, hs, tau0=0.0):
         cnt += 1
     if sw <= 0.0 or cnt < 2:
         return None
+    mean = tuple(sp[k] / sw for k in range(3))
+    # 回帰の条件付け。窓内の tau がほぼ一点に固まっていると傾きが発散し、評価点 d=0 まで
+    # 外挿した切片がメッシュの外へ飛ぶ（断面が偏った房で実際に起きる）。
+    # ①tau の広がりが窓幅に対して小さすぎる ②評価点が窓のデータから離れすぎている
+    # のどちらかなら、次数0（重み付き平均）へ落とす。
+    md = swd / sw
+    var = swdd / sw - md * md
+    sd = math.sqrt(var) if var > 0.0 else 0.0
+    if sd < 0.05 * hs or abs(md) > 3.0 * sd:
+        return mean
     det = sw * swdd - swd * swd
     if det <= 1e-18 * max(1.0, sw * swdd):
-        return tuple(sp[k] / sw for k in range(3))
-    return tuple((swdd * sp[k] - swd * sdp[k]) / det for k in range(3))
+        return mean
+    fit = tuple((swdd * sp[k] - swd * sdp[k]) / det for k in range(3))
+    # 切片が窓の中心から窓幅以上離れたら外挿しすぎ。埋めずに次数0へ落とす
+    return fit if _dist(fit, mean) <= hs else mean
 
 
 def _end_anchor(P, c, T, hs, low, q=0.02):
@@ -1740,6 +1752,19 @@ def selftest():
     check(abs(card_strand["turn_total_deg"] - 20.48) < 2.0, "turn: selftest カード(放物線中心線) が真値 20.48±2°")
     check(sc["turn_total_deg"] > 150.0 and sc["turn_net_deg"] < 15.0, "turn: S字は total 大・net 小")
     check(all(0.0 < x["straightness"] <= 1.0 for x in (st20, a12, a32, sc)), "turn: straightness は 0<x<=1")
+    # 断面が t 方向に偏った房（中間が空っぽ）。スラブ内の tau がほぼ一点に固まるので、
+    # 局所線形回帰の切片が外挿で飛ぶ。次数0への退避が効いていないと、真っ直ぐな房に
+    # turn=187° / straightness=0.0 のような捏造値が出る（0.2.0 開発中に実際に出た）。
+    clust_s = [0.0] + [0.80 + 0.02 * k for k in range(11)]
+    for ccols in (2, 4):
+        cm = _grid_mesh("Hair_clust", len(clust_s), ccols,
+                        lambda r, c: ((c / (ccols - 1.0) - 0.5) * 0.03 * (1 - 0.5 * clust_s[r]),
+                                      -0.09, 0.08 - 0.155 * clust_s[r]),
+                        lambda r, c: (0.0, 0.0))
+        cs = analyze_mesh(cm, head, cfg)[0][0]
+        check(cs["turn_total_deg"] == 0.0 and cs["straightness"] == 1.0,
+              "turn: 断面が偏った直線カード(%d列)でも turn=0 / straightness=1（外挿暴走なし）" % ccols)
+
     # 断面が2つしかない房は中心線が引けない → 数値を埋めずに None にする
     thin = turn_of(arc90_c, 2)
     print("[turn] 2行カード: turn=%s straightness=%s nodes=%s" % (
