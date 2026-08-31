@@ -4,7 +4,7 @@
 ここには直接書かない。昇格規則: N≥3 サンプルで一致 → 確定則 / 作者で割れる → 作者依存 /
 N≤2 → 仮説。昇格・降格は末尾の変更履歴に残す。
 数値は頭部バウンディングボックス幅=1.0 の正規化値（inspect_hair.py の *_norm）。
-対応スクリプト: **inspect_hair.py 0.2.0**（各節の見出しに、その節を埋める JSON キーを併記する）。
+対応スクリプト: **inspect_hair.py 0.2.1**（各節の見出しに、その節を埋める JSON キーを併記する）。
 
 現在の蓄積: **N=0（samples/ にサンプルなし）**
 
@@ -40,12 +40,12 @@ N≤2 → 仮説。昇格・降格は末尾の変更履歴に残す。
 
 ## 系統別数値範囲表 B: 形状・シルエット（0.2.0 で追加）
 
-taper=根元/毛先幅比（`root_tip_width_ratio`）、中膨れ率=`width_bulge_ratio`、
+taper=根元/毛先幅比（`root_tip_width_ratio`）、中膨れ率=`width_bulge_ratio`（中央幅/太い方の端）、
 turn/twist=`turn_total_deg` / `twist_total_deg`、ピッチ=`root_spacing_norm`、
 幅/ピッチ=`root_pitch_ratio`、bbox=`envelope.bbox_norm`、張り出し帯=`envelope.widest_band`。
 いずれも中央値（radial のみ p10–p90 の幅）で書く。
 
-| 系統 | N | taper | 中膨れ率 | 形（`width_profile_mode`） | turn° | twist° | ピッチ | 幅/ピッチ | mid_radial p10–p90 | bbox x/z | 張り出し帯 | 根拠サンプル |
+| 系統 | N | taper | 中膨れ率 | 形（`width_profile_mode`） | turn° | twist° | ピッチ | 幅/ピッチ | mid_radial_h p10–p90 | bbox x/z | 張り出し帯 | 根拠サンプル |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | ショート | 0 | | | | | | | | | | | |
 | ボブ | 0 | | | | | | | | | | | |
@@ -59,7 +59,7 @@ turn/twist=`turn_total_deg` / `twist_total_deg`、ピッチ=`root_spacing_norm`�
 `aggregates.by_region` から転記する。0.2.0 で taper・中膨れ率・turn・twist・radial・
 レイヤー内訳・ピッチが領域別に出るようになった。
 
-| 領域 | N(サンプル数) | 房数 | 長さ中央値 | 根元幅中央値 | taper | 中膨れ率 | turn° | twist° | mid_radial 中央値 | レイヤー内訳 | ピッチ |
+| 領域 | N(サンプル数) | 房数 | 長さ中央値 | 根元幅中央値 | taper | 中膨れ率 | turn° | twist° | mid_radial_h 中央値 | レイヤー内訳 | ピッチ |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | bangs | 0 | | | | | | | | | | |
 | side_±X | 0 | | | | | | | | | | |
@@ -71,36 +71,51 @@ turn/twist=`turn_total_deg` / `twist_total_deg`、ピッチ=`root_spacing_norm`�
 
 ## レイヤー構造（radial 分位点）
 
-`aggregates.root_radial` / `mid_radial` / `tip_radial` の p10/p25/median/p75/p90 と
-`layer_counts`（`layer_v1`: scalp <1.05 / mid <1.25 / outer 以上）。
-1.0 = 頭部楕円面。**p90−p10 の幅が「何層に重ねているか」の代理値**で、
-房数や長さと違って頭のサイズに依存しない。
+`aggregates.root_radial_h` / `mid_radial_h` / `tip_radial_h`（**水平半径** sqrt(x_n²+y_n²)、
+頭皮面=1.0）の p10/p25/median/p75/p90 と `layer_counts`
+（`layer_v2`: below_head → scalp <1.05 → mid <1.25 → outer 以上）。
+**p90−p10 の幅が「何層に重ねているか」の代理値**で、房数や長さと違い頭のサイズに依存しない。
+
+> **層は水平半径で測る。** 3D 半径（`root_radial` / `mid_radial` / `tip_radial`、これも出力される）
+> には z 成分が入るため、頭皮に密着した長い房が外側に膨らんだ短い房より「外側」と判定され、
+> 層の順序が反転する。3D 半径は「頭の中心からの距離」であって層ではない。
+> 頭部より下（中点 z_norm < −1.0）まで垂れた房は、頭部基準では層を定義できないので
+> `below_head` に分類される。この房を層の議論に混ぜないこと。
 
 | 項目 | 状態 |
 |---|---|
-| mid_radial の p10–p90 幅（系統別） | 未収録 |
-| scalp / mid / outer の比率 | 未収録 |
-| 根元 radial と毛先 radial の差（外へ逃がす量） | 未収録 |
+| mid_radial_h の p10–p90 幅（系統別） | 未収録 |
+| scalp / mid / outer / below_head の比率 | 未収録 |
+| 根元 radial_h と毛先 radial_h の差（外へ逃がす量） | 未収録 |
 
 昇格の条件: 3 サンプル以上で p10–p90 の幅が同じ帯に収まる、または作者で割れることが示せること。
 
 ## 幅プロファイル（板の中膨れ・先細り）
 
 `strands[].width_profile_norm`（根元幅=1.0 に正規化した [t0,t25,t50,t75,t100]）と
-`width_bulge_ratio` = w50/((w0+w100)/2)、`width_profile_guess`（`width_profile_v1`）。
+`width_bulge_ratio` = w50/**max**(w0,w100)、`width_waist_ratio` = w50/**min**(w0,w100)、
+`width_profile_guess`（`width_profile_v2`）。
 集計は `aggregates.width_profile_median` / `width_profile_counts` / `width_profile_mode`。
+
+> **中膨れは「中央が両端のどちらよりも太いか」で判定する。**
+> 両端の *平均* と比べる（v1 の w50/((w0+w100)/2)）と、単調に細るだけの板が化ける:
+> 1.00→0.30→0.10 は 0.545 で「中細り」、1.00→0.90→0.10 は 1.636 で「中膨れ」と誤判定された。
+> この比はテーパ曲線の凸性であって中膨れではないので、`width_curvature_ratio` として別に出す
+> （>1 なら序盤ゆるやかで終盤に急に細る、<1 なら序盤で急に細る）。
 
 **taper（根元/毛先比）だけでは板の形は決まらない。** 同じ taper でも
 中央が膨らむ板（mid_bulge）と直線的に細る板（taper_linear）は別物で、
 再現時のシルエットが変わる。よってレシピには「taper 値」ではなく
 「5 点の幅プロファイル」を書く。
 
+判定は上から順に評価する（`width_profile_v2`）:
+
 | 形 | 判定 | 状態 |
 |---|---|---|
-| taper_linear（直線的に先細り） | taper≥1.3 かつ 中膨れ率 0.85〜1.15 | 未収録 |
-| mid_bulge（中膨れ） | 中膨れ率 ≥1.15 | 未収録 |
-| waisted（中細り） | 中膨れ率 ≤0.85 | 未収録 |
-| flare（毛先広がり） | taper≤0.8 | 未収録 |
+| mid_bulge（中膨れ） | w50/max(w0,w100) ≥ 1.1（中央が両端のどちらより太い） | 未収録 |
+| waisted（中細り） | w50/min(w0,w100) ≤ 0.9（中央が両端のどちらより細い） | 未収録 |
+| taper_linear（先細り） | 上記に当たらず taper≥1.3 | 未収録 |
+| flare（毛先広がり） | 上記に当たらず taper≤0.8 | 未収録 |
 | uniform（ほぼ一定） | 上記以外 | 未収録 |
 
 昇格の条件: 3 サンプル以上で `width_profile_median` の 5 点が近い（各点の差が 0.15 以内）こと。
@@ -121,6 +136,11 @@ turn/twist=`turn_total_deg` / `twist_total_deg`、ピッチ=`root_spacing_norm`�
 | 最大張り出し量 | `envelope.silhouette_ratio` | 頭皮からどれだけ膨らむか | 未収録 |
 | 帯別の水平半径 | `envelope.horiz_radius_by_z[].r_p90` | シルエットの縦断面 | 未収録 |
 | 下端 | `envelope.bottom_z_norm` | 長さ系統の裏取り | 未収録 |
+
+> **`envelope.head_source` を必ず見ること。** `hair_union_bbox_fallback` なら
+> `degenerate_under_fallback: true` になり、頭部を基準にした量は None になる
+> （髪が自分の bbox を埋めるので、どんな形でも同じ値にしかならない）。
+> その場合に転記できるのは `bbox_aspect_zx` / `bbox_aspect_yx` だけ。
 
 昇格の条件: 3 サンプル以上で同じ系統の `widest_band` が一致し、その帯の r_p90 が
 ±0.15 に収まること。`length_class_guess`（毛先 z だけで決める）と食い違ったサンプルは
@@ -193,8 +213,8 @@ t の長さ、`head_release_t` = Head の影響が消える t、`head_weight_pro
 
 | # | 昇格候補 | 何が足りなかったか | 指標（0.2.0 で実装） | 状態 |
 |---|---|---|---|---|
-| 1 | radial の分位点（レイヤー構造） | radial が平均寄りの 1 値しか集計されず、領域別も無く、層の重なりを語れなかった | `_stats` に p10/p90 追加、`tip_radial` 集計、`by_region` に radial、`layer_guess`/`layer_counts` | 計測可（N=0） |
-| 2 | 板の中膨れ | t25/t75 の幅を測っていながら捨てており、taper 値だけでは板の形が決まらなかった | `width_profile_norm` / `width_bulge_ratio` / `width_profile_guess`（`width_profile_v1`） | 計測可（N=0） |
+| 1 | radial の分位点（レイヤー構造） | radial が平均寄りの 1 値しか集計されず、領域別も無く、層の重なりを語れなかった | `_stats` に p10/p90 追加、水平半径 `*_radial_h` を追加、`by_region` に radial、`layer_guess`/`layer_counts`（`layer_v2`） | 計測可（N=0） |
+| 2 | 板の中膨れ | t25/t75 の幅を測っていながら捨てており、taper 値だけでは板の形が決まらなかった | `width_profile_norm` / `width_bulge_ratio` / `width_waist_ratio` / `width_curvature_ratio` / `width_profile_guess`（`width_profile_v2`） | 計測可（N=0） |
 | 3 | taper/twist の列 | 系統別数値範囲表に taper と twist の列が無く、曲がり・ねじれを系統ごとに比較できなかった | 系統別数値範囲表 B を新設、`by_region` に taper/中膨れ率/turn/twist を追加 | 計測可（N=0） |
 | 4 | エンベロープ指標 | シルエット全体を表す数値が皆無で、系統分類が毛先 z 一点に依存していた | `aggregates.envelope`（`envelope_v1`、頭部固定 z 帯の水平半径） | 計測可（N=0） |
 | 5 | 房ピッチと重なり | 房数しか無く、頭のサイズに依らない「隣とどれだけ空けるか」を書けなかった | `root_spacing_norm` / `root_pitch_ratio`（`spacing_v1`） | 計測可（N=0） |
@@ -207,8 +227,9 @@ t の長さ、`head_release_t` = Head の影響が消える t、`head_weight_pro
 
 次にやること（第2段の残り）: **サンプルを 3 件ためる**。指標と受け皿は揃ったので、
 以降の第2段は「samples/ から転記して N を進める」作業になる。
-閾値（`layer_bounds` / `bulge_bounds` / `taper_bounds` / `mirror_tol_norm` / `root_lock_weight`）は
-いずれも未校正なので、最初の数サンプルでは**判定ラベルより生の数値を優先して転記する**。
+閾値（`layer_bounds` / `layer_below_z` / `bulge_bounds` / `taper_bounds` / `mirror_tol_norm` /
+`root_lock_weight`）はいずれも未校正なので、最初の数サンプルでは
+**判定ラベルより生の数値を優先して転記する**。
 
 ## 変更履歴
 
@@ -220,3 +241,9 @@ t の長さ、`head_release_t` = Head の影響が消える t、`head_weight_pro
   レイヤー・幅プロファイル・エンベロープ・房ピッチ・左右対称性・根元ウェイトの 6 節を新設、
   昇格候補台帳を新設。**昇格は 0 件（N=0 のまま。数値は一切書いていない）。**
   対応スクリプトは inspect_hair.py 0.2.0。
+- 2026-08-31: 0.2.1。判定ルール 2 件の欠陥を修正したのに伴い、本ファイルの定義も差し替えた。
+  ①中膨れは「中央 vs 両端の平均」ではなく「中央 vs 両端のどちらか」で判定する（`width_profile_v2`）。
+  旧定義は単調に細るだけの板を mid_bulge / waisted と誤判定していた。
+  ②層は 3D 半径ではなく水平半径 `mid_radial_h` で測る（`layer_v2`）。
+  旧定義は頭皮に密着した長い房を外側レイヤーと誤判定していた。
+  どちらも**昇格前に見つかったので、誤った一般則が確定則に混入したことはない**（N は 0 のまま）。

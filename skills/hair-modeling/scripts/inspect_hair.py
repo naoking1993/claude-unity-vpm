@@ -67,6 +67,8 @@ DEFAULTS = {
     "head_vertex_group": None,       # ["Body", "Head"] のように (オブジェクト, 頂点グループ)
     "head_bbox_override": None,      # {"center": [x,y,z], "half": [rx,ry,rz]}
     "head_group_hints": ["Head", "head", "J_Bip_C_Head", "頭", "HEAD"],
+    # Head 系判定から除くトークン。髪側のボーン（Hair_Head_02 等）を頭部と誤認しないため
+    "head_group_exclude_tokens": ["hair", "髪", "kami", "ahoge", "アホ毛"],
     "head_weight_threshold": 0.5,
     # 前方向の仮定（Blender 標準はキャラが -Y を向く）。"-Y" / "+Y" / "-X" / "+X"
     "front_axis": "-Y",
@@ -78,8 +80,9 @@ DEFAULTS = {
     "root_band_frac": 0.12,          # 根元帯（t の幅）
     "band_half_width": 0.07,         # 25/50/75% 帯の半幅
     # --- 第2段 昇格候補指標のパラメータ（0.2.0 追加。閾値はいずれも未校正＝初版の当て推量） ---
-    "layer_bounds": [1.05, 1.25],    # mid_radial: 未満=scalp / 未満=mid / 以上=outer
-    "bulge_bounds": [0.85, 1.15],    # 中膨れ率 bulge = w50 / ((w0+w100)/2)
+    "layer_bounds": [1.05, 1.25],    # mid_radial_h(水平半径): 未満=scalp / 未満=mid / 以上=outer
+    "layer_below_z": -1.0,           # 房の中点 z_norm がこれ未満なら頭部を離れており層は未定義
+    "bulge_bounds": [0.9, 1.1],      # 中央/両端 の比。以下=中細り / 以上=中膨れ
     "taper_bounds": [0.8, 1.3],      # 根元/毛先幅比: 以下=flare / 以上=taper_linear
     "envelope_min_band_points": 3,   # z 帯を報告する最小頂点数
     "mirror_tol_norm": 0.06,         # ミラー相手とみなす根元距離（頭幅比）
@@ -118,15 +121,22 @@ RULES = {
         "符号が負なら毛先に向かって減少"
     ),
     # --- 0.2.0 追加（第2段 昇格候補指標） ---
-    "width_profile_v1": (
-        "5帯の幅から 中膨れ率 bulge=w50/((w0+w100)/2)、先細り比 taper=w0/w100 を出す。"
-        "bulge>=bulge_bounds[1]→mid_bulge（板の中膨れ） | bulge<=bulge_bounds[0]→waisted（中細り） | "
+    "width_profile_v2": (
+        "5帯の幅から判定する。中膨れ率 bulge=w50/max(w0,w100)（中央が"
+        "『両端のどちらよりも』太いか）、中細り率 waist=w50/min(w0,w100)、先細り比 taper=w0/w100。"
+        "bulge>=bulge_bounds[1]→mid_bulge（板の中膨れ） | waist<=bulge_bounds[0]→waisted（中細り） | "
         "taper>=taper_bounds[1]→taper_linear | taper<=taper_bounds[0]→flare（毛先広がり） | それ以外→uniform。"
-        "width_profile_norm は根元幅=1.0 に正規化した [t0,t25,t50,t75,t100]"
+        "width_profile_norm は根元幅=1.0 に正規化した [t0,t25,t50,t75,t100]。"
+        "※v1 は w50/((w0+w100)/2)（両端の平均との比）で判定していたが、これは中膨れではなく"
+        "テーパ曲線の凸性であり、単調に細るだけの板を mid_bulge/waisted と誤判定した。"
+        "凸性は width_curvature_ratio として別に出す"
     ),
-    "layer_v1": (
-        "mid_radial（頭部楕円面=1.0）で層を分ける。<layer_bounds[0]→scalp（頭皮沿い） | "
-        "<layer_bounds[1]→mid | 以上→outer（外側レイヤー）。分位点は aggregates.mid_radial の p10/p90"
+    "layer_v2": (
+        "水平半径 mid_radial_h=sqrt(x_n^2+y_n^2)（頭皮面=1.0）で層を分ける。"
+        "房の中点 z_norm<layer_below_z→below_head（頭部を離れており層は定義できない） | "
+        "<layer_bounds[0]→scalp（頭皮沿い） | <layer_bounds[1]→mid | 以上→outer（外側レイヤー）。"
+        "※v1 は 3D 半径 mid_radial を使っていたが、これには z が入るため"
+        "『頭皮に密着した長い房』が『外側に膨らんだ短い房』より外側と判定され、層の順序が反転した"
     ),
     "envelope_v1": (
         "髪全体の頂点を頭部正規化座標に置き、z_norm 固定帯"
@@ -303,28 +313,62 @@ def _profile_median(profiles, nd=3):
     return out
 
 
-def _head_group_indices(md, cfg):
-    """head_group_hints に一致する頂点グループの index 集合（_choose_root_end と同じ当て方）。"""
-    hints_l = [h.lower() for h in cfg["head_group_hints"]]
-    out = set()
-    for gi, nm in enumerate(md.group_names):
-        s = str(nm).lower()
-        if "head" in s or any(h in s for h in hints_l):
-            out.add(gi)
+def _name_tokens(s):
+    """名前を英数字/かな漢字の連なりで区切る。"J_Bip_C_Head" -> [j, bip, c, head]"""
+    out, cur = [], []
+    for ch in s:
+        if ch.isalnum():
+            cur.append(ch)
+        elif cur:
+            out.append("".join(cur))
+            cur = []
+    if cur:
+        out.append("".join(cur))
     return out
 
 
-def width_profile_guess(bulge, taper, cfg):
-    """幅プロファイルの形（width_profile_v1）。板の中膨れの検出がここ。"""
-    if bulge is None:
-        return None
+def is_head_group_name(name, cfg):
+    """Head 系の頂点グループ名か（head_group_v2）。
+
+    ①head_group_hints と完全一致 → Head 系
+    ②head_group_exclude_tokens（hair/髪 等）を語として含む → Head 系ではない
+    ③"head" またはヒントを *語として* 含む → Head 系
+
+    生の部分一致（`"head" in name`）だと "HeadHair_01" や "Headband" まで拾う。
+    髪の PhysBone チェーンを Head 系と誤認すると、房全体が頭部固定に見えて
+    root_lock_t が 1.0 に飽和し、「頭に固定された髪」という正反対の読みになる。
+    """
+    if name is None:
+        return False
+    low = str(name).strip().lower()
+    hints = [h.lower() for h in cfg["head_group_hints"]]
+    if low in hints:
+        return True
+    toks = _name_tokens(low)
+    if any(t in cfg["head_group_exclude_tokens"] for t in toks):
+        return False
+    return "head" in toks or any(h in toks for h in hints)
+
+
+def _head_group_indices(md, cfg):
+    """Head 系とみなす頂点グループの index 集合。_choose_root_end と同じ判定を使う。"""
+    return set(gi for gi, nm in enumerate(md.group_names) if is_head_group_name(nm, cfg))
+
+
+def width_profile_guess(bulge, waist, taper, cfg):
+    """幅プロファイルの形（width_profile_v2）。板の中膨れの検出がここ。
+
+    中膨れ/中細りは「中央が両端の *どちらよりも* 太い/細い」で判定する。
+    両端の平均と比べると、単調に細るだけの板（例 1.00→0.30→0.10）が中細りに、
+    （例 1.00→0.90→0.10）が中膨れに化ける。
+    """
     lo_b, hi_b = cfg["bulge_bounds"]
-    if bulge >= hi_b:
+    if bulge is not None and bulge >= hi_b:
         return "mid_bulge"
-    if bulge <= lo_b:
+    if waist is not None and waist <= lo_b:
         return "waisted"
     if taper is None:
-        return "uniform"
+        return None if bulge is None else "uniform"
     lo_t, hi_t = cfg["taper_bounds"]
     if taper >= hi_t:
         return "taper_linear"
@@ -333,14 +377,21 @@ def width_profile_guess(bulge, taper, cfg):
     return "uniform"
 
 
-def layer_guess(mid_radial, cfg):
-    """房がどの層にあるか（layer_v1）。1.0 = 頭部楕円面。"""
-    if mid_radial is None:
+def layer_guess(mid_radial_h, mid_z_norm, cfg):
+    """房がどの層にあるか（layer_v2）。水平半径 1.0 = 頭皮面。
+
+    3D 半径を使うと z 成分が入り、頭皮に密着した長い房が外側レイヤーと判定される。
+    層は「頭からどれだけ横に離れているか」なので水平半径で測る。
+    頭部より下まで垂れた房には層が定義できないので below_head を返す。
+    """
+    if mid_radial_h is None:
         return None
+    if mid_z_norm is not None and mid_z_norm < cfg["layer_below_z"]:
+        return "below_head"
     inner, outer = cfg["layer_bounds"]
-    if mid_radial < inner:
+    if mid_radial_h < inner:
         return "scalp"
-    if mid_radial < outer:
+    if mid_radial_h < outer:
         return "mid"
     return "outer"
 
@@ -539,13 +590,10 @@ def _choose_root_end(md, vidx, P, endA, endB, cfg):
     """両端集合のどちらが根元かを判定する。
     ルール順: ①Head系ボーンのウェイトが支配的な端 → ②明確に太い端（1.3倍以上） → ③高い端(z)。
     戻り値: (root_vertex_list_local, rule_name)"""
-    hints_l = [h.lower() for h in cfg["head_group_hints"]]
-
     def head_like(gidx):
         if gidx is None or gidx >= len(md.group_names):
             return False
-        nm = md.group_names[gidx].lower()
-        return nm in hints_l or "head" in nm
+        return is_head_group_name(md.group_names[gidx], cfg)
 
     if md.vgroups and md.group_names:
         def head_frac(end):
@@ -575,7 +623,7 @@ def _choose_root_end(md, vidx, P, endA, endB, cfg):
     return (endA, "higher_end") if za >= zb else (endB, "higher_end")
 
 
-def analyze_island(md, vidx, fidx, face_loops, edge_set, boundary_edge_set, head, cfg, fa_spec, sid, obj_name):
+def analyze_island(md, vidx, fidx, face_loops, isl_edges, isl_boundary, head, cfg, fa_spec, sid, obj_name):
     """1 房（連結成分）の解析。戻り値は JSON 化可能な dict。"""
     n = len(vidx)
     local = {v: i for i, v in enumerate(vidx)}
@@ -594,16 +642,17 @@ def analyze_island(md, vidx, fidx, face_loops, edge_set, boundary_edge_set, head
         return res
 
     # 局所隣接（辺長付き）
+    # isl_edges / isl_boundary はこの島の辺だけ。メッシュ全体の辺集合を島ごとに走査すると
+    # Θ(島数 × 辺数) になり、房数の多い髪で実用にならなかった（房 200 で 0.6 秒 → 房 1000 で分単位）
     adj = [[] for _ in range(n)]
     loc_edges = []
-    for a, b in edge_set:
-        if a in local and b in local:
-            la, lb = local[a], local[b]
-            w = _dist(P[la], P[lb])
-            adj[la].append((lb, w))
-            adj[lb].append((la, w))
-            loc_edges.append((la, lb))
-    loc_boundary = [(local[a], local[b]) for a, b in boundary_edge_set if a in local and b in local]
+    for a, b in isl_edges:
+        la, lb = local[a], local[b]
+        w = _dist(P[la], P[lb])
+        adj[la].append((lb, w))
+        adj[lb].append((la, w))
+        loc_edges.append((la, lb))
+    loc_boundary = [(local[a], local[b]) for a, b in isl_boundary]
     boundary_verts = set()
     for a, b in loc_boundary:
         boundary_verts.add(a)
@@ -736,13 +785,20 @@ def analyze_island(md, vidx, fidx, face_loops, edge_set, boundary_edge_set, head
                                      for lab in labels]
     else:
         res["width_profile_norm"] = None
-    bulge = None
+    bulge = waist = curvature = None
     if w0 is not None and w50 is not None and w100 is not None:
-        ends = (w0 + w100) / 2.0
-        if ends > 1e-9:
-            bulge = w50 / ends
+        hi_end, lo_end = max(w0, w100), min(w0, w100)
+        if hi_end > 1e-9:
+            bulge = w50 / hi_end          # >1 なら中央が「両端のどちらよりも」太い＝本物の中膨れ
+        if lo_end > 1e-9:
+            waist = w50 / lo_end          # <1 なら中央が「両端のどちらよりも」細い＝本物の中細り
+        ends_mean = (w0 + w100) / 2.0
+        if ends_mean > 1e-9:
+            curvature = w50 / ends_mean   # テーパ曲線の凸性（中膨れの判定には使わない）
     res["width_bulge_ratio"] = _r(bulge, 3)
-    res["width_profile_guess"] = width_profile_guess(bulge, res["root_tip_width_ratio"], cfg)
+    res["width_waist_ratio"] = _r(waist, 3)
+    res["width_curvature_ratio"] = _r(curvature, 3)
+    res["width_profile_guess"] = width_profile_guess(bulge, waist, res["root_tip_width_ratio"], cfg)
 
     # ねじれ（帯ごとの幅軸の回転量、直線角。面内曲がりも混入し得る推定値）
     twist = 0.0
@@ -813,7 +869,13 @@ def analyze_island(md, vidx, fidx, face_loops, edge_set, boundary_edge_set, head
     res["root_radial"] = _r(hradial(head, root_c), 3)
     res["mid_radial"] = _r(hradial(head, mid_c), 3)
     res["tip_radial"] = _r(hradial(head, tip_c), 3)
-    res["layer_guess"] = layer_guess(res["mid_radial"], cfg)
+    mid_n = hnorm(head, mid_c)
+    res["mid_norm"] = _rt(mid_n, 3)
+    # 層は水平半径で測る（3D 半径には z が入り、垂れた長さを層と誤認する）
+    res["root_radial_h"] = _r(math.sqrt(root_n[0] ** 2 + root_n[1] ** 2), 3)
+    res["mid_radial_h"] = _r(math.sqrt(mid_n[0] ** 2 + mid_n[1] ** 2), 3)
+    res["tip_radial_h"] = _r(math.sqrt(tip_n[0] ** 2 + tip_n[1] ** 2), 3)
+    res["layer_guess"] = layer_guess(res["mid_radial_h"], mid_n[2], cfg)
     res["region_guess"] = region_guess(root_n, tip_n, fa_spec)
 
     # UV
@@ -1017,10 +1079,18 @@ def analyze_mesh(md, head, cfg, start_id=0):
     for fi, f in enumerate(md.faces):
         if f:
             faces_of[isl_of[f[0]]].append(fi)
+    # 辺は 1 パスで島ごとに振り分ける（辺の両端は必ず同じ島に属する）
+    edges_of = defaultdict(list)
+    for a, b in edge_set:
+        edges_of[isl_of[a]].append((a, b))
+    bedges_of = defaultdict(list)
+    for a, b in boundary_edge_set:
+        bedges_of[isl_of[a]].append((a, b))
 
     strands = []
     for ii, vs in enumerate(islands):
-        s = analyze_island(md, vs, faces_of.get(ii, []), face_loops, edge_set, boundary_edge_set,
+        s = analyze_island(md, vs, faces_of.get(ii, []), face_loops,
+                           edges_of.get(ii, []), bedges_of.get(ii, []),
                            head, cfg, fa_spec, start_id + ii, md.name)
         strands.append(s)
 
@@ -1075,6 +1145,19 @@ ENVELOPE_BANDS = [
 ]
 
 
+def mesh_surface_points(md):
+    """面に属する頂点だけを返す。(points, 除外したルーズ頂点数)
+
+    エンベロープは全頂点で測ると、孤立頂点 1 個で bbox と top/bottom_z_norm が
+    決まってしまう（房の解析側はそれを退化島として既に除外している）。
+    """
+    used = set()
+    for f in md.faces:
+        used.update(f)
+    pts = [md.verts[v] for v in sorted(used) if 0 <= v < len(md.verts)]
+    return pts, len(md.verts) - len(pts)
+
+
 def envelope_metrics(points, head, cfg):
     """髪全体のシルエット指標（envelope_v1）。points はワールド座標の全頂点。
     bbox は頭幅=1.0 単位、水平半径は頭部楕円半径単位（1.0=頭皮面）。"""
@@ -1094,15 +1177,36 @@ def envelope_metrics(points, head, cfg):
     for lab, lo, hi in ENVELOPE_BANDS:
         sel = [horiz[i] for i, q in enumerate(qs)
                if (lo is None or q[2] > lo) and (hi is None or q[2] <= hi)]
-        if len(sel) < minpts:
+        if len(sel) < max(1, minpts):
             continue
         st = _stats(sel, 3)
         bands.append({"band": lab, "z_norm_range": [lo, hi], "count": st["count"],
                       "r_p50": st["median"], "r_p90": st["p90"], "r_max": st["max"],
                       "fraction": _r(st["count"] / float(len(pts)), 3)})
     widest = max(bands, key=lambda b: b["r_p90"]) if bands else None
+    # 頭部基準が髪全体 bbox の代用だと、髪はその bbox をちょうど埋めるので
+    # bbox_norm.x=1.0 / top_z_norm=+1 / bottom_z_norm=-1 / widest_band="crown" が
+    # 形状によらず必ずこの値になる。定数を数値として残すと転記されてしまうので埋めない
+    degenerate = (head.get("source") == "hair_union_bbox_fallback")
+    if degenerate:
+        return {
+            "point_count": len(pts),
+            "head_source": head.get("source"),
+            "degenerate_under_fallback": True,
+            "note": "頭部基準が髪全体bboxの代用なので、頭部を基準にした量は構造上の定数になり測れない。"
+                    "比較可能なのは bbox の縦横比だけ",
+            "bbox_aspect_zx": _r((mx[2] - mn[2]) / max(mx[0] - mn[0], 1e-9), 3),
+            "bbox_aspect_yx": _r((mx[1] - mn[1]) / max(mx[0] - mn[0], 1e-9), 3),
+            "bbox_norm": None, "center_offset_norm": None, "radial": None,
+            "horiz_radius_by_z": None, "widest_band": None, "silhouette_ratio": None,
+            "top_z_norm": None, "bottom_z_norm": None,
+        }
     return {
         "point_count": len(pts),
+        # 頭部基準が代用（hair_union_bbox_fallback）だと z 帯は頭部を指さないので、
+        # widest_band や silhouette_ratio は他サンプルと比較できない。出所をここに残す
+        "head_source": head.get("source"),
+        "degenerate_under_fallback": False,
         "bbox_norm": {"x": _r((mx[0] - mn[0]) / W, 3), "y": _r((mx[1] - mn[1]) / W, 3),
                       "z": _r((mx[2] - mn[2]) / W, 3)},
         "center_offset_norm": _rt(hnorm(head, ctr), 3),
@@ -1156,7 +1260,8 @@ def spacing_and_mirror(ok, head, cfg):
         rn = ok[i].get("root_norm")
         if rn is not None and abs(rn[s_idx]) < mid_half:
             midline += 1
-            ok[i]["mirror_partner"] = "midline"
+            ok[i]["mirror_role"] = "midline"
+            ok[i]["mirror_partner_id"] = None
             continue
         considered += 1
         m = list(a)
@@ -1170,7 +1275,8 @@ def spacing_and_mirror(ok, head, cfg):
             if la is None or lb is None or abs(lb - la) / max(abs(la), 1e-9) <= ltol:
                 hit = ok[j].get("id")
                 break
-        ok[i]["mirror_partner"] = hit
+        ok[i]["mirror_partner_id"] = hit
+        ok[i]["mirror_role"] = "matched" if hit is not None else "unmatched"
         if hit is not None:
             matched += 1
     return {
@@ -1226,7 +1332,13 @@ def aggregate(strands, head, cfg, points=None):
 
     # --- 第2段 昇格候補指標（0.2.0） ---
     agg["tip_radial"] = _stats([s.get("tip_radial") for s in ok], 3)
+    # 層の判定に使うのは水平半径（3D 半径は垂れ下がった長さを層と誤認する）
+    agg["root_radial_h"] = _stats([s.get("root_radial_h") for s in ok], 3)
+    agg["mid_radial_h"] = _stats([s.get("mid_radial_h") for s in ok], 3)
+    agg["tip_radial_h"] = _stats([s.get("tip_radial_h") for s in ok], 3)
     agg["width_bulge_ratio"] = _stats([s.get("width_bulge_ratio") for s in ok], 3)
+    agg["width_waist_ratio"] = _stats([s.get("width_waist_ratio") for s in ok], 3)
+    agg["width_curvature_ratio"] = _stats([s.get("width_curvature_ratio") for s in ok], 3)
     agg["width_profile_counts"] = dict(Counter(s.get("width_profile_guess") for s in ok))
     agg["width_profile_mode"] = _mode([s.get("width_profile_guess") for s in ok])[0]
     agg["width_profile_median"] = _profile_median([s.get("width_profile_norm") for s in ok])
@@ -1257,6 +1369,7 @@ def aggregate(strands, head, cfg, points=None):
             "root_radial": _stats([s.get("root_radial") for s in ss], 3),
             "mid_radial": _stats([s.get("mid_radial") for s in ss], 3),
             "tip_radial": _stats([s.get("tip_radial") for s in ss], 3),
+            "mid_radial_h": _stats([s.get("mid_radial_h") for s in ss], 3),
             "layer_counts": dict(Counter(s.get("layer_guess") for s in ss)),
             "root_spacing_norm": _stats([s.get("root_spacing_norm") for s in ss], 4),
         }
@@ -1586,8 +1699,16 @@ def run_blender(cfg):
         pts = []
         for md, _i in meshes:
             pts.extend(md.verts)
+        if not pts:
+            print("[inspect_hair] 対象メッシュに頂点がありません。targets を確認してください。")
+            return None
         head = head_from_points(pts, "hair_union_bbox_fallback")
-        warnings.append("頭部基準が見つからず髪全体bboxで代用。正規化値の絶対比較は不可（同一設定同士の比較のみ有効）")
+        warnings.append(
+            "頭部基準が見つからず髪全体bboxで代用。正規化値の絶対比較は不可（同一設定同士の比較のみ有効）。"
+            "envelope はこれより弱く、bbox_norm.x=1.0 / top_z_norm=+1 / bottom_z_norm=-1 / "
+            "widest_band=crown が形状によらず必ずそうなる構造上の定数なので、"
+            "同一設定同士でも比較できない。該当項目は None にしてある"
+            "（比較できるのは bbox_aspect_zx / bbox_aspect_yx だけ）")
 
     strands = []
     uv_infos = []
@@ -1603,9 +1724,30 @@ def run_blender(cfg):
         if arm is not None:
             bones[o.name] = bl_bone_summary(arm, [g.name for g in o.vertex_groups])
 
+    # エンベロープは面に属する頂点だけで測る。ルーズ頂点が 1 個あるだけで
+    # bbox と top/bottom_z_norm がそれに支配される（解析側は退化島として除外済み）
     all_points = []
+    loose = 0
     for md, _i in meshes:
-        all_points.extend(md.verts)
+        pts_s, n_loose = mesh_surface_points(md)
+        all_points.extend(pts_s)
+        loose += n_loose
+    if loose:
+        warnings.append("面に属さない頂点 %d 個を envelope の計算から除外した" % loose)
+    if cfg["use_evaluated"] and head is not None and str(head.get("source", "")).startswith(
+            ("head_object", "vertex_group", "bbox")):
+        warnings.append(
+            "use_evaluated=True で髪はモディファイア適用後を見ているが、頭部基準は適用前の"
+            "メッシュから作っている（%s）。頭部側に Shrinkwrap/Armature 等がかかっていると"
+            "正規化の基準がずれる" % head.get("source"))
+    if not cfg["use_evaluated"]:
+        mirrored = [i["name"] for _md, i in meshes
+                    if any((m or {}).get("type") == "MIRROR" for m in (i.get("modifiers") or []))]
+        if mirrored:
+            warnings.append(
+                "Mirror モディファイアが未適用のオブジェクトがある: %s。use_evaluated=False では"
+                "片側の形状しか見ていないので、mirror・envelope・房数・房ピッチは実物と一致しない。"
+                "use_evaluated=True で再実行すること" % mirrored)
     agg = aggregate(strands, head, cfg, points=all_points)
     out = {
         "meta": {
@@ -1657,17 +1799,21 @@ def print_summary(out, out_path):
         a["cross_section_counts"], a["columns_estimate_mode"], a["rows_estimate"].get("median"), a["grid_fit_fraction"], a["tip_split_fraction"]))
     print("region_guess: %s" % a["region_counts"])
     wb = a.get("width_bulge_ratio") or {}
-    print("width_profile: mode=%s bulge median=%s | profile(root=1) %s | %s" % (
-        a.get("width_profile_mode"), wb.get("median"), a.get("width_profile_median"),
-        a.get("width_profile_counts")))
-    mr = a.get("mid_radial") or {}
-    print("layers: mid_radial p10/med/p90 %s/%s/%s | %s" % (
+    ww = a.get("width_waist_ratio") or {}
+    print("width_profile: mode=%s bulge(mid/max_end) median=%s waist(mid/min_end) median=%s | profile(root=1) %s | %s" % (
+        a.get("width_profile_mode"), wb.get("median"), ww.get("median"),
+        a.get("width_profile_median"), a.get("width_profile_counts")))
+    mr = a.get("mid_radial_h") or {}
+    print("layers: mid_radial_h p10/med/p90 %s/%s/%s | %s" % (
         mr.get("p10"), mr.get("median"), mr.get("p90"), a.get("layer_counts")))
     sp = a.get("root_spacing_norm") or {}
     mi = a.get("mirror") or {}
-    print("spacing: pitch median=%s width/pitch=%s | mirror axis=%s matched=%s midline=%s" % (
-        sp.get("median"), a.get("root_pitch_ratio"), mi.get("axis"),
-        mi.get("matched_fraction"), mi.get("midline_strand_count")))
+    if a.get("spacing_skipped_reason"):
+        print("spacing: 省略 (%s)" % a["spacing_skipped_reason"])
+    else:
+        print("spacing: pitch median=%s width/pitch=%s | mirror axis=%s matched=%s midline=%s" % (
+            sp.get("median"), a.get("root_pitch_ratio"), mi.get("axis"),
+            mi.get("matched_fraction"), mi.get("midline_strand_count")))
     ev = a.get("envelope")
     if ev:
         bb = ev.get("bbox_norm") or {}
@@ -1837,8 +1983,9 @@ def selftest():
     check_np(lambda: s["width_profile_guess"] == "taper_linear", "card: width profile taper_linear")
     check_np(lambda: s["width_profile_norm"][0] == 1.0 and s["width_profile_norm"][4] < 0.5,
              "card: width profile normalized to root, tip < 0.5")
-    check_np(lambda: 0.85 < s["width_bulge_ratio"] < 1.15, "card: no mid bulge")
-    check(s["layer_guess"] in ("scalp", "mid", "outer"), "card: layer_guess set")
+    check_np(lambda: s["width_bulge_ratio"] < 1.1 and s["width_waist_ratio"] > 0.9,
+             "card: neither mid bulge nor waist")
+    check(s["layer_guess"] in ("scalp", "mid", "outer", "below_head"), "card: layer_guess set")
     check(s["groups"]["head_group_names"] == ["Head"], "card: head group detected")
     check(0.05 <= (s["groups"]["root_lock_t"] or 0) <= 0.35, "card: root lock band ~0.2")
     check(s["groups"]["head_weight_profile"][0] == 1.0, "card: root head weight 1.0")
@@ -1865,6 +2012,84 @@ def selftest():
     check_np(lambda: sbg["width_bulge_ratio"] > 1.15, "bulge: bulge ratio > 1.15")
     check_np(lambda: sbg["width_profile_norm"][2] > sbg["width_profile_norm"][0],
              "bulge: t50 wider than root")
+
+    # 1c) 回帰テスト: 判定ルールを関数レベルで直接検査する
+    #     （どちらも 0.2.0 の初版で実際に誤判定していた。メッシュを組まずに固定できる）
+    print("[rules] width_profile_v2 / layer_v2 の回帰テスト")
+    # 単調に細るだけの板は、中央がどれだけ凸でも mid_bulge/waisted にしてはいけない
+    for w0, w50, w100, want in (
+            (1.00, 0.55, 0.10, "taper_linear"),   # 線形
+            (1.00, 0.30, 0.10, "taper_linear"),   # 序盤で急に細る（v1 は waisted と誤判定）
+            (1.00, 0.90, 0.10, "taper_linear"),   # 終盤で急に細る（v1 は mid_bulge と誤判定）
+            (0.50, 1.00, 0.50, "mid_bulge"),      # 本物の中膨れ
+            (1.00, 0.40, 1.00, "waisted"),        # 本物の中細り
+            (0.10, 0.55, 1.00, "flare"),          # 毛先広がり
+            (1.00, 1.00, 1.00, "uniform"),        # 一定
+    ):
+        b = w50 / max(w0, w100)
+        wa = w50 / min(w0, w100)
+        got = width_profile_guess(b, wa, w0 / w100, cfg)
+        check(got == want, "rules: width %.2f/%.2f/%.2f -> %s (got %s)" % (w0, w50, w100, want, got))
+    # 監査で実測された誤判定プロファイルをそのまま検査に入れる。
+    # v1 は 1.453(偽陽性) > 1.193(本物の中膨れ) だったので、どの閾値でも分離できなかった
+    for prof, want, note in (
+            ([1.0, 1.0, 1.0, 0.64, 0.28], "taper_linear", "幅を保ってから急に細る板（v1 は mid_bulge）"),
+            ([1.0, 0.959, 0.968, 0.731, 0.332], "taper_linear", "同上・実測値（v1 は mid_bulge）"),
+            ([1.0, 0.705, 0.349, 0.148, 0.073], "taper_linear", "急に細って細いまま（v1 は waisted）"),
+            ([1.0, 0.576, 0.399, 0.252, 0.15], "taper_linear", "同上・実測値（v1 は waisted）"),
+            ([1.0, 1.147, 1.198, 1.115, 1.008], "mid_bulge", "本物の中膨れ（v1 のスコアは偽陽性より低かった）"),
+            ([1.0, 0.873, 0.567, 0.240, 0.080], "taper_linear", "強い非線形テーパ（v1 でも正しかった）"),
+    ):
+        p0, p50, p100 = prof[0], prof[2], prof[4]
+        got = width_profile_guess(p50 / max(p0, p100), p50 / min(p0, p100), p0 / p100, cfg)
+        check(got == want, "rules: %s -> %s (got %s)" % (note, want, got))
+
+    # 層は水平半径で測る。頭皮に密着した長い房が、外に膨らんだ短い房より外側になってはいけない
+    hugging_long = layer_guess(0.90, -1.50, cfg)   # 頭皮沿いだが頭より下まで垂れている
+    hugging_short = layer_guess(0.95, 0.0, cfg)
+    bulging_short = layer_guess(1.40, 0.0, cfg)
+    print("[rules] layer: hugging_long=%s hugging_short=%s bulging_short=%s" % (
+        hugging_long, hugging_short, bulging_short))
+    check(hugging_short == "scalp", "rules: layer 頭皮沿いは scalp")
+    check(bulging_short == "outer", "rules: layer 外に膨らむと outer")
+    check(hugging_long == "below_head", "rules: layer 頭部より下は below_head（層は未定義）")
+    check(layer_guess(1.749, -1.5, cfg) != "outer",
+          "rules: layer 3D半径なら outer になる房を outer と呼ばない")
+
+    # 1d) ねじれ推定: 曲げのみの板は 0 度、軸まわりに 90 度ねじった板は大きな値になる
+    #     （verified-facts.md がこの 2 値を引用するので、ここで再現できるようにしておく）
+    def twist_pos(r, c):
+        st = r / (rows - 1)
+        ang = math.radians(90.0 * st)
+        u = (c / (cols - 1) - 0.5) * 0.03
+        return (u * math.cos(ang), -0.09 + u * math.sin(ang), 0.08 - 0.15 * st)
+
+    s_tw = analyze_mesh(_grid_mesh("Hair_twist", rows, cols, twist_pos, card_uv), head, cfg)[0][0]
+    print("[twist] bend_only twist=%s turn=%s | twisted twist=%s turn=%s" % (
+        s["twist_total_deg"], s["turn_total_deg"], s_tw["twist_total_deg"], s_tw["turn_total_deg"]))
+    check_np(lambda: s["twist_total_deg"] == 0.0, "twist: 曲げのみのカードは 0 度")
+    check_np(lambda: s_tw["twist_total_deg"] > 60.0, "twist: 90度ねじりで 60 度超")
+    check_np(lambda: s_tw["turn_total_deg"] < 1.0, "twist: ねじりのみのカードは turn 0 度")
+
+    # 1e) 回帰テスト: Head 系グループ名の判定（髪ボーンを頭部と誤認しないこと）
+    for nm, want in (("Head", True), ("J_Bip_C_Head", True), ("頭", True), ("HEAD", True),
+                     ("HeadHair_01", False), ("Hair_Head_02", False), ("Headband", False),
+                     ("Hair_01", False), ("髪_01", False), ("後頭部", False)):
+        got = is_head_group_name(nm, cfg)
+        check(got == want, "rules: head group %-14s -> %s (got %s)" % (nm, want, got))
+
+    # 1f) 回帰テスト: 頭部基準が代用のとき envelope の頭部依存量を埋めないこと
+    fb_pts = [(x * 0.01, y * 0.01, z * 0.05) for x in range(4) for y in range(3) for z in range(6)]
+    fb_head = head_from_points(fb_pts, "hair_union_bbox_fallback")
+    fb_ev = envelope_metrics(fb_pts, fb_head, cfg)
+    print("[fallback] envelope=%s" % json.dumps(
+        {k: fb_ev[k] for k in ("degenerate_under_fallback", "bbox_norm", "widest_band",
+                               "top_z_norm", "bbox_aspect_zx")}, ensure_ascii=False))
+    check(fb_ev["degenerate_under_fallback"] is True, "fallback: 代用であることを記録する")
+    check(fb_ev["bbox_norm"] is None and fb_ev["widest_band"] is None
+          and fb_ev["top_z_norm"] is None,
+          "fallback: 構造上の定数（bbox_norm.x=1 等）は埋めない")
+    check(fb_ev["bbox_aspect_zx"] is not None, "fallback: 縦横比だけは残す")
 
     # 2) 閉じた筒 6角×10行、後頭部位置
     rows2, cols2 = 10, 6
@@ -1934,7 +2159,8 @@ def selftest():
     both.verts.append((0.3, 0.3, 0.3))  # 孤立頂点（退化島）
     both.vnormals.append((0.0, 0.0, 1.0))
     strands4, _ = analyze_mesh(both, head, cfg)
-    agg = aggregate(strands4, head, cfg, points=both.verts)
+    surf_pts, n_loose = mesh_surface_points(both)
+    agg = aggregate(strands4, head, cfg, points=surf_pts)
     print("[multi] strands=%d degenerate=%d regions=%s cross=%s layers=%s profiles=%s" % (
         agg["strand_count"], agg["degenerate_islands"], agg["region_counts"],
         agg["cross_section_counts"], agg["layer_counts"], agg["width_profile_counts"]))
@@ -1950,6 +2176,11 @@ def selftest():
     check_np(lambda: agg["by_region"]["bangs"]["width_bulge_ratio"]["count"] == 1,
              "multi: by_region carries taper/bulge")
     check((agg.get("envelope") or {}).get("horiz_radius_by_z"), "multi: envelope bands produced")
+    # 孤立頂点 (0.3,0.3,0.3) は z_norm=2.5。面に属さないので envelope から外れねばならない
+    check(n_loose == 1, "multi: 1 loose vertex detected")
+    check(agg["envelope"]["point_count"] == len(both.verts) - 1, "multi: loose vertex excluded from envelope")
+    check(agg["envelope"]["top_z_norm"] < 1.0,
+          "multi: stray vertex no longer sets envelope top (was 2.5)")
     check(agg["weights"]["head_groups_detected"] == ["Head"], "multi: head group reported in weights")
     check(agg["weights"]["head_influenced_fraction"] == 0.5, "multi: only the card is head-influenced")
     check(abs(agg["weights"]["root_lock_t"]["median"] - 0.2) < 0.06,
@@ -1968,7 +2199,7 @@ def selftest():
 
     pair = _merge_meshes("Hair_pair", mirrored(0.05, False), mirrored(0.05, True))
     strands5, _ = analyze_mesh(pair, head, cfg)
-    agg5 = aggregate(strands5, head, cfg, points=pair.verts)
+    agg5 = aggregate(strands5, head, cfg, points=mesh_surface_points(pair)[0])
     ev = agg5["envelope"]
     print("[pair] spacing=%s pitch_ratio=%s mirror=%s" % (
         agg5["root_spacing_norm"].get("median"), agg5["root_pitch_ratio"],
@@ -1984,7 +2215,8 @@ def selftest():
     check(agg5["mirror"]["matched_fraction"] == 1.0 and agg5["mirror"]["considered"] == 2,
           "pair: both strands mirror-matched")
     check(agg5["mirror"]["midline_strand_count"] == 0, "pair: no midline strand")
-    check(strands5[0].get("mirror_partner") == strands5[1]["id"], "pair: partner id recorded")
+    check(strands5[0].get("mirror_partner_id") == strands5[1]["id"]
+          and strands5[0].get("mirror_role") == "matched", "pair: partner id recorded")
     check(abs(ev["bbox_norm"]["x"] - 0.65) < 0.06, "pair: envelope bbox x ~0.65 headW")
     check(abs(ev["bottom_z_norm"] - (-0.583)) < 0.03, "pair: envelope bottom z_norm ~-0.58")
     check(ev["silhouette_ratio"] > 1.0 and ev["widest_band"] is not None,

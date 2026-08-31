@@ -2,7 +2,7 @@
 
 <!-- このファイルは第1段の出力。数値は inspect_hair.py の JSON からのみ転記する。
      表記規則: 実測=値＋JSONキー / 推定=値＋ルール名＋根拠 / 一般則候補=「仮説(N=1)」
-     対応スクリプト: inspect_hair.py 0.2.0 -->
+     対応スクリプト: inspect_hair.py 0.2.1 -->
 
 ## 0. 前提（実測）
 
@@ -44,7 +44,9 @@ taper 値だけでは板の形は決まらないので、**5 点のプロファ�
 | 項目 | 値 | JSON キー |
 |---|---|---|
 | 幅プロファイル中央値 [t0,t25,t50,t75,t100]（根元=1.0） | | `aggregates.width_profile_median` |
-| 中膨れ率（w50/((w0+w100)/2)） | | `width_bulge_ratio`（中央値・範囲） |
+| 中膨れ率 w50/max(w0,w100)（>1.1 で中膨れ） | | `width_bulge_ratio`（中央値・範囲） |
+| 中細り率 w50/min(w0,w100)（<0.9 で中細り） | | `width_waist_ratio` |
+| テーパ曲線の凸性 w50/((w0+w100)/2) | | `width_curvature_ratio`（中膨れの判定には使わない） |
 | 形の内訳 / 最頻 | | `width_profile_counts` / `width_profile_mode` |
 | 根元/毛先幅比（taper） | | `root_tip_width_ratio` |
 | 幅の絶対値（頭幅比） root / mid / tip | | `root_width_norm` / `mid_width_norm` / `tip_width_norm` |
@@ -62,18 +64,22 @@ taper 値だけでは板の形は決まらないので、**5 点のプロファ�
 - 目視との食い違い: （あれば、閾値校正の材料として verified-facts.md にも書く）
 - 長さ系統: `length_class_guess`（tip_z_norm_min={値}）
 
-### 3b. レイヤー（radial 分位点。layer_v1）
+### 3b. レイヤー（radial 分位点。layer_v2）
 
-1.0 = 頭部楕円面。**p10–p90 の幅が「何層重ねているか」の代理値。**
+**層は水平半径 `*_radial_h`（頭皮面=1.0）で測る。** 3D 半径には z が入るので、
+頭皮に密着した長い房が外側レイヤーに化ける。3D 半径も出力されるが層の判定には使わない。
+**p10–p90 の幅が「何層重ねているか」の代理値。**
 
 | 項目 | p10 | median | p90 | JSON キー |
 |---|---|---|---|---|
-| root_radial | | | | `aggregates.root_radial` |
-| mid_radial | | | | `aggregates.mid_radial` |
-| tip_radial | | | | `aggregates.tip_radial` |
+| root_radial_h（水平・層の判定用） | | | | `aggregates.root_radial_h` |
+| mid_radial_h（水平・層の判定用） | | | | `aggregates.mid_radial_h` |
+| tip_radial_h（水平・層の判定用） | | | | `aggregates.tip_radial_h` |
+| mid_radial（3D・参考） | | | | `aggregates.mid_radial` |
 
-- レイヤー内訳（scalp / mid / outer）: `aggregates.layer_counts`
-- 領域別の mid_radial 中央値: `by_region[].mid_radial.median`
+- レイヤー内訳（scalp / mid / outer / below_head）: `aggregates.layer_counts`
+- 領域別の mid_radial_h 中央値: `by_region[].mid_radial_h.median`
+- `below_head` は頭部より下まで垂れて層が定義できない房。**層の議論から除くこと**（房数は書く）
 
 ## 4. 全体構成（実測: エンベロープ・房ピッチ・対称性）
 
@@ -84,6 +90,8 @@ taper 値だけでは板の形は決まらないので、**5 点のプロファ�
 | bbox x / y / z（頭幅=1） | | `envelope.bbox_norm` |
 | 中心オフセット | | `envelope.center_offset_norm` |
 | 最大張り出し帯 / その r_p90 | | `envelope.widest_band` / `silhouette_ratio` |
+| 頭部基準の出所 | | `envelope.head_source` / `degenerate_under_fallback` |
+| 縦横比（代用時はこれだけ書ける） | | `envelope.bbox_aspect_zx` / `bbox_aspect_yx` |
 | 上端 / 下端 z_norm | | `envelope.top_z_norm` / `bottom_z_norm` |
 
 帯別の水平半径（`envelope.horiz_radius_by_z`。1.0 = 頭皮面）:
@@ -108,6 +116,11 @@ taper 値だけでは板の形は決まらないので、**5 点のプロファ�
 | ミラー一致率 / 対象房数 | | `mirror.matched_fraction` / `mirror.considered` |
 | 正中房の数 | | `mirror.midline_strand_count` |
 | ミラー軸 | | `mirror.axis` |
+
+- 房ごとの相手: `strands[].mirror_role`（matched / unmatched / midline）と `mirror_partner_id`
+- **Mirror モディファイアが未適用のまま `use_evaluated=False` で測ると、片側しか見ていないので
+  この節と 4a の数値は実物と一致しない。** 警告が出ていないか確認し、出ていたら
+  `use_evaluated=True` で測り直す
 
 ## 5. UV 規約（実測）
 
@@ -155,10 +168,11 @@ bpy 骨子のパラメータ（房数・幅・長さ・曲がりを引数化）:
 ```python
 PARAMS = {
     "regions": {"bangs": {"count": 0, "length_norm": (0.0, 0.0), "root_width_norm": 0.0,
-                          "mid_radial": (0.0, 0.0)}},
+                          "mid_radial_h": (0.0, 0.0)}},
     "cross_section": "flat_card", "columns": 4, "rows": 12,
     # 幅は taper 1 値ではなく 5 点プロファイルで持つ（板の中膨れを落とさないため）
     "width_profile": (1.0, 0.0, 0.0, 0.0, 0.0),   # [t0,t25,t50,t75,t100] 根元=1.0
+    # taper 1 値では板の形が決まらない。中膨れかどうかは中央と「両端のどちらか」の比で決まる
     "turn_deg": (0, 0), "twist_deg": (0, 0),
     "spacing": {"root_pitch_norm": 0.0, "root_pitch_ratio": 0.0},
     "mirror": {"enabled": False, "midline_count": 0},

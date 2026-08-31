@@ -17,7 +17,7 @@ Blender 不要。
 import sys
 import json
 
-COMPARE_VERSION = "0.2.0"
+COMPARE_VERSION = "0.2.1"
 
 # aggregates 直下のスカラ（key, サブキー or None）
 NUM_KEYS = [
@@ -40,7 +40,12 @@ NUM_KEYS = [
     ("mid_radial", "median"),
     ("tip_z_norm_min", None),
     # --- 0.2.0 追加 ---
-    ("width_bulge_ratio", "median"),      # 板の中膨れ
+    ("width_bulge_ratio", "median"),      # 板の中膨れ（中央/太い方の端）
+    ("width_waist_ratio", "median"),      # 中細り（中央/細い方の端）
+    ("width_curvature_ratio", "median"),  # テーパ曲線の凸性
+    ("mid_radial_h", "median"),           # 層の判定に使う水平半径
+    ("mid_radial_h", "p10"),
+    ("mid_radial_h", "p90"),
     ("root_radial", "p10"),               # radial 分位点（レイヤーの内外の広がり）
     ("root_radial", "p90"),
     ("mid_radial", "p10"),
@@ -101,27 +106,50 @@ def fmt(v):
     return str(v)
 
 
+UNMEASURED = []
+
+
 def row(lines, label, va, vb):
-    """1 行追加して、★ を付けたら 1 を返す。"""
+    """1 行追加して、★ を付けたら 1 を返す。未測定は UNMEASURED に積む。"""
     if va is None or vb is None:
         lines.append("| %s | %s | %s | - | 未測定 |" % (label, fmt(va), fmt(vb)))
+        UNMEASURED.append(label)
         return 0
     if isinstance(va, bool) or isinstance(vb, bool) or not isinstance(va, (int, float)) \
             or not isinstance(vb, (int, float)):
         mark = "" if va == vb else "★"
         lines.append("| %s | %s | %s | - | %s |" % (label, fmt(va), fmt(vb), mark))
         return 1 if mark else 0
-    rel = abs(vb - va) / max(abs(va), 1e-9)
+    if abs(va) < 1e-12:
+        # 基準が 0。相対差は定義できないので、0 のままかどうかだけを見る
+        mark = "" if abs(vb) < 1e-12 else "★"
+        lines.append("| %s | %s | %s | %s | %s |" % (label, fmt(va), fmt(vb), "0→0" if not mark else "0→非0", mark))
+        return 1 if mark else 0
+    rel = abs(vb - va) / abs(va)
     mark = "★" if rel > THRESH else ""
     lines.append("| %s | %s | %s | %.0f%% | %s |" % (label, fmt(va), fmt(vb), rel * 100, mark))
     return 1 if mark else 0
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    argv = sys.argv[1:]
     md_out = None
-    if "--md" in sys.argv:
-        md_out = sys.argv[sys.argv.index("--md") + 1]
+    args = []
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--md":
+            if i + 1 >= len(argv):
+                print("--md には出力先パスが必要です。")
+                sys.exit(1)
+            md_out = argv[i + 1]   # 値を位置引数に混ぜない
+            i += 2
+            continue
+        if a.startswith("--"):
+            i += 1
+            continue
+        args.append(a)
+        i += 1
     if len(args) < 2:
         print(__doc__)
         sys.exit(1)
@@ -150,7 +178,14 @@ def main():
         flagged += row(lines, key, a.get(key), b.get(key))
 
     for key in DICT_KEYS:
-        da, db = a.get(key) or {}, b.get(key) or {}
+        da, db = a.get(key), b.get(key)
+        if not isinstance(da, dict) or not isinstance(db, dict):
+            # 片方の JSON にこのブロック自体が無い（script_version 違いなど）。
+            # 「0 件 vs N 件」として ★ を付けると、同じメッシュでも偽の欠落が並ぶ
+            lines.append("| %s | %s | %s | - | 未測定 |" % (
+                key, "有" if isinstance(da, dict) else "無", "有" if isinstance(db, dict) else "無"))
+            UNMEASURED.append(key)
+            continue
         for k in sorted(set(da) | set(db), key=str):
             va, vb = da.get(k, 0), db.get(k, 0)
             rel = abs(vb - va) / max(abs(va), 1)
@@ -160,7 +195,12 @@ def main():
 
     skip = {p.split(".", 1)[1] for p in PROFILE_KEYS if "." in p}
     for key in BLOCK_KEYS:
-        wa, wb = a.get(key) or {}, b.get(key) or {}
+        wa, wb = a.get(key), b.get(key)
+        if not isinstance(wa, dict) or not isinstance(wb, dict):
+            lines.append("| %s | %s | %s | - | 未測定 |" % (
+                key, "有" if isinstance(wa, dict) else "無", "有" if isinstance(wb, dict) else "無"))
+            UNMEASURED.append(key)
+            continue
         for k in sorted(set(wa) | set(wb)):
             if k in skip:
                 continue  # PROFILE_KEYS で要素ごとに比較済み
@@ -176,7 +216,18 @@ def main():
         args[0], A.get("head", {}).get("source"), A.get("meta", {}).get("script_version"),
         args[1], B.get("head", {}).get("source"), B.get("meta", {}).get("script_version"),
         THRESH * 100)
-    text = head + "\n" + "\n".join(lines) + "\n\n★ 件数: %d" % flagged
+    va_ver = (A.get("meta") or {}).get("script_version")
+    vb_ver = (B.get("meta") or {}).get("script_version")
+    foot = "\n\n★ 件数: %d ／ 未測定: %d" % (flagged, len(UNMEASURED))
+    if UNMEASURED:
+        foot += ("\n未測定は「片方の JSON にその項目が無い」ため比較できなかったもので、"
+                 "★ ではないが見落としでもない: " + ", ".join(UNMEASURED[:20]))
+        if len(UNMEASURED) > 20:
+            foot += " ほか %d 件" % (len(UNMEASURED) - 20)
+    if va_ver != vb_ver:
+        foot += ("\n※ script_version が異なる（%s vs %s）。未測定の多くはこれが原因で、"
+                 "レシピの欠落ではない。同じバージョンで出し直して比較すること" % (va_ver, vb_ver))
+    text = head + "\n" + "\n".join(lines) + foot
     print(text)
     if md_out:
         with open(md_out, "w", encoding="utf-8") as f:
