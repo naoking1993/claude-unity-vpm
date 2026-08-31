@@ -56,7 +56,7 @@ try:
 except Exception:  # Blender 同梱 Python には numpy がある。無い環境では PCA 系が None になる
     np = None
 
-SCRIPT_VERSION = "0.2.0"
+SCRIPT_VERSION = "0.3.0"
 
 DEFAULTS = {
     # 対象オブジェクト名リスト。None → 選択中メッシュ → 名前ヒント一致メッシュ の順で探す
@@ -153,6 +153,19 @@ RULES = {
         "根元重心を横軸（front_axis に直交する水平軸）について頭部中心で鏡映し、"
         "mirror_tol_norm（頭幅比）以内に根元があり長さの相対差が mirror_length_tol 以内の房を相手とみなす。"
         "|root_norm[横軸]|<mirror_midline_norm の房は正中房として分母から除く"
+    ),
+    "bone_chain_v1": (
+        "頂点グループ名と一致するボーンのうち、Head 系（head_group_v2）を除いた分を髪チェーンとみなす。"
+        "髪ボーンの親を辿って髪ボーンでなくなるまでの段数を深さとし、深さ 0 をチェーンルート、"
+        "その親の最頻値を chain_root_parent_mode とする。"
+        "※Head を除かないと Head 自身がチェーンルートになり、"
+        "『髪チェーンが何にぶら下がっているか』を答えるはずの値が Head の親になってしまう"
+    ),
+    "geo_normal_v1": (
+        "幾何法線は polygons[].normal を面積で重み付けして頂点に積んで作る。"
+        "※Blender 4.x ではカスタム分割法線があると vertices[].normal / vertex_normals が"
+        "カスタム法線を返すため、それを幾何法線として使うと geo と custom が必ず一致し、"
+        "custom_vs_geo が常に 0°になる（polygons[].normal は汚染されない）"
     ),
     "root_lock_v1": (
         "Head 系頂点グループ（head_group_hints 一致）の最大ウェイトを t で weight_bins 分割し、"
@@ -1132,6 +1145,48 @@ def analyze_mesh(md, head, cfg, start_id=0):
     return strands, uv_info
 
 
+def bone_chain_summary(parent_of, group_names, cfg):
+    """ボーン名→親名 の辞書と頂点グループ名から髪チェーンの形を出す（bone_chain_v1）。
+
+    Head 系ボーンはチェーンから除く。除かないと Head 自身がチェーンルートになり、
+    「髪チェーンが何にぶら下がっているか」を答えるはずの chain_root_parent_mode が
+    Head の親（None や Neck）になってしまう。VRChat 向けの髪は根元を Head に
+    ウェイトするのが普通なので、これは例外ではなく通常構成で起きる。
+    """
+    matched = [g for g in group_names if g in parent_of]
+    if not matched:
+        return {"matched_bones": 0, "head_like_bones": [], "chain_roots": 0,
+                "chain_root_examples": [], "chain_root_parent_mode": None,
+                "max_chain_depth": 0, "depth_hist": {}}
+    head_like = [b for b in matched if is_head_group_name(b, cfg)]
+    hair = [b for b in matched if b not in head_like]
+    if not hair:
+        return {"matched_bones": len(matched), "head_like_bones": head_like, "chain_roots": 0,
+                "chain_root_examples": [], "chain_root_parent_mode": None,
+                "max_chain_depth": 0, "depth_hist": {}}
+    hairset = set(hair)
+    roots, parents, depths = [], [], []
+    for b in hair:
+        d = 0
+        p = parent_of.get(b)
+        while p is not None and p in hairset:
+            d += 1
+            p = parent_of.get(p)
+        depths.append(d)
+        if d == 0:
+            roots.append(b)
+            parents.append(parent_of.get(b))
+    return {
+        "matched_bones": len(matched),
+        "head_like_bones": sorted(head_like),
+        "chain_roots": len(roots),
+        "chain_root_examples": sorted(roots)[:20],
+        "chain_root_parent_mode": _mode(parents)[0],
+        "max_chain_depth": max(depths) + 1,
+        "depth_hist": dict(Counter(d + 1 for d in depths)),
+    }
+
+
 ENVELOPE_BANDS = [
     # (ラベル, z_norm 下限(排他), z_norm 上限(含む))。頭部基準に固定＝サンプル間で直接比較できる
     ("above_crown", 1.2, None),
@@ -1608,10 +1663,24 @@ def bl_mesh_data(bpy, obj, cfg, warnings):
     nm = mw.to_3x3().inverted_safe().transposed()
     md = MeshData(obj.name)
     md.verts = [tuple(mw @ v.co) for v in me.vertices]
+    # 幾何法線は面法線を面積で重み付けして積む（geo_normal_v1）。
+    # Blender 4.x はカスタム分割法線があると vertices[].normal / vertex_normals が
+    # カスタム法線を返すので、それを幾何法線に使うと custom_vs_geo が常に 0°になる。
+    # polygons[].normal はカスタム法線の影響を受けない（4.5.13 で実測）
+    import mathutils
+    acc = [mathutils.Vector((0.0, 0.0, 0.0)) for _ in range(len(me.vertices))]
+    for p in me.polygons:
+        contrib = p.normal * max(p.area, 1e-12)
+        for vi in p.vertices:
+            acc[vi] += contrib
     md.vnormals = []
-    for v in me.vertices:
-        w = nm @ v.normal
+    for i, v in enumerate(me.vertices):
+        g = acc[i]
+        if g.length < 1e-12:
+            g = v.normal  # 面に属さない頂点はこれしか無い
+        w = nm @ g
         md.vnormals.append(tuple(_norm((w.x, w.y, w.z))))
+    info["geo_normal_source"] = "polygon_area_weighted"
     md.edges = [tuple(e.vertices) for e in me.edges]
     md.faces = [list(p.vertices) for p in me.polygons]
     md.loops_vert = [l.vertex_index for l in me.loops]
@@ -1643,37 +1712,15 @@ def bl_mesh_data(bpy, obj, cfg, warnings):
     return md, info, arm
 
 
-def bl_bone_summary(arm, group_names):
+def bl_bone_summary(arm, group_names, cfg):
+    """アーマチュアから髪チェーンの形を要約する。判定本体は bone_chain_summary（bpy 非依存）。"""
     if arm is None:
         return None
     bones = arm.data.bones
-    names = [g for g in group_names if g in bones]
-    if not names:
-        return {"armature": arm.name, "matched_bones": 0}
-    nameset = set(names)
-    chain_roots = []
-    depths = []
-    parents_of_roots = []
-    for nmb in names:
-        b = bones[nmb]
-        depth = 0
-        p = b.parent
-        while p is not None and p.name in nameset:
-            depth += 1
-            p = p.parent
-        depths.append(depth)
-        if depth == 0:
-            chain_roots.append(nmb)
-            parents_of_roots.append(b.parent.name if b.parent else None)
-    return {
-        "armature": arm.name,
-        "matched_bones": len(names),
-        "chain_roots": len(chain_roots),
-        "chain_root_examples": chain_roots[:20],
-        "chain_root_parent_mode": _mode(parents_of_roots)[0],
-        "max_chain_depth": max(depths) + 1 if depths else 0,
-        "depth_hist": dict(Counter(d + 1 for d in depths)),
-    }
+    parent_of = {b.name: (b.parent.name if b.parent else None) for b in bones}
+    out = bone_chain_summary(parent_of, group_names, cfg)
+    out["armature"] = arm.name
+    return out
 
 
 def run_blender(cfg):
@@ -1722,7 +1769,7 @@ def run_blender(cfg):
     for o in objs:
         arm = arms.get(o.name)
         if arm is not None:
-            bones[o.name] = bl_bone_summary(arm, [g.name for g in o.vertex_groups])
+            bones[o.name] = bl_bone_summary(arm, [g.name for g in o.vertex_groups], cfg)
 
     # エンベロープは面に属する頂点だけで測る。ルーズ頂点が 1 個あるだけで
     # bbox と top/bottom_z_norm がそれに支配される（解析側は退化島として除外済み）
@@ -2077,6 +2124,31 @@ def selftest():
                      ("Hair_01", False), ("髪_01", False), ("後頭部", False)):
         got = is_head_group_name(nm, cfg)
         check(got == want, "rules: head group %-14s -> %s (got %s)" % (nm, want, got))
+
+    # 1e2) 回帰テスト: 髪チェーンの要約（Head ボーンをチェーンに含めないこと）
+    #      Blender 4.5 実機で、Head を含めると chain_root_parent_mode が None になった
+    vrc = {"Head": "Neck", "Hair_01": "Head", "Hair_02": "Hair_01", "Hair_03": "Hair_02"}
+    r = bone_chain_summary(vrc, ["Head", "Hair_01", "Hair_02", "Hair_03"], cfg)
+    print("[bones] %s" % json.dumps(r, ensure_ascii=False))
+    check(r["matched_bones"] == 4 and r["head_like_bones"] == ["Head"],
+          "bones: Head を Head 系として分離する")
+    check(r["chain_roots"] == 1 and r["chain_root_examples"] == ["Hair_01"],
+          "bones: チェーンルートは Hair_01（Head ではない）")
+    check(r["chain_root_parent_mode"] == "Head",
+          "bones: 髪チェーンは Head にぶら下がる（旧実装は None）")
+    check(r["max_chain_depth"] == 3, "bones: 深さは髪ボーンだけで 3（Head を数えない）")
+    # Head がグループに無い場合も同じ答えになること
+    r2 = bone_chain_summary(vrc, ["Hair_01", "Hair_02", "Hair_03"], cfg)
+    check(r2["chain_root_parent_mode"] == "Head" and r2["max_chain_depth"] == 3,
+          "bones: Head がウェイトされていなくても親は Head と分かる")
+    # 左右 2 チェーン
+    tw = {"Head": None, "L_01": "Head", "L_02": "L_01", "R_01": "Head", "R_02": "R_01"}
+    r3 = bone_chain_summary(tw, list(tw), cfg)
+    check(r3["chain_roots"] == 2 and r3["chain_root_parent_mode"] == "Head",
+          "bones: 2 チェーンでも親は Head")
+    # 髪ボーンが 1 本も無い
+    r4 = bone_chain_summary({"Head": None}, ["Head"], cfg)
+    check(r4["chain_roots"] == 0 and r4["max_chain_depth"] == 0, "bones: 髪ボーンなし")
 
     # 1f) 回帰テスト: 頭部基準が代用のとき envelope の頭部依存量を埋めないこと
     fb_pts = [(x * 0.01, y * 0.01, z * 0.05) for x in range(4) for y in range(3) for z in range(6)]
