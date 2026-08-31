@@ -1,0 +1,4 @@
+# Python のビルド生成物
+# skills/hair-modeling/scripts/ を直接実行・import すると出る
+__pycache__/
+*.py[cod]
