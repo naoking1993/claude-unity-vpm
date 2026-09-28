@@ -1,0 +1,13 @@
+--- a/Editor/Services/Server/TerminalLauncher.cs
++++ b/Editor/Services/Server/TerminalLauncher.cs
+@@ -60,6 +60,10 @@
+             File.WriteAllText(
+                 scriptPath,
+                 "@echo off\r\n" +
++                // claude-unity-vpm 9.7.100: decode the following lines as UTF-8 so non-ASCII
++                // project paths (e.g. --pidfile) survive on CP932 consoles. The file must stay
++                // BOM-less (default File.WriteAllText encoding); never pass Encoding.UTF8 here.
++                "chcp 65001>nul\r\n" +
+                 "cls\r\n" +
+                 command + "\r\n");
+             return new System.Diagnostics.ProcessStartInfo
