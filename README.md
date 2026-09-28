@@ -39,11 +39,13 @@ Claude などの AI アシスタントと Unity Editor を MCP で接続する *
 ## 導入・更新手順
 
 1. **事前バックアップ**
-   - 各プロジェクトの `Packages/com.coplaydev.unity-mcp` フォルダーをコピーしておきます。手で `TerminalLauncher.cs` を直している場合、更新でその修正が上書きされます（9.7.100 に同じ修正が入っているので問題はありません）。
+   - 各プロジェクトの `Packages/com.coplaydev.unity-mcp` フォルダーを、**プロジェクトの外**（例: デスクトップ）にコピーしておきます。
+     - `Packages/` や `Assets/` の中にコピーを残さないでください。同じ名前のパッケージが 2 つになり、VCC がそのプロジェクトのパッケージを読み込めなくなります。
+     - 手で `TerminalLauncher.cs` を直している場合、更新でその修正は上書きされます。9.7.100 に同じ修正が入っているので問題はありません。
    - `~/.claude.json` などの MCP クライアント設定ファイルをコピーしておきます。
    - `MCPForUnity.GitUrlOverride` と HTTP 設定の現在の値を控えておきます。
-2. VCC の **Settings → Packages** でこのリスティングを **Refresh** します（リスティングのキャッシュは最大 1 時間ほど残ります）。
-3. 各プロジェクトの **Manage Project** で MCP for Unity を **9.7.100** に更新します。プレリリース表示を有効にする必要はありません。
+2. VCC の **Settings → Packages** で、このリスティングにチェックが入っている（有効な）ことを確認します。
+3. 各プロジェクトの **Manage Project** 画面で、「Manage Packages」見出しの右にある **Refresh（↻）** を押してリスティングを再取得します（キャッシュは最大 1 時間残ります）。そのうえで MCP for Unity を **9.7.100** に更新します。プレリリース表示を有効にする必要はありません。
 4. **同じ日のうちに全プロジェクトを更新してください。** 上流の `StdIoVersionMigration` は「最後に処理したバージョン」を PC 全体で 1 つしか記録しません。そのため 9.7.1 と 9.7.100 のプロジェクトを行き来するたびに再実行されます。
    - この処理は STDIO 形式で残っている設定を HTTP 形式に書き換える方向にしか動きません。`GitUrlOverride` が入っていれば、`mcpforunityserver==` の指定が書き戻されることはありません。
    - なお、上流は Editor 起動ごとにクライアント設定の自動再チェック（`StartupConfigRewrite`）も行います。これはバージョンに関係なく以前から動いている処理です。
@@ -52,8 +54,9 @@ Claude などの AI アシスタントと Unity Editor を MCP で接続する *
 
 - **修正前に起動したサーバー**は、pid ファイルが文字化けフォルダー側にあるため、Stop Server では止まりません。Unity を終了するか、ポート 8080 で待ち受けているプロセスを終了してください。
 - そのあと**文字化けした名前のフォルダー**を削除します。
-  - CP932 の 2 バイト目が `\` を飲み込むことがあるため、プロジェクトフォルダーの**隣**にできていたり、名前に `Library` がくっついていたりします（例: `繝・せ繝・…`）。
-  - 中身が `MCPForUnity/RunState/mcp_http_8080.pid` だけであることを確認してから消してください。
+  - 文字化けフォルダーは、日本語名のプロジェクトフォルダーの**隣**（同じ階層）にできます（例: `霧島` → `髴ｧ蟲ｶ`、`テスト1` → `繝・せ繝・1` など）。中身は通常 `Library/MCPForUnity/RunState/mcp_http_8080.pid` です。
+  - フォルダー名の最後の文字によっては CP932 の 2 バイト目が `\` を飲み込み、`繝・せ繝・Library` のように `Library` がくっついた名前になります。その場合の中身は `MCPForUnity/RunState/mcp_http_8080.pid` です。
+  - どちらの場合も、たどった先にあるのが `mcp_http_8080.pid` 1 つだけであることを確認してから削除してください。
 
 ## 更新後の確認
 
@@ -61,8 +64,8 @@ Claude などの AI アシスタントと Unity Editor を MCP で接続する *
 2. `GitUrlOverride` が以前と同じ wheel を指し、HTTP 設定が有効なままであること。
 3. **Start Server** のあと、次の 4 点を確認します。
    - `Library/MCPForUnity/TerminalScripts/mcp-terminal.cmd` の 2 行目が `chcp 65001>nul` で、先頭に BOM が無いこと（先頭バイトが `40 65 63 68` = `@ech`）。
-   - サーバーの黒い窓に `--from "…fastmcp4.2…whl"` と `--transport http` が出ていること。
-   - `http://127.0.0.1:8080/health` が応答すること。
+   - `mcp-terminal.cmd` の 4 行目（起動コマンド）、または Unity Console の `Started local HTTP server in terminal:` の行に、`--from "…fastmcp4.2…whl"` と `--transport http` が含まれていること。黒い窓は `@echo off` のため、起動コマンドを表示しません。
+   - `http://127.0.0.1:8080/health` が応答し、`version` が `9.7.1+fastmcp4.2` であること。
    - **日本語名の本来のプロジェクトフォルダー**に `Library/MCPForUnity/RunState/mcp_http_8080.pid` があること。
 4. **Stop Server** で pid ファイルが消え、`/health` が落ちること。もう一度 Start Server で復帰できること。
 5. `claude mcp list` で Unity の MCP が HTTP（`127.0.0.1:8080`）のままであること。
@@ -99,11 +102,17 @@ VCC のバージョン選択で **9.7.1** を選びます。9.7.1 の zip とエ
 | `tests/cs/` | 上記検証用の最小スタブとハーネス |
 | `.github/workflows/verify.yml` | push / PR ごとに `verify_listing.py` を実行します |
 
+これらのスクリプトは **Linux・WSL・CI 専用**です。Windows 版 Python の `zipfile` はエントリー名の `\` を `/` に変換するため、Windows で実行すると誤った失敗を報告します。
+
 ```sh
-python3 tools/build_patched_zip.py   # zip を作り、SHA256 を表示
-# 表示された SHA256 を index.json の "9.7.100" の zipSHA256 に反映
+python3 tools/build_patched_zip.py   # 既存の zip と同じものが再現できるかを確認（公開済みの zip は上書きしません）
 python3 tools/verify_listing.py      # "OK" で終われば合格（mono-mcs / mono-runtime / patch が必要）
 ```
+
+新しいパッチ版を出すときは、次の手順で番号を上げます（公開済みバージョンの zip は変更しません）。
+
+1. `tools/build_patched_zip.py` の `VERSION` を上げ、`patches/<新バージョン>/` にパッチを置きます。
+2. ビルドで表示された SHA256 を、`index.json` の新しいエントリーの `zipSHA256` と、`tools/verify_listing.py` の `PUBLISHED` に記録します。
 
 ## ライセンス
 

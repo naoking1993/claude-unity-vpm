@@ -6,6 +6,12 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 BASE = "https://naoking1993.github.io/claude-unity-vpm/"
 PKG = "com.coplaydev.unity-mcp"
 UPSTREAM_VER, UPSTREAM_SHA = "9.7.1", "a3eee339e8af3a15cbd676a6f6dd78984eb4ce451b38196ea48ecc726cd81831"
+# Published zips are immutable: once a version is listed, its zip and hash never change and it stays listed.
+# Add the new version's hash here when releasing a new patched version.
+PUBLISHED = {
+    "9.7.1": UPSTREAM_SHA,
+    "9.7.100": "b3dbfadb67fca4b7ef0227c0fbc289595b315267993fd2dc8c4b9dc56758b6eb",
+}
 TL = "Editor\\Services\\Server\\TerminalLauncher.cs"
 ALLOWED_PJ_DIFF = {"version", "displayName", "description"}
 errors = []
@@ -14,7 +20,13 @@ def sha(b): return hashlib.sha256(b).hexdigest()
 
 idx = json.loads((ROOT / "index.json").read_text(encoding="utf-8"))
 versions = idx["packages"][PKG]["versions"]
-up = zipfile.ZipFile(ROOT / f"{PKG}-{UPSTREAM_VER}.zip")
+up_path = ROOT / f"{PKG}-{UPSTREAM_VER}.zip"
+if sha(up_path.read_bytes()) != UPSTREAM_SHA: fail("baseline 9.7.1 zip is not the pristine upstream mirror")
+up = zipfile.ZipFile(up_path)
+for ver in PUBLISHED:
+    if ver not in versions: fail(f"{ver}: published version must stay listed")
+for ver in versions:
+    if ver not in PUBLISHED: fail(f"{ver}: not pinned in PUBLISHED (record its zipSHA256 there)")
 
 for ver, e in versions.items():
     if e["version"] != ver: fail(f"{ver}: key/version mismatch")
@@ -26,6 +38,7 @@ for ver, e in versions.items():
     b = zp.read_bytes()
     if e["zipSHA256"] != sha(b): fail(f"{ver}: zipSHA256 != file")
     if e["zipSHA256"] != e["zipSHA256"].lower(): fail(f"{ver}: zipSHA256 must be lowercase")
+    if ver in PUBLISHED and sha(b) != PUBLISHED[ver]: fail(f"{ver}: published zip changed (bump the version instead)")
     z = zipfile.ZipFile(zp)
     pj = json.loads(z.read("package.json").decode("utf-8"))
     if pj["name"] != PKG or pj["version"] != ver: fail(f"{ver}: zip package.json name/version != listing")

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Build com.coplaydev.unity-mcp-<ver>.zip = upstream 9.7.1 listing zip + patches/*.patch + package.json field overrides.
-Every other entry (name, bytes, ZipInfo metadata, order) is copied unchanged, so the backslash
-entry layout that VCC already accepts on the user's PC is preserved."""
-import hashlib, json, subprocess, sys, tempfile, zipfile, copy, pathlib, collections
+Every other entry keeps its name, bytes, date and order, so the backslash entry layout that VCC already
+accepts on the user's PC is preserved (CPython sets external_attr to 0600<<16; the DOS attribute byte stays 0).
+If the output zip already exists (a published version), it is never overwritten: the build only reports
+whether it reproduces the committed bytes. Run on Linux/WSL/CI; Windows Python rewrites '\\' in entry names."""
+import hashlib, io, json, subprocess, sys, tempfile, zipfile, copy, pathlib, collections
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 UPSTREAM_ZIP = ROOT / "com.coplaydev.unity-mcp-9.7.1.zip"
@@ -43,11 +45,18 @@ def main():
     pj_new = (json.dumps(pj, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     replaced = {TL: tl_new, "package.json": pj_new}
     # 3) copy every entry in original order with original ZipInfo
-    with zipfile.ZipFile(OUT_ZIP, "w") as out:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as out:
         for zi in src.infolist():
             data = replaced.get(zi.filename, src.read(zi))
             out.writestr(copy.copy(zi), data)
-    print(OUT_ZIP.name, sha(OUT_ZIP.read_bytes()))
+    built = buf.getvalue()
+    if OUT_ZIP.exists():
+        same = OUT_ZIP.read_bytes() == built
+        print(OUT_ZIP.name, "reproduced" if same else "DIFFERS from the committed zip (not overwritten)", sha(built))
+        sys.exit(0 if same else 1)
+    OUT_ZIP.write_bytes(built)
+    print(OUT_ZIP.name, sha(built))
 
 if __name__ == "__main__":
     main()
