@@ -6,6 +6,25 @@
   "packages": {
     "com.coplaydev.unity-mcp": {
       "versions": {
+        "9.7.101": {
+          "name": "com.coplaydev.unity-mcp",
+          "displayName": "MCP for Unity (JP path fix)",
+          "version": "9.7.101",
+          "description": "【非公式パッチ版】上流 9.7.1 に1行だけ修正を加えたビルド（中身は 9.7.100 と同じ）: Windowsのサーバー起動スクリプト(mcp-terminal.cmd)の2行目に chcp 65001 を追加し、日本語などを含むプロジェクトパスで pid ファイルが文字化けフォルダに作られ Stop Server できない問題を修正。9.7.100 は変更ファイルの日時が上流と同じだったため、9.7.1 から更新すると Unity が再コンパイルせず修正が効かないことがあった。9.7.101 は変更ファイルの日時を新しくして再配布。GitUrlOverride(独自wheel)設定が前提。差分: patches/9.7.101/。© CoplayDev, MIT License。上流: https://github.com/CoplayDev/unity-mcp",
+          "unity": "2021.3",
+          "author": {
+            "name": "CoplayDev",
+            "url": "https://github.com/CoplayDev/unity-mcp"
+          },
+          "license": "MIT",
+          "licensesUrl": "https://github.com/CoplayDev/unity-mcp/blob/main/LICENSE",
+          "dependencies": {
+            "com.unity.nuget.newtonsoft-json": "3.0.2",
+            "com.unity.test-framework": "1.1.31"
+          },
+          "url": "https://naoking1993.github.io/claude-unity-vpm/com.coplaydev.unity-mcp-9.7.101.zip",
+          "zipSHA256": "1af604c8e93e403fe5261ac0d35735a987aef2a0ec32046d23a85f949d18abd7"
+        },
         "9.7.100": {
           "name": "com.coplaydev.unity-mcp",
           "displayName": "MCP for Unity (JP path fix)",
