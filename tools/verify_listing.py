@@ -103,7 +103,9 @@ for ver, e in versions.items():
 
 # Timestamps: never in the future, and "same path + same date_time => same content" across every pair of
 # listed versions (Unity compares against whatever version was compiled last, not just the previous one).
-now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+# DOS times have no zone and .NET reads them as local time, so a stamp must already be past in the
+# westernmost zone (UTC-12) to be "never in the future" anywhere.
+now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) - datetime.timedelta(hours=12)
 grandfathered_pairs = {frozenset({UPSTREAM_VER, g}) for g in GRANDFATHERED_STAMP}
 for ver, z in zips.items():
     for zi in z.infolist():
