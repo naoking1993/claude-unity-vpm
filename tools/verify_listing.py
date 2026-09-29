@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """CI checks for the VPM listing (no Unity needed). Exit non-zero on any failure."""
-import hashlib, json, re, subprocess, sys, tempfile, zipfile, pathlib, collections, shutil, os
+import datetime, hashlib, itertools, json, re, subprocess, sys, tempfile, zipfile, pathlib, collections, shutil, os
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BASE = "https://naoking1993.github.io/claude-unity-vpm/"
@@ -11,7 +11,13 @@ UPSTREAM_VER, UPSTREAM_SHA = "9.7.1", "a3eee339e8af3a15cbd676a6f6dd78984eb4ce451
 PUBLISHED = {
     "9.7.1": UPSTREAM_SHA,
     "9.7.100": "b3dbfadb67fca4b7ef0227c0fbc289595b315267993fd2dc8c4b9dc56758b6eb",
+    "9.7.101": "1af604c8e93e403fe5261ac0d35735a987aef2a0ec32046d23a85f949d18abd7",
 }
+# Entry timestamps: the official VCC writes each zip entry's date_time to the extracted file, and
+# Unity's script compilation treats a .cs file as unchanged while its modification time is unchanged.
+# So an entry whose content differs between two listed versions must also differ in date_time,
+# whichever version the user updates from. 9.7.100 predates this rule and is grandfathered.
+GRANDFATHERED_STAMP = {"9.7.100"}
 TL = "Editor\\Services\\Server\\TerminalLauncher.cs"
 ALLOWED_PJ_DIFF = {"version", "displayName", "description"}
 errors = []
@@ -27,6 +33,7 @@ for ver in PUBLISHED:
     if ver not in versions: fail(f"{ver}: published version must stay listed")
 for ver in versions:
     if ver not in PUBLISHED: fail(f"{ver}: not pinned in PUBLISHED (record its zipSHA256 there)")
+zips = {}  # version -> ZipFile, for the cross-version timestamp check
 
 for ver, e in versions.items():
     if e["version"] != ver: fail(f"{ver}: key/version mismatch")
@@ -40,6 +47,7 @@ for ver, e in versions.items():
     if e["zipSHA256"] != e["zipSHA256"].lower(): fail(f"{ver}: zipSHA256 must be lowercase")
     if ver in PUBLISHED and sha(b) != PUBLISHED[ver]: fail(f"{ver}: published zip changed (bump the version instead)")
     z = zipfile.ZipFile(zp)
+    zips[ver] = z
     pj = json.loads(z.read("package.json").decode("utf-8"))
     if pj["name"] != PKG or pj["version"] != ver: fail(f"{ver}: zip package.json name/version != listing")
     if ver == UPSTREAM_VER:
@@ -49,6 +57,13 @@ for ver, e in versions.items():
     if z.namelist() != up.namelist(): fail(f"{ver}: entry list differs from upstream")
     changed = [n for n in up.namelist() if z.read(n) != up.read(n)]
     if sorted(changed) != sorted([TL, "package.json"]): fail(f"{ver}: unexpected changed entries {changed}")
+    if ver not in GRANDFATHERED_STAMP:
+        for n in up.namelist():
+            t_new, t_up = z.getinfo(n).date_time, up.getinfo(n).date_time
+            if n in changed and not t_new > t_up:
+                fail(f"{ver}: changed entry {n} must have a newer date_time than upstream ({t_new} <= {t_up})")
+            if n not in changed and t_new != t_up:
+                fail(f"{ver}: unchanged entry {n} must keep the upstream date_time ({t_new} != {t_up})")
     upj = json.loads(up.read("package.json").decode("utf-8"))
     diffkeys = {k for k in set(upj) | set(pj) if upj.get(k) != pj.get(k)}
     if not diffkeys <= ALLOWED_PJ_DIFF: fail(f"{ver}: package.json changed keys {diffkeys}")
@@ -85,6 +100,21 @@ for ver, e in versions.items():
                 if not out[1].startswith('cmd.exe /c start "MCP Server" cmd.exe /k "'): fail(f"{ver}: psi changed")
     else:
         fail("mcs/mono not available: behavioural test skipped")
+
+# Timestamps: never in the future, and "same path + same date_time => same content" across every pair of
+# listed versions (Unity compares against whatever version was compiled last, not just the previous one).
+# DOS times have no zone and .NET reads them as local time, so a stamp must already be past in the
+# westernmost zone (UTC-12) to be "never in the future" anywhere.
+now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) - datetime.timedelta(hours=12)
+grandfathered_pairs = {frozenset({UPSTREAM_VER, g}) for g in GRANDFATHERED_STAMP}
+for ver, z in zips.items():
+    for zi in z.infolist():
+        if datetime.datetime(*zi.date_time) > now: fail(f"{ver}: {zi.filename} date_time {zi.date_time} is in the future")
+for (v1, z1), (v2, z2) in itertools.combinations(sorted(zips.items()), 2):
+    if frozenset({v1, v2}) in grandfathered_pairs: continue
+    for n in set(z1.namelist()) & set(z2.namelist()):
+        if z1.getinfo(n).date_time == z2.getinfo(n).date_time and z1.read(n) != z2.read(n):
+            fail(f"{v1} vs {v2}: {n} has the same date_time but different content (Unity would not recompile it)")
 
 print("OK" if not errors else f"{len(errors)} failure(s)")
 sys.exit(1 if errors else 0)
