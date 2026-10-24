@@ -9,9 +9,22 @@ Claude などの AI アシスタントと Unity Editor を MCP で接続する *
 
 | バージョン | 中身 | 用途 |
 | --- | --- | --- |
-| **9.7.101** | 上流 9.7.1 に**1行だけ**修正を加えたパッチ版（表示名 `MCP for Unity (JP path fix)`） | 通常はこちら |
+| 10.3.100 | 上流 10.3.0（タグ `v10.3.0`）に `package.json` の 3 項目だけを変えたビルド（表示名 `MCP for Unity (Claude-Unity kit)`）。サーバーは **`mcpforunityserver 10.3.0+fastmcp4.1`**（`server/dist/`）と組で使う | **実機確認待ち**。手順と注意は下の「10.3.100 について」 |
+| **9.7.101** | 上流 9.7.1 に**1行だけ**修正を加えたパッチ版（表示名 `MCP for Unity (JP path fix)`）。サーバーは `9.7.1+fastmcp4.2` の wheel と組で使う | 実機で確認済み。10.3.100 の実機確認が終わるまではこちら |
 | 9.7.100 | コードは 9.7.101 と同じ。ただし 9.7.1 から更新すると、Unity が再コンパイルせず修正が効かないことがある（下の「9.7.100 に更新済みのプロジェクト」） | 使わない。9.7.101 へ更新してください |
 | 9.7.1 | 上流 9.7.1 の無改変ミラー（zipSHA256 `a3eee339…1831`） | ロールバック用。削除・差し替えはしません |
+
+リポジトリにはこのほか、10.3.100 のビルド元として上流 `v10.3.0` の無改変ミラー `com.coplaydev.unity-mcp-10.3.0.zip` がありますが、リスティング（`index.json`）には載せていません。
+
+## 10.3.100 について
+
+上流 10.3.0 への更新の評価は [`docs/upgrade-10.3-assessment.md`](docs/upgrade-10.3-assessment.md)、組で使うサーバー wheel の中身・検証・導入手順は [`docs/server-10.3.0-fastmcp4.md`](docs/server-10.3.0-fastmcp4.md) にあります。要点：
+
+- **Unity 側は上流 10.3.0 と同じコード**です。変えたのは `package.json` の `version` / `displayName` / `description` だけで、9.7.101 の `chcp 65001` パッチは入っていません。上流 10.3.0 はサーバーを黒い窓なし（headless）で起動し、起動コマンドをバッチファイルに書かないため、日本語パスで pid が文字化けする問題はコード上は起きません（実機では未確認）。初回の Start Server だけ確認ダイアログが 1 回出ます。サーバーの出力は `Library/MCPForUnity/Logs/server-launch-8080.log` に入ります。
+- **サーバーは新しい wheel が必要**です。上流 10.3.0 のサーバーは FastMCP 3 系専用なので、FastMCP 4 で動く `mcpforunityserver-10.3.0+fastmcp4.1-py3-none-any.whl`（`server/dist/`、SHA256 は `server/SHA256SUMS`）を `GitUrlOverride` で指定します。`GitUrlOverride` が空だと `mcpforunityserver==10.3.100`（PyPI に無い）を探して、わざと起動に失敗します。
+- **`GitUrlOverride` は PC 全体で 1 つ**です。Unity 側パッケージが 9.7.101 のプロジェクトと 10.3.100 のプロジェクトを同じ PC で混在させると、どちらかがサーバーと版違いになります。同じ日のうちに全プロジェクトを 10.3.100 にし、wheel も差し替えてください（戻すときも全部まとめて）。
+- **Unity を 2 台開いたとき**：Claude Code が使う MCP 2026-07-28 プロトコルではサーバーが「選んだ Unity」を覚えられないため、`set_active_instance` は「覚えられない」ことと `unity_instance="<Name@hash>"` を毎回付ける案内を返します。Claude Code は実測でその案内どおりに動きました。以前の wheel（`9.7.1+fastmcp4.2`）でこの状況に出ていた `Persistent Unity selection requires _meta.client_id on MCP 2026 requests` は、この案内に置き換わります。
+- 変更・追加した 220 ファイルの zip 日時は 2026-10-23 00:00:00 に固定しています（9.7.1 と同じ内容のファイルは 1985-10-26 のまま）。9.7.x から VCC で更新したとき、Unity が `MCPForUnity.Editor.dll` と `MCPForUnity.Runtime.dll` の両方を作り直すためです。
 
 ## 9.7.101 の変更点
 
@@ -51,11 +64,16 @@ Claude などの AI アシスタントと Unity Editor を MCP で接続する *
 
 ## 前提条件（FastMCP 4 移行との関係）
 
-このリスティングは **Unity 側パッケージ**だけを配ります。Python サーバーは上流 PyPI 版ではなく、FastMCP 4 対応のローカル改修版 wheel（`mcpforunityserver 9.7.1+fastmcp4.2`）を使う前提です。
+このリスティングは **Unity 側パッケージ**だけを配ります。Python サーバーは上流 PyPI 版ではなく、FastMCP 4 対応の改修版 wheel を使う前提です。Unity 側の版と wheel は組で使います。
 
-- Unity の EditorPrefs `MCPForUnity.GitUrlOverride` に、その wheel の `file:///…whl` 参照が入っていること。9.7.101 は起動時にまずこの値を使います。
+| Unity 側パッケージ | サーバー wheel |
+| --- | --- |
+| 9.7.101 / 9.7.100 | `mcpforunityserver 9.7.1+fastmcp4.2`（手元でビルドしたもの。このリポジトリには含まれません） |
+| 10.3.100 | `mcpforunityserver 10.3.0+fastmcp4.1`（`server/dist/`） |
+
+- Unity の EditorPrefs `MCPForUnity.GitUrlOverride` に、その wheel の `file:///…whl` 参照が入っていること。9.7.101 も 10.3.100 も起動時にまずこの値を使います。
 - HTTP トランスポート（`http://127.0.0.1:8080/mcp`）を使っていること。
-- `GitUrlOverride` が空だと、9.7.101 は `mcpforunityserver==9.7.101` を探します。PyPI にその版は無いので、**わざと起動に失敗します**。上流 9.7.1 のように FastMCP 3 系の PyPI 版へ黙って戻ることはありません。
+- `GitUrlOverride` が空だと、9.7.101 は `mcpforunityserver==9.7.101` を、10.3.100 は `mcpforunityserver==10.3.100` を探します。PyPI にその版は無いので、**わざと起動に失敗します**。上流 9.7.1 / 10.3.0 のように FastMCP 3 系の PyPI 版へ黙って戻ることはありません。
 - `GitUrlOverride` はパーセントエンコード（`%E3%83%86…` のような形）ではなく、そのままのパス表記で保存してください。バッチファイルでは `%` が展開されるため、`chcp` があっても壊れます。
 - Claude Code 側の接続設定は HTTP（`http://127.0.0.1:8080/mcp`）にしてください。以前の STDIO 設定や `mcpforunityserver==9.7.1` の指定には戻さないでください。
 
@@ -115,9 +133,9 @@ VCC のバージョン選択で **9.7.1** を選びます。9.7.1 の zip とエ
 
 ## 上流の新しい版への追従方針
 
-- 上流 9.7.3 以降はサーバー起動の仕組みが変わっているため、このパッチは 9.7.1 系専用です。
-- 上流の新しい版に移るときは、先に FastMCP 4 改修版 wheel との互換性を確認してください。
-- 上流 10.3 への更新の評価（2026-10-23。結論は 9.7.101 据え置き）は [`docs/upgrade-10.3-assessment.md`](docs/upgrade-10.3-assessment.md) にあります。
+- 上流 9.7.3 以降はサーバー起動の仕組みが変わっているため、`chcp` のパッチは 9.7.1 系専用です。10.3.100 には入っていません。
+- 上流の新しい版に移るときは、先にサーバー側を FastMCP 4 で動かせるか確認し、wheel と Unity 側パッケージを組で用意してください（`docs/server-10.3.0-fastmcp4.md` の手順）。
+- 上流 10.3 への更新の評価と、10.3.100 を実装したあとの状態は [`docs/upgrade-10.3-assessment.md`](docs/upgrade-10.3-assessment.md) にあります。
 - このリスティングでパッチを更新する場合は **9.7.102, 9.7.103 …** と番号を上げます。同じバージョン番号で zip を差し替えることはしません（VCC は同じ番号を再インストールしないため）。
 - バージョンは常に `X.Y.Z` 形式にします。`-jp` などのプレリリース表記は使いません。理由は次の 3 つです。
   - VCC ではプレリリースが既定で表示されません。
@@ -128,16 +146,23 @@ VCC のバージョン選択で **9.7.1** を選びます。9.7.1 の zip とエ
 
 | パス | 内容 |
 | --- | --- |
-| `tools/build_patched_zip.py` | 上流 9.7.1 zip（SHA256 照合つき）に `patches/<版>/` を当て、`RELEASES` にある各版の zip を作ります。エントリーの並び・名前（`\` 区切り）は上流 zip のままです。日時は、変更していないエントリーは上流のまま、差し替えた 2 エントリーは版ごとの固定の日時（`stamp`）にします（9.7.100 だけは上流のまま） |
-| `tools/verify_listing.py` | `index.json` と各 zip の整合性チェック、差分がパッチ由来の 2 ファイルだけであることのチェック、日時のチェック（差し替えたエントリーは上流より新しい・未来の日時でない・どの 2 版を比べても「同じ名前で同じ日時なら同じ中身」）、mono で `TerminalLauncher.cs` をコンパイルして日本語パスで生成される `.cmd` のバイト列の検証を行います |
+| `tools/mirror_upstream_zip.py` | 上流リポジトリの git ツリー（`v10.3.0:MCPForUnity`）から無改変ミラー zip（`com.coplaydev.unity-mcp-10.3.0.zip`）と、各ファイルの git blob ハッシュを書いた `tools/upstream/v10.3.0.manifest` を作ります。エントリー名は `\` 区切り、並びは 9.7.1 の zip と同じ（PowerShell の Compress-Archive の順）、日時は 9.7.1 と同じ内容のファイルは 1985-10-26、それ以外は固定の日時です |
+| `tools/build_patched_zip.py` | ベースの zip（9.7.1 または 10.3.0。SHA256 照合つき）から `RELEASES` にある各版の zip を作ります。9.7.100 / 9.7.101 は `patches/<版>/` を当て、10.3.100 は `package.json` の 3 項目だけを変えます。エントリーの並び・名前はベースのままで、差し替えたエントリーだけ版ごとの固定の日時（`stamp`）にします（9.7.100 だけは上流のまま） |
+| `tools/verify_listing.py` | `index.json` と各 zip の整合性チェック、ベースの zip が上流と一致すること（10.3.0 は manifest の blob ハッシュで照合）、差分が意図したファイルだけであることのチェック、日時のチェック（差し替えたエントリーはベースより新しい・未来の日時でない・どの 2 つの zip を比べても「同じ名前で同じ日時なら同じ中身」）、mono で `TerminalLauncher.cs` をコンパイルして日本語パスで生成される `.cmd` のバイト列の検証（9.7.x のみ）を行います |
 | `tests/cs/` | 上記検証用の最小スタブとハーネス |
 | `.github/workflows/verify.yml` | push / PR ごとに `verify_listing.py` を実行します |
+| `server/patches/10.3.0+fastmcp4.1/` | 上流 `v10.3.0` の `Server/` に当てる、FastMCP 4 / MCP SDK 2 移植の差分 |
+| `server/dist/`、`server/SHA256SUMS` | ビルド済みの wheel とその SHA256 |
+| `server/build_wheel.sh` | 上流をクローンして差分を当て、wheel を再現ビルドして `SHA256SUMS` と照合します |
+| `server/tools/` | サーバーのライブ検証（合成 Unity ピア、両プロトコル）、Claude Code CLI を使った E2E、HTTP をそのまま記録するプロキシ |
 
 これらのスクリプトは **Linux・WSL・CI 専用**です。Windows 版 Python の `zipfile` はエントリー名の `\` を `/` に変換するため、Windows で実行すると誤った失敗を報告します。
 
 ```sh
+python3 tools/mirror_upstream_zip.py --git /path/to/unity-mcp --tag v10.3.0   # 10.3.0 のミラー zip と manifest を再現できるかを確認
 python3 tools/build_patched_zip.py   # 既存の zip と同じものが再現できるかを確認（公開済みの zip は上書きしません）
 python3 tools/verify_listing.py      # "OK" で終われば合格（mono-mcs / mono-runtime / patch が必要）
+server/build_wheel.sh                # サーバー wheel を再現ビルドして SHA256SUMS と照合（git / patch / uv が必要）
 ```
 
 新しいパッチ版を出すときは、次の手順で番号を上げます（公開済みバージョンの zip は変更しません）。
@@ -147,4 +172,4 @@ python3 tools/verify_listing.py      # "OK" で終われば合格（mono-mcs / m
 
 ## ライセンス
 
-MCP for Unity は CoplayDev による MIT License のソフトウェアです。9.7.101 と 9.7.100 は上流 9.7.1（revision `78ee5418`）を改変したものです。改変内容は上記の 1 行と `package.json` の 3 項目だけです。このリスティングは非公式で、CoplayDev とは関係ありません。
+MCP for Unity は CoplayDev による MIT License のソフトウェアです。9.7.101 と 9.7.100 は上流 9.7.1（revision `78ee5418`）を改変したものです。改変内容は上記の 1 行と `package.json` の 3 項目だけです。10.3.100 は上流 10.3.0（タグ `v10.3.0`、revision `aa5fc638`）の `package.json` の 3 項目だけを変えたもので、サーバー wheel `10.3.0+fastmcp4.1` は同じタグの `Server/` に `server/patches/` の差分を当てたものです。このリスティングは非公式で、CoplayDev とは関係ありません。

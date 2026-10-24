@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Build com.coplaydev.unity-mcp-<ver>.zip = upstream 9.7.1 listing zip + patches/<ver>/*.patch + package.json overrides.
+"""Build com.coplaydev.unity-mcp-<ver>.zip = base upstream mirror zip + patches/<ver>/*.patch + package.json overrides.
 
-Unchanged entries keep their upstream name, bytes, date and order, so the backslash entry layout that
+Each release in RELEASES names its base (an unmodified upstream mirror pinned in BASES: the 9.7.1 listing zip, or
+a zip built by mirror_upstream_zip.py), its stamp, whether patches/<ver>/ is applied to TerminalLauncher.cs
+(10.3.100 has no patches: only package.json changes), its displayName and its description suffix.
+
+Unchanged entries keep their base name, bytes, date and order, so the backslash entry layout that
 VCC already accepts on the user's PC is preserved (CPython sets external_attr to 0600<<16; the DOS
 attribute byte stays 0).
 
 Replaced entries (TerminalLauncher.cs, package.json) get the release's fixed `stamp` as their zip
 date_time. The official VCC writes the zip entry time to the extracted file's LastWriteTime, and
 Unity's script compilation decides whether a .cs file changed by its modification time only. If a
-replaced entry kept the upstream time (1985-10-26), Unity would keep the old compiled DLL after an
+replaced entry kept the base time (1985-10-26), Unity would keep the old compiled DLL after an
 update. 9.7.100 was published before this was known (stamp None) and is kept byte-for-byte.
 The stamp is a constant (not "now") so that builds are reproducible; use the day before the release
 date at 00:00:00 so it is never in the future in any time zone (DOS times have no time zone).
@@ -18,14 +22,29 @@ reproduces the committed bytes. Run on Linux/WSL/CI; Windows Python rewrites '\\
 import collections, copy, hashlib, io, json, pathlib, subprocess, sys, tempfile, zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-UPSTREAM_ZIP = ROOT / "com.coplaydev.unity-mcp-9.7.1.zip"
-UPSTREAM_SHA = "a3eee339e8af3a15cbd676a6f6dd78984eb4ce451b38196ea48ecc726cd81831"
+PKG = "com.coplaydev.unity-mcp"
+BASES = {  # unmodified upstream mirrors, pinned
+    "9.7.1": "a3eee339e8af3a15cbd676a6f6dd78984eb4ce451b38196ea48ecc726cd81831",
+    "10.3.0": "83c5c41e118efda0b5096a23d1dd3bb5e7910f5fb4d0badc8e1ccf0e51509891",
+}
 TL = "Editor\\Services\\Server\\TerminalLauncher.cs"
-DISPLAY_NAME = "MCP for Unity (JP path fix)"
+JP_FIX = ("MCP for Unity (JP path fix)",
+          "\n\n[claude-unity-vpm {version}] Unofficial build of upstream 9.7.1 with one change: "
+          "the Windows server launch script runs 'chcp 65001' so non-ASCII project paths work. "
+          "See https://github.com/naoking1993/claude-unity-vpm")
+KIT = ("MCP for Unity (Claude-Unity kit)",
+       "\n\n[claude-unity-vpm {version}] Unofficial build of upstream 10.3.0 (tag v10.3.0); only package.json "
+       "differs. Expects the FastMCP 4 server wheel via MCPForUnity.GitUrlOverride; with it unset, uvx looks for "
+       "mcpforunityserver=={version}, which does not exist on PyPI, so the launch fails instead of silently using "
+       "the FastMCP 3 server. See https://github.com/naoking1993/claude-unity-vpm")
 RELEASES = {
-    # version: date_time for replaced entries (None = keep upstream time; 9.7.100 only, see docstring)
-    "9.7.100": {"stamp": None},
-    "9.7.101": {"stamp": (2026, 9, 28, 0, 0, 0)},
+    # version: base, date_time for replaced entries (None = keep base time; 9.7.100 only, see docstring),
+    #          whether patches/<version>/ is applied to TerminalLauncher.cs, (displayName, description suffix)
+    "9.7.100": {"base": "9.7.1", "stamp": None, "patches": True, "text": JP_FIX},
+    "9.7.101": {"base": "9.7.1", "stamp": (2026, 9, 28, 0, 0, 0), "patches": True, "text": JP_FIX},
+    # 10.3.100: released 2026-10-24 -> 2026-10-23; the 10.3.0 base is stamped 2026-10-22 (mirror_upstream_zip.py
+    # STAMPS) so the replaced package.json is strictly newer than the base entry. Both are immutable now.
+    "10.3.100": {"base": "10.3.0", "stamp": (2026, 10, 23, 0, 0, 0), "patches": False, "text": KIT},
 }
 
 
@@ -33,14 +52,8 @@ def sha(b):
     return hashlib.sha256(b).hexdigest()
 
 
-def description_suffix(version):
-    return (f"\n\n[claude-unity-vpm {version}] Unofficial build of upstream 9.7.1 with one change: "
-            "the Windows server launch script runs 'chcp 65001' so non-ASCII project paths work. "
-            "See https://github.com/naoking1993/claude-unity-vpm")
-
-
-def build(src, version, stamp):
-    # 1) TerminalLauncher.cs + patches (applied with GNU patch; must apply cleanly, no fuzz)
+def patched_tl(src, version):
+    """TerminalLauncher.cs of `src` + patches/<version>/*.patch (GNU patch; must apply cleanly, no fuzz)."""
     with tempfile.TemporaryDirectory() as td:
         f = pathlib.Path(td, *TL.split("\\"))
         f.parent.mkdir(parents=True)
@@ -51,35 +64,43 @@ def build(src, version, stamp):
         for p in patches:
             subprocess.run(["patch", "-p1", "--forward", "--fuzz=0", "--no-backup-if-mismatch",
                             "-d", td, "-i", str(p)], check=True, stdout=subprocess.DEVNULL)
-        tl_new = f.read_bytes()
+        return f.read_bytes()
+
+
+def build(src, version, rel):
+    replaced = {}
+    # 1) TerminalLauncher.cs + patches
+    if rel["patches"]:
+        replaced[TL] = patched_tl(src, version)
     # 2) package.json overrides (key order preserved)
     pj = json.loads(src.read("package.json").decode("utf-8"), object_pairs_hook=collections.OrderedDict)
-    assert pj["version"] == "9.7.1"
+    assert pj["version"] == rel["base"]
     pj["version"] = version
-    pj["displayName"] = DISPLAY_NAME
-    pj["description"] = pj["description"] + description_suffix(version)
-    pj_new = (json.dumps(pj, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
-    replaced = {TL: tl_new, "package.json": pj_new}
-    # 3) copy every entry in original order; replaced entries get the release stamp
+    pj["displayName"] = rel["text"][0]
+    pj["description"] = pj["description"] + rel["text"][1].format(version=version)
+    replaced["package.json"] = (json.dumps(pj, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    # 3) copy every entry in base order; replaced entries get the release stamp
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as out:
         for zi in src.infolist():
             zi2 = copy.copy(zi)
-            if zi.filename in replaced and stamp is not None:
-                zi2.date_time = stamp
+            if zi.filename in replaced and rel["stamp"] is not None:
+                zi2.date_time = rel["stamp"]
             out.writestr(zi2, replaced.get(zi.filename, src.read(zi)))
     return buf.getvalue()
 
 
 def main():
-    raw = UPSTREAM_ZIP.read_bytes()
-    if sha(raw) != UPSTREAM_SHA:
-        sys.exit("upstream zip hash mismatch; refusing to build")
-    src = zipfile.ZipFile(UPSTREAM_ZIP)
+    bases = {}
+    for ver, h in BASES.items():
+        p = ROOT / f"{PKG}-{ver}.zip"
+        if sha(p.read_bytes()) != h:
+            sys.exit(f"base {ver} zip hash mismatch; refusing to build")
+        bases[ver] = zipfile.ZipFile(p)
     failed = False
     for version, rel in RELEASES.items():
-        out_zip = ROOT / f"com.coplaydev.unity-mcp-{version}.zip"
-        built = build(src, version, rel["stamp"])
+        out_zip = ROOT / f"{PKG}-{version}.zip"
+        built = build(bases[rel["base"]], version, rel)
         if out_zip.exists():
             same = out_zip.read_bytes() == built
             print(out_zip.name, "reproduced" if same else "DIFFERS from the committed zip (not overwritten)", sha(built))

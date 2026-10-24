@@ -1,0 +1,87 @@
+diff --git a/src/main.py b/src/main.py
+index b057f3d..3589076 100644
+--- a/src/main.py
++++ b/src/main.py
+@@ -10,6 +10,7 @@ from core.telemetry import record_milestone, record_telemetry, MilestoneType, Re
+ from services.resources import register_all_resources
+ from transport.plugin_registry import PluginRegistry
+ from transport.plugin_hub import PluginHub
++from transport import mcp_client_registry
+ from services.custom_tool_service import (
+     CustomToolService,
+     resolve_project_id_for_unity_instance,
+@@ -281,6 +282,7 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
+             "plugin_registry": _plugin_registry,
+         }
+     finally:
++        mcp_client_registry.close()
+         if _unity_connection_pool:
+             _unity_connection_pool.disconnect_all()
+         logger.info("MCP for Unity Server shut down")
+@@ -307,6 +309,7 @@ Targeting Unity instances:
+ - Use the resource mcpforunity://instances to list active Unity sessions (Name@hash).
+ - When multiple instances are connected, call set_active_instance with the exact Name@hash before using tools/resources to pin routing for the whole session. The server will error if multiple are connected and no active instance is set.
+ - Alternatively, pass unity_instance as a parameter on any individual tool call to route just that call (e.g. unity_instance="MyGame@abc123", unity_instance="abc" for a hash prefix, or unity_instance="6401" for a port number in stdio mode). This does not change the session default.
++- If set_active_instance or a tool call answers with hint "pass_unity_instance" (reason no_persistent_session), this connection has no session the server could remember a choice in: pass unity_instance="<Name@hash>" on every tool call and resource-reading tool instead of calling set_active_instance again.
+ 
+ Important Workflows:
+ 
+@@ -376,6 +379,9 @@ def _normalize_instance_token(instance_token: str | None) -> tuple[str | None, s
+ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
+     mcp = FastMCP(
+         name="mcp-for-unity-server",
++        # Advertised as serverInfo.version in initialize/server/discover (FastMCP would
++        # otherwise report its own version there).
++        version=get_package_version(),
+         lifespan=server_lifespan,
+         instructions=_build_instructions(project_scoped_tools),
+     )
+@@ -618,6 +624,10 @@ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
+     mcp.add_middleware(unity_middleware)
+     logger.info("Registered Unity instance middleware for session-based routing")
+ 
++    # Track MCP client connections (FastMCP 4 / MCP SDK 2) so Unity's register_tools can
++    # push tools/list_changed to handshake clients and to subscriptions/listen streams.
++    mcp_client_registry.install(mcp)
++
+     # Initialize API key authentication if in remote-hosted mode
+     if config.http_remote_hosted and config.api_key_validation_url:
+         ApiKeyService(
+@@ -653,6 +663,23 @@ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
+     return mcp
+ 
+ 
++def _host_origin_protection_setting() -> bool | str:
++    """FastMCP 4's Host/Origin guard for the HTTP transport (DNS-rebinding protection).
++
++    Default "auto": the guard is on while the server is bound to a loopback address and admits
++    loopback Host values and absent/loopback Origins, so Claude Code and the Unity Editor on the
++    same machine are unaffected while a browser page from another origin is refused (403/421).
++    UNITY_MCP_HTTP_HOST_ORIGIN_PROTECTION=auto|true|false overrides it. The guard covers HTTP
++    scopes only; the /hub/plugin WebSocket is not subject to it.
++    """
++    raw = os.environ.get("UNITY_MCP_HTTP_HOST_ORIGIN_PROTECTION", "auto").strip().lower()
++    if raw in ("1", "true", "yes", "on", "strict"):
++        return True
++    if raw in ("0", "false", "no", "off"):
++        return False
++    return "auto"
++
++
+ def main():
+     """Entry point for uvx and console scripts."""
+     parser = argparse.ArgumentParser(
+@@ -929,7 +956,12 @@ Examples:
+             "UNITY_MCP_HTTP_HOST") or parsed_url.hostname or "127.0.0.1"
+         port = args.http_port or _env_port or parsed_url.port or 8080
+         logger.info(f"Starting FastMCP with HTTP transport on {host}:{port}")
+-        mcp.run(transport=transport, host=host, port=port)
++        mcp.run(
++            transport=transport,
++            host=host,
++            port=port,
++            host_origin_protection=_host_origin_protection_setting(),
++        )
+     else:
+         # Use stdio transport for traditional MCP
+         logger.info("Starting FastMCP with stdio transport")

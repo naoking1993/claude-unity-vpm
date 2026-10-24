@@ -1,0 +1,440 @@
+"""Live transport harness for the FastMCP 4 port of mcpforunityserver 10.3.0.
+
+Starts the ported server on a free loopback port, attaches synthetic Unity peers over the
+/hub/plugin WebSocket, and drives it with
+  - a handshake (legacy streamable HTTP, protocolVersion 2025-06-18) client written with raw httpx,
+    including the GET notification stream;
+  - a 2026-07-28 single-exchange client: raw httpx POSTs with the _meta envelope and the
+    Mcp-Protocol-Version / Mcp-Method / Mcp-Name routing headers, plus a subscriptions/listen stream.
+It checks routing, selection scope, notifications and the Host/Origin guard.
+
+Usage: python harness.py <server-src-dir>
+Exit code 0 when every check passes. Nothing here touches a real Unity.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import socket
+import subprocess
+import sys
+from pathlib import Path
+
+import httpx
+import websockets
+
+SRC = Path(sys.argv[1]).resolve()  # a source dir (runs `python main.py`) or an installed `mcp-for-unity` executable
+LOG = Path(__file__).with_name("harness-server.log")
+PY = sys.executable
+MODERN = "2026-07-28"
+LEGACY = "2025-06-18"
+META = {
+    "io.modelcontextprotocol/protocolVersion": MODERN,
+    "io.modelcontextprotocol/clientCapabilities": {},
+    "io.modelcontextprotocol/clientInfo": {"name": "harness", "version": "0"},
+}
+NAME_KEY = {"tools/call": "name", "resources/read": "uri", "prompts/get": "name"}
+CHECKS: list[tuple[str, bool, str]] = []
+
+
+def check(name: str, ok: bool, detail: str = "") -> None:
+    CHECKS.append((name, bool(ok), detail))
+    print(("PASS " if ok else "FAIL ") + name + (f"  -- {detail}" if detail else ""), flush=True)
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def parse_response(r: httpx.Response) -> dict | None:
+    """JSON body, or the last data: frame of an SSE body."""
+    ct = r.headers.get("content-type", "")
+    if ct.startswith("text/event-stream"):
+        last = None
+        for line in r.text.splitlines():
+            if line.startswith("data:"):
+                try:
+                    last = json.loads(line[5:].strip())
+                except Exception:
+                    pass
+        return last
+    try:
+        return r.json()
+    except Exception:
+        return {"raw": r.text}
+
+
+def tool_payload(resp_body: dict | None) -> dict:
+    """structuredContent if present, else the first text content block parsed as JSON."""
+    res = (resp_body or {}).get("result") or {}
+    if res.get("structuredContent") is not None:
+        return res["structuredContent"]
+    for c in res.get("content", []):
+        if c.get("type") == "text":
+            try:
+                return json.loads(c["text"])
+            except Exception:
+                return {"text": c["text"]}
+    if "error" in (resp_body or {}):
+        return {"jsonrpc_error": resp_body["error"]}
+    return {}
+
+
+class UnityPeer:
+    """Minimal stand-in for the Unity Editor's WebSocket plugin."""
+
+    TOOLS = ["read_console", "manage_scene", "manage_gameobject", "manage_editor", "manage_script"]
+
+    def __init__(self, base: str, name: str, hash_: str):
+        self.base, self.name, self.hash = base, name, hash_
+        self.ws = None
+        self.session_id = None
+        self.received: list[dict] = []
+        self._task = None
+
+    async def connect(self):
+        self.ws = await websockets.connect(self.base.replace("http", "ws") + "/hub/plugin")
+        welcome = json.loads(await self.ws.recv())
+        assert welcome.get("type") == "welcome", welcome
+        await self.ws.send(json.dumps({
+            "type": "register", "project_name": self.name, "project_hash": self.hash,
+            "unity_version": "2022.3.22f1", "project_path": f"/tmp/{self.name}",
+        }))
+        registered = json.loads(await self.ws.recv())
+        assert registered.get("type") == "registered", registered
+        self.session_id = registered["session_id"]
+        self._task = asyncio.create_task(self._loop())
+
+    async def register_tools(self):
+        await self.ws.send(json.dumps({
+            "type": "register_tools",
+            "tools": [{"name": n, "description": n, "parameters": []} for n in self.TOOLS],
+        }))
+
+    async def _loop(self):
+        try:
+            async for raw in self.ws:
+                msg = json.loads(raw)
+                t = msg.get("type")
+                if t == "ping":
+                    await self.ws.send(json.dumps({"type": "pong", "session_id": self.session_id}))
+                elif t == "execute":
+                    name = msg["name"]
+                    if name == "ping":
+                        result = {"status": "success", "result": {"message": "pong"}}
+                    else:
+                        self.received.append(msg)
+                        result = {"status": "success", "result": {
+                            "message": f"ok from {self.name}",
+                            "data": {"peer": self.name, "name": name, "params": msg.get("params", {})},
+                        }}
+                    await self.ws.send(json.dumps({"type": "command_result", "id": msg["id"], "result": result}))
+        except Exception:
+            pass
+
+    @property
+    def commands(self) -> int:
+        return len(self.received)
+
+    async def close(self):
+        if self._task:
+            self._task.cancel()
+        if self.ws:
+            await self.ws.close()
+
+
+class LegacyClient:
+    """Handshake-era streamable HTTP client (initialize + Mcp-Session-Id + GET stream)."""
+
+    def __init__(self, base: str):
+        self.base = base
+        self.http = httpx.AsyncClient(timeout=30)
+        self.session_id: str | None = None
+        self.notifications: list[str] = []
+        self._rid = 0
+        self._stream_task = None
+
+    def _headers(self) -> dict:
+        h = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json",
+             "MCP-Protocol-Version": LEGACY}
+        if self.session_id:
+            h["Mcp-Session-Id"] = self.session_id
+        return h
+
+    async def request(self, method: str, params: dict | None = None) -> dict | None:
+        self._rid += 1
+        r = await self.http.post(self.base + "/mcp", headers=self._headers(),
+                                 json={"jsonrpc": "2.0", "id": self._rid, "method": method, "params": params or {}})
+        if r.status_code >= 400:
+            return {"http_status": r.status_code, "raw": r.text}
+        return parse_response(r)
+
+    async def notify(self, method: str, params: dict | None = None) -> int:
+        r = await self.http.post(self.base + "/mcp", headers=self._headers(),
+                                 json={"jsonrpc": "2.0", "method": method, "params": params or {}})
+        return r.status_code
+
+    async def connect(self):
+        r = await self.http.post(self.base + "/mcp", headers=self._headers(), json={
+            "jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": {"protocolVersion": LEGACY, "capabilities": {}, "clientInfo": {"name": "legacy-harness", "version": "0"}}})
+        self.session_id = r.headers.get("mcp-session-id")
+        body = parse_response(r)
+        assert self.session_id, (r.status_code, r.text[:200])
+        await self.notify("notifications/initialized")
+        self._stream_task = asyncio.create_task(self._get_stream())
+        await asyncio.sleep(0.3)
+        return body
+
+    async def _get_stream(self):
+        try:
+            async with self.http.stream("GET", self.base + "/mcp", timeout=None,
+                                        headers={"Accept": "text/event-stream", "Mcp-Session-Id": self.session_id,
+                                                 "MCP-Protocol-Version": LEGACY}) as r:
+                async for line in r.aiter_lines():
+                    if line.startswith("data:"):
+                        try:
+                            msg = json.loads(line[5:].strip())
+                            self.notifications.append(msg.get("method", "?"))
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    async def call_tool(self, name: str, arguments: dict) -> dict:
+        return tool_payload(await self.request("tools/call", {"name": name, "arguments": arguments}))
+
+    async def close(self):
+        if self._stream_task:
+            self._stream_task.cancel()
+        try:
+            await self.http.delete(self.base + "/mcp", headers=self._headers())
+        except Exception:
+            pass
+        await self.http.aclose()
+
+
+async def modern_post(client: httpx.AsyncClient, base: str, method: str, params: dict | None = None,
+                      *, rid: int = 1, extra_meta: dict | None = None) -> dict:
+    p = dict(params or {})
+    p["_meta"] = {**META, **(extra_meta or {})}
+    headers = {"MCP-Protocol-Version": MODERN, "Mcp-Method": method,
+               "Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    key = NAME_KEY.get(method)
+    if key and p.get(key) is not None:
+        headers["Mcp-Name"] = str(p[key])
+    r = await client.post(base + "/mcp", json={"jsonrpc": "2.0", "id": rid, "method": method, "params": p},
+                          headers=headers, timeout=30)
+    return {"status": r.status_code, "body": parse_response(r)}
+
+
+async def listen_stream(base: str, got: list, stop: asyncio.Event):
+    """Open a subscriptions/listen stream (2026-07-28) and collect frames."""
+    body = {"jsonrpc": "2.0", "id": 777, "method": "subscriptions/listen",
+            "params": {"notifications": {"toolsListChanged": True}, "_meta": META}}
+    async with httpx.AsyncClient() as c:
+        try:
+            async with c.stream("POST", base + "/mcp", json=body, timeout=httpx.Timeout(60, read=None),
+                                headers={"MCP-Protocol-Version": MODERN, "Mcp-Method": "subscriptions/listen",
+                                         "Accept": "application/json, text/event-stream",
+                                         "Content-Type": "application/json"}) as r:
+                got.append({"status": r.status_code, "content-type": r.headers.get("content-type", "")})
+                if r.status_code != 200:
+                    got.append({"raw": (await r.aread()).decode(errors="replace")[:300]})
+                    return
+                async for line in r.aiter_lines():
+                    if line.startswith("data:"):
+                        try:
+                            got.append(json.loads(line[5:].strip()))
+                        except Exception:
+                            got.append({"raw": line})
+                    if stop.is_set():
+                        break
+        except Exception as exc:
+            got.append({"exception": repr(exc)})
+
+
+async def main() -> int:
+    port = free_port()
+    base = f"http://127.0.0.1:{port}"
+    env = {**os.environ, "UNITY_MCP_TELEMETRY_ENABLED": "0", "UNITY_MCP_SKIP_STARTUP_CONNECT": "1",
+           "FASTMCP_SHOW_SERVER_BANNER": "false"}
+    log = LOG.open("w")
+    if SRC.is_dir():
+        cmd, cwd = [PY, "main.py", "--transport", "http", "--http-url", base], SRC
+    else:
+        cmd, cwd = [str(SRC), "--transport", "http", "--http-url", base], SRC.parent
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT)
+    peers: list[UnityPeer] = []
+    legacy = None
+    try:
+        async with httpx.AsyncClient() as hc:
+            for _ in range(100):
+                try:
+                    r = await hc.get(base + "/health", timeout=2)
+                    if r.status_code == 200:
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(0.2)
+            else:
+                check("server started", False, "health never answered")
+                return 1
+            health = r.json()
+            check("health 200 + version string", bool(health.get("version")), json.dumps(health))
+
+            # ---- Host/Origin guard (FastMCP 4, auto mode on loopback) ----
+            r = await hc.get(base + "/health", headers={"Host": "evil.example"})
+            check("foreign Host refused on /health", r.status_code in (421, 403), f"status {r.status_code}")
+            r = await hc.post(base + "/mcp", headers={"Origin": "http://evil.example", "Content-Type": "application/json",
+                                                       "Accept": "application/json, text/event-stream"},
+                              json={"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                    "params": {"protocolVersion": LEGACY, "capabilities": {},
+                                               "clientInfo": {"name": "x", "version": "0"}}})
+            check("foreign Origin refused on /mcp", r.status_code == 403, f"status {r.status_code}")
+            r = await hc.get(base + "/health", headers={"Host": "localhost"})
+            check("Host localhost accepted", r.status_code == 200, f"status {r.status_code}")
+
+            # ---- one Unity peer ----
+            a = UnityPeer(base, "ProjA", "aaaa1111"); peers.append(a)
+            await a.connect()
+            await a.register_tools()
+            await asyncio.sleep(0.5)
+
+            legacy = LegacyClient(base)
+            init = await legacy.connect()
+            check("legacy initialize -> session id", bool(legacy.session_id) and (init or {}).get("result", {}).get("protocolVersion") == LEGACY,
+                  json.dumps((init or {}).get("result", {}).get("serverInfo"))[:120])
+            body = await legacy.request("tools/list")
+            names = sorted(t["name"] for t in (body or {}).get("result", {}).get("tools", []))
+            check("legacy tools/list incl. registered + set_active_instance", "read_console" in names and "set_active_instance" in names,
+                  f"{len(names)} tools")
+            body = await legacy.request("resources/read", {"uri": "mcpforunity://instances"})
+            txt = json.dumps(body)
+            check("legacy instances resource shows ProjA", "ProjA@aaaa1111" in txt, txt[:160])
+            p = await legacy.call_tool("read_console", {"action": "get"})
+            check("legacy call routes to sole peer", a.commands == 1 and a.received[-1]["name"] == "read_console", json.dumps(p)[:200])
+
+            # second peer -> ambiguity
+            b = UnityPeer(base, "ProjB", "bbbb2222"); peers.append(b)
+            await b.connect()
+            await b.register_tools()
+            await asyncio.sleep(0.5)
+            p = await legacy.call_tool("read_console", {"action": "get"})
+            # Upstream semantics: the sole instance auto-selected earlier stays this session's choice.
+            check("legacy: existing session keeps its auto-selected ProjA when ProjB appears",
+                  p.get("success") is True and (p.get("data") or {}).get("peer") == "ProjA", json.dumps(p)[:200])
+            p = await legacy.call_tool("set_active_instance", {"instance": "ProjB@bbbb2222"})
+            check("legacy: set_active_instance persists (scope=session)",
+                  p.get("success") is True and (p.get("data") or {}).get("selection_scope") == "session", json.dumps(p)[:300])
+            nb = b.commands
+            p = await legacy.call_tool("read_console", {"action": "get"})
+            check("legacy: subsequent call routed to selected ProjB", b.commands == nb + 1 and p.get("success") is True,
+                  f"B received {b.commands}; {json.dumps(p)[:120]}")
+            na = a.commands
+            p = await legacy.call_tool("read_console", {"action": "get", "unity_instance": "ProjA@aaaa1111"})
+            check("legacy: per-call unity_instance overrides selection", a.commands == na + 1 and p.get("success") is True,
+                  f"A received {a.commands}")
+
+            # a second legacy session must not inherit the first one's selection
+            legacy2 = LegacyClient(base)
+            await legacy2.connect()
+            p = await legacy2.call_tool("read_console", {"action": "get"})
+            check("legacy: another session is isolated (needs its own selection)",
+                  p.get("success") is False and p.get("hint") == "select_instance", json.dumps(p)[:200])
+            await legacy2.close()
+
+            # ---- 2026-07-28 single-exchange client ----
+            r = await modern_post(hc, base, "tools/list")
+            mt = sorted(t["name"] for t in ((r["body"] or {}).get("result") or {}).get("tools", []))
+            check("modern tools/list works", r["status"] == 200 and "read_console" in mt, f"status {r['status']}, {len(mt)} tools, {json.dumps(r['body'])[:120] if not mt else ''}")
+            r = await modern_post(hc, base, "tools/call", {"name": "read_console", "arguments": {"action": "get"}})
+            p = tool_payload(r["body"])
+            check("modern: two peers, no selection -> pass_unity_instance hint",
+                  p.get("success") is False and p.get("hint") == "pass_unity_instance", json.dumps(p)[:300])
+            r = await modern_post(hc, base, "tools/call", {"name": "set_active_instance", "arguments": {"instance": "ProjA@aaaa1111"}})
+            p = tool_payload(r["body"])
+            check("modern: set_active_instance without client_id -> no_persistent_session",
+                  p.get("success") is False and (p.get("data") or {}).get("reason") == "no_persistent_session"
+                  and p.get("hint") == "pass_unity_instance", json.dumps(p)[:300])
+            nb = b.commands
+            r = await modern_post(hc, base, "tools/call", {"name": "read_console", "arguments": {"action": "get", "unity_instance": "ProjB@bbbb2222"}})
+            p = tool_payload(r["body"])
+            check("modern: per-call unity_instance routes to ProjB", b.commands == nb + 1 and p.get("success") is True, json.dumps(p)[:200])
+            r = await modern_post(hc, base, "tools/call", {"name": "set_active_instance", "arguments": {"instance": "ProjA@aaaa1111"}},
+                                  extra_meta={"client_id": "harness-client-1"})
+            p = tool_payload(r["body"])
+            check("modern+client_id: set_active_instance persists (scope=client)",
+                  p.get("success") is True and (p.get("data") or {}).get("selection_scope") == "client", json.dumps(p)[:300])
+            na = a.commands
+            r = await modern_post(hc, base, "tools/call", {"name": "read_console", "arguments": {"action": "get"}},
+                                  extra_meta={"client_id": "harness-client-1"})
+            p = tool_payload(r["body"])
+            check("modern+client_id: next call routed to ProjA", a.commands == na + 1 and p.get("success") is True, f"A received {a.commands}")
+            r = await modern_post(hc, base, "tools/call", {"name": "read_console", "arguments": {"action": "get"}},
+                                  extra_meta={"client_id": "harness-client-2"})
+            p = tool_payload(r["body"])
+            # A different client_id has its own (empty) selection; it CAN persist one, so the hint is select_instance.
+            check("modern+other client_id: isolated (still needs selection)", p.get("success") is False and p.get("hint") == "select_instance",
+                  json.dumps(p)[:200])
+            r = await modern_post(hc, base, "resources/read", {"uri": "mcpforunity://instances"})
+            check("modern resources/read instances", r["status"] == 200 and "ProjA@aaaa1111" in json.dumps(r["body"]), json.dumps(r["body"])[:120])
+
+            # ---- notifications: register_tools again -> legacy GET stream + modern listen stream ----
+            got: list = []
+            stop = asyncio.Event()
+            lt = asyncio.create_task(listen_stream(base, got, stop))
+            for _ in range(30):
+                if len(got) >= 2:
+                    break
+                await asyncio.sleep(0.1)
+            check("listen stream opened (200, SSE)", bool(got) and got[0].get("status") == 200 and "event-stream" in got[0].get("content-type", ""),
+                  json.dumps(got[:2])[:300])
+            check("listen ack received", len(got) >= 2 and "subscriptions/acknowledged" in json.dumps(got[1]), json.dumps(got[1:2])[:200])
+            before = legacy.notifications.count("notifications/tools/list_changed")
+            await a.register_tools()
+            for _ in range(50):
+                if legacy.notifications.count("notifications/tools/list_changed") > before and len(got) >= 3:
+                    break
+                await asyncio.sleep(0.1)
+            check("legacy GET stream got notifications/tools/list_changed",
+                  legacy.notifications.count("notifications/tools/list_changed") > before, str(legacy.notifications[-3:]))
+            check("listen stream got tools/list_changed", any("tools/list_changed" in json.dumps(x) for x in got[2:]), json.dumps(got[2:])[:200])
+            stop.set()
+            lt.cancel()
+
+            # peer disconnect -> instance disappears; legacy session's stale selection yields a clear error
+            await b.close(); peers.remove(b)
+            await asyncio.sleep(0.5)
+            body = await legacy.request("resources/read", {"uri": "mcpforunity://instances"})
+            check("instances resource drops disconnected ProjB", "ProjB@bbbb2222" not in json.dumps(body), json.dumps(body)[:160])
+
+            await legacy.close(); legacy = None
+            await a.close(); peers.remove(a)
+            await asyncio.sleep(0.3)
+            r = await hc.get(base + "/health")
+            check("server still healthy after clients left", r.status_code == 200)
+    finally:
+        for pr in peers:
+            await pr.close()
+        if legacy:
+            await legacy.close()
+        proc.terminate()
+        try:
+            proc.wait(10)
+        except Exception:
+            proc.kill()
+        log.close()
+        text = LOG.read_text()
+        tb = "Traceback" in text
+        check("no tracebacks in server log", not tb, "see harness-server.log" if tb else "")
+    failed = [c for c in CHECKS if not c[1]]
+    print(f"\n{len(CHECKS) - len(failed)}/{len(CHECKS)} checks passed")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(asyncio.run(main()))

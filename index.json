@@ -6,6 +6,32 @@
   "packages": {
     "com.coplaydev.unity-mcp": {
       "versions": {
+        "10.3.100": {
+          "name": "com.coplaydev.unity-mcp",
+          "displayName": "MCP for Unity (Claude-Unity kit)",
+          "version": "10.3.100",
+          "description": "【非公式ビルド】上流 10.3.0（タグ v10.3.0）に package.json の version / displayName / description だけを変えたもの。サーバーは窓なし（headless）で起動する方式になり、日本語パスで pid が文字化けする問題は上流で解消済みのため、9.7.101 の chcp パッチは含まない。FastMCP 4 対応のサーバー wheel（mcpforunityserver 10.3.0+fastmcp4.x）を GitUrlOverride で指定する前提。GitUrlOverride が空だと mcpforunityserver==10.3.100（PyPI に存在しない）を探してわざと起動に失敗する。© CoplayDev, MIT License。上流: https://github.com/CoplayDev/unity-mcp",
+          "unity": "2021.3",
+          "author": {
+            "name": "CoplayDev",
+            "url": "https://github.com/CoplayDev/unity-mcp"
+          },
+          "license": "MIT",
+          "licensesUrl": "https://github.com/CoplayDev/unity-mcp/blob/main/LICENSE",
+          "dependencies": {
+            "com.unity.modules.animation": "1.0.0",
+            "com.unity.modules.imageconversion": "1.0.0",
+            "com.unity.modules.physics": "1.0.0",
+            "com.unity.modules.physics2d": "1.0.0",
+            "com.unity.modules.uielements": "1.0.0",
+            "com.unity.modules.screencapture": "1.0.0",
+            "com.unity.modules.unitywebrequest": "1.0.0",
+            "com.unity.nuget.newtonsoft-json": "3.0.2",
+            "com.unity.test-framework": "1.1.31"
+          },
+          "url": "https://naoking1993.github.io/claude-unity-vpm/com.coplaydev.unity-mcp-10.3.100.zip",
+          "zipSHA256": "938eadc3c264d3fa3e67fd849fb39ca9489c4ad66fcfb8f78ac6bbf0c77068f7"
+        },
         "9.7.101": {
           "name": "com.coplaydev.unity-mcp",
           "displayName": "MCP for Unity (JP path fix)",
