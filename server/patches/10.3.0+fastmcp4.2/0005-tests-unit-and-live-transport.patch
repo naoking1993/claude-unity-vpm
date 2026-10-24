@@ -1,9 +1,9 @@
 diff --git a/tests/integration/live_harness.py b/tests/integration/live_harness.py
 new file mode 100644
-index 0000000..4a98ef5
+index 0000000..bf6ccd5
 --- /dev/null
 +++ b/tests/integration/live_harness.py
-@@ -0,0 +1,507 @@
+@@ -0,0 +1,528 @@
 +"""Live transport harness for the FastMCP 4 port of mcpforunityserver 10.3.0.
 +
 +Starts the ported server on a free loopback port, attaches synthetic Unity peers over the
@@ -34,7 +34,13 @@ index 0000000..4a98ef5
 +
 +# A source dir (runs `python main.py`) or an installed `mcp-for-unity` executable; defaults to this repo's src/.
 +SRC = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).resolve().parents[2] / "src"
-+LOG = Path(tempfile.gettempdir()) / "mcpforunity-live-harness-server.log"
++# One log file per run (parallel runs must not share it); its tail is printed when a check fails.
++LOG = Path(tempfile.mkstemp(prefix="mcpforunity-live-harness-", suffix=".log")[1])
++# Server env for every launch: never contact Unity at startup, never send telemetry (the server reads
++# DISABLE_TELEMETRY / UNITY_MCP_DISABLE_TELEMETRY / MCP_DISABLE_TELEMETRY; UNITY_MCP_TELEMETRY_ENABLED is not read).
++SERVER_ENV = {"UNITY_MCP_SKIP_STARTUP_CONNECT": "1", "FASTMCP_SHOW_SERVER_BANNER": "false",
++              "DISABLE_TELEMETRY": "1", "UNITY_MCP_DISABLE_TELEMETRY": "1", "MCP_DISABLE_TELEMETRY": "1"}
++OVERALL_TIMEOUT_S = 240  # below the 300 s pytest wrapper budget, so the finally blocks always run
 +PY = sys.executable
 +MODERN = "2026-07-28"
 +LEGACY = "2025-06-18"
@@ -332,8 +338,7 @@ index 0000000..4a98ef5
 +    sdk_connection_checks()
 +    port = free_port()
 +    base = f"http://127.0.0.1:{port}"
-+    env = {**os.environ, "UNITY_MCP_TELEMETRY_ENABLED": "0", "UNITY_MCP_SKIP_STARTUP_CONNECT": "1",
-+           "FASTMCP_SHOW_SERVER_BANNER": "false"}
++    env = {**os.environ, **SERVER_ENV}
 +    log = LOG.open("w")
 +    if SRC.is_dir():
 +        cmd, cwd = [PY, "main.py", "--transport", "http", "--http-url", base], SRC
@@ -501,29 +506,50 @@ index 0000000..4a98ef5
 +        except Exception:
 +            proc.kill()
 +        log.close()
-+        text = LOG.read_text()
++        text = LOG.read_text(errors="replace")
 +        tb = "Traceback" in text
-+        check("no tracebacks in server log", not tb, "see harness-server.log" if tb else "")
++        check("no tracebacks in server log", not tb, str(LOG) if tb else "")
 +    failed = [c for c in CHECKS if not c[1]]
 +    print(f"\n{len(CHECKS) - len(failed)}/{len(CHECKS)} checks passed")
++    if failed:
++        print(f"\n--- server log tail ({LOG}) ---")
++        print("\n".join(text.splitlines()[-80:]))
 +    return 1 if failed else 0
 +
 +
++async def _main_with_budget() -> int:
++    try:
++        return await asyncio.wait_for(main(), OVERALL_TIMEOUT_S)
++    except asyncio.TimeoutError:
++        print(f"FAIL harness exceeded {OVERALL_TIMEOUT_S}s (servers were stopped by the finally blocks)")
++        print(f"--- server log tail ({LOG}) ---")
++        try:
++            print("\n".join(LOG.read_text(errors="replace").splitlines()[-80:]))
++        except Exception:
++            pass
++        return 1
++
++
 +if __name__ == "__main__":
-+    sys.exit(asyncio.run(main()))
++    sys.exit(asyncio.run(_main_with_budget()))
 diff --git a/tests/integration/test_fastmcp4_live_transport.py b/tests/integration/test_fastmcp4_live_transport.py
 new file mode 100644
-index 0000000..f2ec848
+index 0000000..df14b2d
 --- /dev/null
 +++ b/tests/integration/test_fastmcp4_live_transport.py
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,51 @@
 +"""Live transport test for the FastMCP 4 port: real HTTP server, synthetic Unity peers, both wire eras.
 +
 +Runs tests/integration/live_harness.py in a subprocess (clean module space, free loopback port) and
 +fails with the harness output if any check fails. Needs ``websockets`` (dev extra).
++
++Also re-runs the SDK-bound unit tests of tests/test_fastmcp4_port.py in a separate pytest process:
++in the full suite tests/integration/conftest.py replaces ``mcp`` with a stub, so they skip there.
 +"""
 +from __future__ import annotations
 +
++import os
++import signal
 +import subprocess
 +import sys
 +from pathlib import Path
@@ -532,14 +558,37 @@ index 0000000..f2ec848
 +
 +websockets = pytest.importorskip("websockets")
 +
-+HARNESS = Path(__file__).with_name("live_harness.py")
++HERE = Path(__file__).resolve().parent
++HARNESS = HERE / "live_harness.py"
++PORT_UNIT_TESTS = HERE.parent / "test_fastmcp4_port.py"
++
++
++def _run(cmd: list[str], timeout: float) -> subprocess.CompletedProcess:
++    """subprocess.run with the child in its own process group, so a timeout also kills the
++    servers the harness started (the harness cannot clean up after SIGKILL)."""
++    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
++                            start_new_session=True, cwd=HERE.parent)
++    try:
++        out, err = proc.communicate(timeout=timeout)
++    except subprocess.TimeoutExpired:
++        os.killpg(proc.pid, signal.SIGKILL)
++        out, err = proc.communicate()
++        pytest.fail(f"timed out after {timeout}s:\n{out[-6000:]}\n{err[-3000:]}")
++    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 +
 +
 +@pytest.mark.integration
 +def test_live_transport_matrix():
-+    proc = subprocess.run([sys.executable, str(HARNESS)], capture_output=True, text=True, timeout=300)
-+    assert proc.returncode == 0, "live harness failed:\n" + proc.stdout[-6000:] + "\n" + proc.stderr[-3000:]
++    proc = _run([sys.executable, str(HARNESS)], timeout=300)
++    assert proc.returncode == 0, "live harness failed:\n" + proc.stdout[-8000:] + "\n" + proc.stderr[-3000:]
 +    assert "checks passed" in proc.stdout
++
++
++@pytest.mark.integration
++def test_sdk_bound_port_unit_tests_in_a_clean_process():
++    proc = _run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-rs", str(PORT_UNIT_TESTS)], timeout=180)
++    assert proc.returncode == 0, proc.stdout[-6000:] + "\n" + proc.stderr[-3000:]
++    assert "skipped" not in proc.stdout.split("\n")[-2], "SDK-bound tests were skipped:\n" + proc.stdout[-3000:]
 diff --git a/tests/test_fastmcp4_port.py b/tests/test_fastmcp4_port.py
 new file mode 100644
 index 0000000..23c8911

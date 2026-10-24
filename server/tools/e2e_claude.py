@@ -17,7 +17,7 @@ from pathlib import Path
 import httpx
 
 sys.path.insert(0, str(Path(__file__).parent))
-from live_harness import UnityPeer  # noqa: E402
+from live_harness import SERVER_ENV, UnityPeer  # noqa: E402
 
 SRC = Path(sys.argv[1]).resolve()
 OUT = Path(sys.argv[2]).resolve()
@@ -47,7 +47,7 @@ def run_claude(prompt: str, cfg: Path, outfile: Path, max_turns: int = 8) -> dic
     cmd = ["claude", "-p", prompt, "--mcp-config", str(cfg), "--strict-mcp-config",
            "--allowedTools", "mcp__unityMCP", "--max-turns", str(max_turns), "--output-format", "json"]
     t0 = time.time()
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=OUT)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=600, cwd=OUT, stdin=subprocess.DEVNULL)
     outfile.write_text(f"$ {' '.join(cmd)}\n--- stdout\n{r.stdout}\n--- stderr\n{r.stderr}\n")
     try:
         body = json.loads(r.stdout)
@@ -77,8 +77,7 @@ async def main() -> int:
     srv_port, proxy_port = free_port(), free_port()
     base = f"http://127.0.0.1:{srv_port}"
     via_proxy = f"http://127.0.0.1:{proxy_port}"
-    env = {**os.environ, "UNITY_MCP_TELEMETRY_ENABLED": "0", "UNITY_MCP_SKIP_STARTUP_CONNECT": "1",
-           "FASTMCP_SHOW_SERVER_BANNER": "false"}
+    env = {**os.environ, **SERVER_ENV}  # includes the telemetry opt-out the server actually reads
     srv_log = (OUT / "server.log").open("w")
     if SRC.is_dir():
         cmd, cwd = [PY, "main.py", "--transport", "http", "--http-url", base], SRC

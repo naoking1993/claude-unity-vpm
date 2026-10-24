@@ -26,9 +26,15 @@ from pathlib import Path
 import httpx
 import websockets
 
-# A source dir (runs `python main.py`) or an installed `mcp-for-unity` executable; defaults to ../../src (Server/tests/integration layout).
+# A source dir (runs `python main.py`) or an installed `mcp-for-unity` executable; defaults to this repo's src/.
 SRC = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).resolve().parents[2] / "src"
-LOG = Path(tempfile.gettempdir()) / "mcpforunity-live-harness-server.log"
+# One log file per run (parallel runs must not share it); its tail is printed when a check fails.
+LOG = Path(tempfile.mkstemp(prefix="mcpforunity-live-harness-", suffix=".log")[1])
+# Server env for every launch: never contact Unity at startup, never send telemetry (the server reads
+# DISABLE_TELEMETRY / UNITY_MCP_DISABLE_TELEMETRY / MCP_DISABLE_TELEMETRY; UNITY_MCP_TELEMETRY_ENABLED is not read).
+SERVER_ENV = {"UNITY_MCP_SKIP_STARTUP_CONNECT": "1", "FASTMCP_SHOW_SERVER_BANNER": "false",
+              "DISABLE_TELEMETRY": "1", "UNITY_MCP_DISABLE_TELEMETRY": "1", "MCP_DISABLE_TELEMETRY": "1"}
+OVERALL_TIMEOUT_S = 240  # below the 300 s pytest wrapper budget, so the finally blocks always run
 PY = sys.executable
 MODERN = "2026-07-28"
 LEGACY = "2025-06-18"
@@ -326,8 +332,7 @@ async def main() -> int:
     sdk_connection_checks()
     port = free_port()
     base = f"http://127.0.0.1:{port}"
-    env = {**os.environ, "UNITY_MCP_TELEMETRY_ENABLED": "0", "UNITY_MCP_SKIP_STARTUP_CONNECT": "1",
-           "FASTMCP_SHOW_SERVER_BANNER": "false"}
+    env = {**os.environ, **SERVER_ENV}
     log = LOG.open("w")
     if SRC.is_dir():
         cmd, cwd = [PY, "main.py", "--transport", "http", "--http-url", base], SRC
@@ -495,13 +500,29 @@ async def main() -> int:
         except Exception:
             proc.kill()
         log.close()
-        text = LOG.read_text()
+        text = LOG.read_text(errors="replace")
         tb = "Traceback" in text
-        check("no tracebacks in server log", not tb, "see harness-server.log" if tb else "")
+        check("no tracebacks in server log", not tb, str(LOG) if tb else "")
     failed = [c for c in CHECKS if not c[1]]
     print(f"\n{len(CHECKS) - len(failed)}/{len(CHECKS)} checks passed")
+    if failed:
+        print(f"\n--- server log tail ({LOG}) ---")
+        print("\n".join(text.splitlines()[-80:]))
     return 1 if failed else 0
 
 
+async def _main_with_budget() -> int:
+    try:
+        return await asyncio.wait_for(main(), OVERALL_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        print(f"FAIL harness exceeded {OVERALL_TIMEOUT_S}s (servers were stopped by the finally blocks)")
+        print(f"--- server log tail ({LOG}) ---")
+        try:
+            print("\n".join(LOG.read_text(errors="replace").splitlines()[-80:]))
+        except Exception:
+            pass
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    sys.exit(asyncio.run(_main_with_budget()))

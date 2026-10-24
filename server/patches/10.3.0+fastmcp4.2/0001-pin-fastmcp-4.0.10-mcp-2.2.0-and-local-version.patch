@@ -1,5 +1,5 @@
 diff --git a/pyproject.toml b/pyproject.toml
-index 83800f5..adbe9aa 100644
+index 83800f5..8e0923d 100644
 --- a/pyproject.toml
 +++ b/pyproject.toml
 @@ -1,6 +1,6 @@
@@ -34,7 +34,7 @@ index 83800f5..adbe9aa 100644
  
  [build-system]
 -requires = ["setuptools>=64.0.0", "wheel"]
-+requires = ["setuptools==84.2.1", "wheel"]
++requires = ["setuptools==84.2.1"]
  build-backend = "setuptools.build_meta"
  
  [tool.setuptools.packages.find]
