@@ -1,5 +1,5 @@
 diff --git a/src/main.py b/src/main.py
-index b057f3d..3589076 100644
+index b057f3d..be7792e 100644
 --- a/src/main.py
 +++ b/src/main.py
 @@ -10,6 +10,7 @@ from core.telemetry import record_milestone, record_telemetry, MilestoneType, Re
@@ -47,31 +47,40 @@ index b057f3d..3589076 100644
      # Initialize API key authentication if in remote-hosted mode
      if config.http_remote_hosted and config.api_key_validation_url:
          ApiKeyService(
-@@ -653,6 +663,23 @@ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
+@@ -653,6 +663,32 @@ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
      return mcp
  
  
-+def _host_origin_protection_setting() -> bool | str:
++def _is_loopback_bind_host(host: str | None) -> bool:
++    h = (host or "").strip().strip("[]").lower()
++    return h == "localhost" or h == "::1" or h.startswith("127.")
++
++
++def _host_origin_protection_setting(bind_host: str | None) -> bool | str:
 +    """FastMCP 4's Host/Origin guard for the HTTP transport (DNS-rebinding protection).
 +
-+    Default "auto": the guard is on while the server is bound to a loopback address and admits
-+    loopback Host values and absent/loopback Origins, so Claude Code and the Unity Editor on the
-+    same machine are unaffected while a browser page from another origin is refused (403/421).
-+    UNITY_MCP_HTTP_HOST_ORIGIN_PROTECTION=auto|true|false overrides it. The guard covers HTTP
++    Loopback bind (the default 127.0.0.1): "auto" -- loopback Host values and absent/loopback
++    Origins pass, so Claude Code and the Unity Editor on the same machine are unaffected, while a
++    browser page from another origin is refused (403/421). Any other bind (0.0.0.0/:: from the
++    Unity package's LAN option, or a LAN address): off, as upstream; the user chose to expose the
++    server and clients then use whatever Host they were configured with (0.0.0.0 included).
++    UNITY_MCP_HTTP_HOST_ORIGIN_PROTECTION=auto|true|false overrides both. The guard covers HTTP
 +    scopes only; the /hub/plugin WebSocket is not subject to it.
 +    """
-+    raw = os.environ.get("UNITY_MCP_HTTP_HOST_ORIGIN_PROTECTION", "auto").strip().lower()
++    raw = os.environ.get("UNITY_MCP_HTTP_HOST_ORIGIN_PROTECTION", "").strip().lower()
 +    if raw in ("1", "true", "yes", "on", "strict"):
 +        return True
 +    if raw in ("0", "false", "no", "off"):
 +        return False
-+    return "auto"
++    if raw == "auto":
++        return "auto"
++    return "auto" if _is_loopback_bind_host(bind_host) else False
 +
 +
  def main():
      """Entry point for uvx and console scripts."""
      parser = argparse.ArgumentParser(
-@@ -929,7 +956,12 @@ Examples:
+@@ -929,7 +965,12 @@ Examples:
              "UNITY_MCP_HTTP_HOST") or parsed_url.hostname or "127.0.0.1"
          port = args.http_port or _env_port or parsed_url.port or 8080
          logger.info(f"Starting FastMCP with HTTP transport on {host}:{port}")
@@ -80,7 +89,7 @@ index b057f3d..3589076 100644
 +            transport=transport,
 +            host=host,
 +            port=port,
-+            host_origin_protection=_host_origin_protection_setting(),
++            host_origin_protection=_host_origin_protection_setting(host),
 +        )
      else:
          # Use stdio transport for traditional MCP

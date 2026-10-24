@@ -1,12 +1,12 @@
 diff --git a/pyproject.toml b/pyproject.toml
-index 83800f5..16d99fc 100644
+index 83800f5..adbe9aa 100644
 --- a/pyproject.toml
 +++ b/pyproject.toml
 @@ -1,6 +1,6 @@
  [project]
  name = "mcpforunityserver"
 -version = "10.3.0"
-+version = "10.3.0+fastmcp4.1"
++version = "10.3.0+fastmcp4.2"
  description = "MCP for Unity Server: A Unity package for Unity Editor integration via the Model Context Protocol (MCP)."
  readme = "README.md"
  license = "MIT"
@@ -39,7 +39,7 @@ index 83800f5..16d99fc 100644
  
  [tool.setuptools.packages.find]
 diff --git a/uv.lock b/uv.lock
-index 07c803a..7a40a6a 100644
+index 07c803a..4b1c459 100644
 --- a/uv.lock
 +++ b/uv.lock
 @@ -69,14 +69,15 @@ wheels = [
@@ -386,7 +386,7 @@ index 07c803a..7a40a6a 100644
  [[package]]
  name = "mcpforunityserver"
 -version = "10.3.0"
-+version = "10.3.0+fastmcp4.1"
++version = "10.3.0+fastmcp4.2"
  source = { editable = "." }
  dependencies = [
      { name = "click" },

@@ -8,8 +8,9 @@ Starts the ported server on a free loopback port, attaches synthetic Unity peers
     Mcp-Protocol-Version / Mcp-Method / Mcp-Name routing headers, plus a subscriptions/listen stream.
 It checks routing, selection scope, notifications and the Host/Origin guard.
 
-Usage: python harness.py <server-src-dir>
-Exit code 0 when every check passes. Nothing here touches a real Unity.
+Usage: python live_harness.py [<server-src-dir>|<mcp-for-unity executable>]
+Exit code 0 when every check passes. Nothing here touches a real Unity. Run by
+test_fastmcp4_live_transport.py as a subprocess so the module stubs in this conftest cannot interfere.
 """
 from __future__ import annotations
 
@@ -19,13 +20,15 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import httpx
 import websockets
 
-SRC = Path(sys.argv[1]).resolve()  # a source dir (runs `python main.py`) or an installed `mcp-for-unity` executable
-LOG = Path(__file__).with_name("harness-server.log")
+# A source dir (runs `python main.py`) or an installed `mcp-for-unity` executable; defaults to ../../src (Server/tests/integration layout).
+SRC = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).resolve().parents[2] / "src"
+LOG = Path(tempfile.gettempdir()) / "mcpforunity-live-harness-server.log"
 PY = sys.executable
 MODERN = "2026-07-28"
 LEGACY = "2025-06-18"
@@ -257,7 +260,70 @@ async def listen_stream(base: str, got: list, stop: asyncio.Event):
             got.append({"exception": repr(exc)})
 
 
+def sdk_connection_checks() -> None:
+    """Classify real MCP SDK 2 Connection objects with the server's own predicate (source runs only)."""
+    if not SRC.is_dir():
+        return
+    sys.path.insert(0, str(SRC))
+    try:
+        from mcp.server.connection import Connection, NotifyOnlyOutbound
+        from transport.unity_instance_middleware import connection_is_persistent
+        from transport import mcp_client_registry
+    except Exception as exc:
+        check("SDK connection classification (import)", False, repr(exc))
+        return
+
+    class _Outbound:
+        async def send_raw_request(self, *a, **k):
+            raise RuntimeError("unused")
+
+        async def notify(self, *a, **k):
+            return None
+
+    legacy_http = Connection.for_loop(_Outbound(), session_id="abc", protocol_version_hint=LEGACY)
+    legacy_stdio = Connection.for_loop(_Outbound())
+    modern_http = Connection.from_envelope(MODERN, {"name": "h", "version": "0"}, {})
+    modern_stdio = Connection.from_envelope(MODERN, {"name": "h", "version": "0"}, {}, outbound=NotifyOnlyOutbound(_Outbound()))
+    got = {name: connection_is_persistent(c) for name, c in
+           [("legacy_http", legacy_http), ("legacy_stdio", legacy_stdio), ("modern_http", modern_http), ("modern_stdio", modern_stdio)]}
+    check("SDK: handshake connections persistent, 2026-07-28 ones (HTTP and stdio) not",
+          got == {"legacy_http": True, "legacy_stdio": True, "modern_http": False, "modern_stdio": False}, json.dumps(got))
+    tracked = {name: mcp_client_registry.track_connection(c) for name, c in
+               [("legacy_http", legacy_http), ("legacy_stdio", legacy_stdio), ("modern_http", modern_http), ("modern_stdio", modern_stdio)]}
+    check("SDK: only handshake connections are tracked for tools/list_changed",
+          tracked == {"legacy_http": True, "legacy_stdio": True, "modern_http": False, "modern_stdio": False}, json.dumps(tracked))
+
+
+async def lan_bind_checks(env: dict) -> None:
+    """With a non-loopback bind (Unity's LAN option), the Host guard is off, as upstream."""
+    port = free_port()
+    base = f"http://127.0.0.1:{port}"
+    if SRC.is_dir():
+        cmd, cwd = [PY, "main.py", "--transport", "http", "--http-url", f"http://0.0.0.0:{port}"], SRC
+    else:
+        cmd, cwd = [str(SRC), "--transport", "http", "--http-url", f"http://0.0.0.0:{port}"], SRC.parent
+    proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        async with httpx.AsyncClient() as hc:
+            for _ in range(100):
+                try:
+                    if (await hc.get(base + "/health", timeout=2)).status_code == 200:
+                        break
+                except Exception:
+                    pass
+                await asyncio.sleep(0.2)
+            r = await hc.get(base + "/health", headers={"Host": f"0.0.0.0:{port}"})
+            check("0.0.0.0 bind: Host 0.0.0.0 accepted (guard off, as upstream)", r.status_code == 200, f"status {r.status_code}")
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(10)
+        except Exception:
+            proc.kill()
+
+
 async def main() -> int:
+    sdk_connection_checks()
     port = free_port()
     base = f"http://127.0.0.1:{port}"
     env = {**os.environ, "UNITY_MCP_TELEMETRY_ENABLED": "0", "UNITY_MCP_SKIP_STARTUP_CONNECT": "1",
@@ -417,6 +483,7 @@ async def main() -> int:
             await asyncio.sleep(0.3)
             r = await hc.get(base + "/health")
             check("server still healthy after clients left", r.status_code == 200)
+        await lan_bind_checks(env)
     finally:
         for pr in peers:
             await pr.close()

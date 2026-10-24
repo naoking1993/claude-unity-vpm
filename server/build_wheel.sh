@@ -8,7 +8,7 @@
 # the build backend is pinned in the patched pyproject.toml, and SOURCE_DATE_EPOCH fixes the zip times.
 set -euo pipefail
 
-VERSION="10.3.0+fastmcp4.1"
+VERSION="10.3.0+fastmcp4.2"
 TAG="v10.3.0"
 UPSTREAM_COMMIT="aa5fc638d623f56178d50329d9ad8c541a57fe66"
 SOURCE_DATE_EPOCH=1792800000   # 2026-10-24 00:00:00 UTC (the day the port was built); never "now"

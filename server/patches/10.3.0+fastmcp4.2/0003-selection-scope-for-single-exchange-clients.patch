@@ -61,20 +61,69 @@ index b11530d..d862e6a 100644
          },
      }
 diff --git a/src/transport/unity_instance_middleware.py b/src/transport/unity_instance_middleware.py
-index 82ba47f..ea1248f 100644
+index 82ba47f..123653a 100644
 --- a/src/transport/unity_instance_middleware.py
 +++ b/src/transport/unity_instance_middleware.py
-@@ -69,30 +69,106 @@ class UnityInstanceMiddleware(Middleware):
+@@ -4,6 +4,7 @@ Middleware for managing Unity instance selection per session.
+ This middleware intercepts all tool calls and injects the active Unity instance
+ into the request-scoped state, allowing tools to access it via ctx.get_state("unity_instance").
+ """
++from collections import OrderedDict
+ from threading import RLock
+ import logging
+ import time
+@@ -23,6 +24,31 @@ _diag = logging.getLogger("transport.unity_instance_middleware")
+ _unity_instance_middleware = None
+ _middleware_lock = RLock()
+ 
++# MCP revisions with no initialize handshake: every request carries its own envelope and the SDK
++# builds a fresh Connection for it (HTTP and stdio alike), so nothing on the connection outlives
++# the request. Imported lazily-safe: tests may stub ``mcp`` without ``mcp_types``.
++try:
++    from mcp_types.version import MODERN_PROTOCOL_VERSIONS as _MODERN_PROTOCOL_VERSIONS
++except Exception:  # pragma: no cover - SDK layout without mcp_types
++    _MODERN_PROTOCOL_VERSIONS = ("2026-07-28",)
++
++
++def connection_is_persistent(connection) -> bool:
++    """True when an SDK Connection lives for the whole client session.
++
++    Handshake clients (``initialize``) keep one Connection: HTTP ones carry an ``Mcp-Session-Id``
++    and stdio ones a handshake-era ``protocol_version``. 2026-07-28 clients get a born-ready
++    Connection per request, on stdio too (with a notify-only channel), so neither channel
++    presence nor ``session_id is None`` alone tells them apart; the protocol version does.
++    """
++    if getattr(connection, "session_id", None) is not None:
++        return True
++    protocol_version = getattr(connection, "protocol_version", None)
++    if isinstance(protocol_version, str):
++        return protocol_version not in _MODERN_PROTOCOL_VERSIONS
++    # Shims without a protocol version: fall back to "has a back-channel".
++    return bool(getattr(connection, "has_standalone_channel", False))
++
+ 
+ def get_unity_instance_middleware() -> 'UnityInstanceMiddleware':
+     """Get the global Unity instance middleware."""
+@@ -60,6 +86,7 @@ class UnityInstanceMiddleware(Middleware):
+ 
+     def __init__(self):
+         super().__init__()
++        self._client_selections: "OrderedDict[tuple[str, str], tuple[str, float]]" = OrderedDict()
+         self._metadata_lock = RLock()
+         self._unity_managed_tool_names: set[str] = set()
+         self._tool_alias_to_unity_target: dict[str, str] = {}
+@@ -69,30 +96,134 @@ class UnityInstanceMiddleware(Middleware):
          self._tool_visibility_refresh_interval_seconds = 0.5
          self._has_logged_empty_registry_warning = False
  
 -    async def set_active_instance(self, ctx, instance_id: str) -> None:
 -        """Store the active instance for this MCP session.
-+    # client_id -> (instance_id, monotonic timestamp). Selections for 2026-07-28 clients that
-+    # identify themselves with ``_meta.client_id``; FastMCP's session store cannot hold them
-+    # because every single-exchange request gets a fresh session id.
++    # Selections for 2026-07-28 clients that identify themselves with ``_meta.client_id``;
++    # FastMCP's session store cannot hold them because every such request gets a fresh session
++    # id. Keyed by (user_id, client_id) so remote-hosted tenants never share a record; bounded
++    # (oldest dropped first) and swept on every write.
 +    _CLIENT_SELECTION_TTL_SECONDS = 86400
-+    _client_selections: dict[str, tuple[str, float]] = {}
++    _CLIENT_SELECTION_MAX_ENTRIES = 1024
  
 -        Persisted via FastMCP's session-scoped state store, which keys by
 -        ``ctx.session_id`` (the MCP-Session-Id header on HTTP, a per-subprocess
@@ -94,23 +143,17 @@ index 82ba47f..ea1248f 100644
 +        """Where a persistent selection for this request can live.
 +
 +        - ``("session", None)``: FastMCP's session-scoped state persists for this client. True for
-+          handshake clients (streamable HTTP with ``Mcp-Session-Id``, stdio) and for contexts
-+          without an SDK connection (in-memory/test shims), i.e. the pre-SDK-2 behaviour.
-+        - ``("client", <client_id>)``: a 2026-07-28 single-exchange request that carries
++          handshake clients (streamable HTTP with ``Mcp-Session-Id``, handshake stdio) and for
++          contexts without an SDK connection (in-memory/test shims), i.e. the pre-SDK-2 behaviour.
++        - ``("client", <client_id>)``: a 2026-07-28 request (HTTP or stdio) that carries
 +          ``_meta.client_id``. The SDK builds a fresh Connection per request, so FastMCP would
 +          key state by a throw-away id; we key by the client's own id instead.
-+        - ``(None, None)``: single-exchange request without ``_meta.client_id``. Nothing can be
++        - ``(None, None)``: 2026-07-28 request without ``_meta.client_id``. Nothing can be
 +          remembered between calls; callers must pass ``unity_instance`` per call.
          """
 -        await ctx.set_state(self._ACTIVE_INSTANCE_STATE_KEY, instance_id)
 +        connection = self._connection_of(ctx)
-+        if connection is None:
-+            return ("session", None)
-+        persistent = (
-+            getattr(connection, "session_id", None) is not None
-+            or bool(getattr(connection, "has_standalone_channel", False))
-+        )
-+        if persistent:
++        if connection is None or connection_is_persistent(connection):
 +            return ("session", None)
 +        client_id = None
 +        try:
@@ -124,13 +167,29 @@ index 82ba47f..ea1248f 100644
 +    def can_persist_selection(self, ctx) -> bool:
 +        return self.selection_scope(ctx)[0] is not None
 +
-+    def _client_selection_get(self, client_id: str) -> str | None:
-+        entry = self._client_selections.get(client_id)
++    async def _client_selection_key(self, ctx, client_id: str) -> tuple[str, str]:
++        user_id = None
++        if config.http_remote_hosted:
++            try:
++                user_id = await ctx.get_state("user_id")
++            except Exception:
++                user_id = None
++        return (str(user_id or ""), client_id)
++
++    def _sweep_client_selections(self, now: float) -> None:
++        ttl = self._CLIENT_SELECTION_TTL_SECONDS
++        for key in [k for k, (_, stamp) in self._client_selections.items() if now - stamp > ttl]:
++            self._client_selections.pop(key, None)
++        while len(self._client_selections) > self._CLIENT_SELECTION_MAX_ENTRIES:
++            self._client_selections.popitem(last=False)
++
++    def _client_selection_get(self, key: tuple[str, str]) -> str | None:
++        entry = self._client_selections.get(key)
 +        if entry is None:
 +            return None
 +        instance_id, stamp = entry
 +        if time.monotonic() - stamp > self._CLIENT_SELECTION_TTL_SECONDS:
-+            self._client_selections.pop(client_id, None)
++            self._client_selections.pop(key, None)
 +            return None
 +        return instance_id
 +
@@ -150,7 +209,11 @@ index 82ba47f..ea1248f 100644
 +        if scope == "session":
 +            await ctx.set_state(self._ACTIVE_INSTANCE_STATE_KEY, instance_id)
 +        elif scope == "client" and client_id is not None:
-+            self._client_selections[client_id] = (instance_id, time.monotonic())
++            key = await self._client_selection_key(ctx, client_id)
++            now = time.monotonic()
++            self._client_selections.pop(key, None)
++            self._client_selections[key] = (instance_id, now)
++            self._sweep_client_selections(now)
 +        else:
 +            logger.debug("No persistent selection scope for this request; not storing %s", instance_id)
  
@@ -162,7 +225,7 @@ index 82ba47f..ea1248f 100644
 +        if scope == "session":
 +            return await ctx.get_state(self._ACTIVE_INSTANCE_STATE_KEY)
 +        if scope == "client" and client_id is not None:
-+            return self._client_selection_get(client_id)
++            return self._client_selection_get(await self._client_selection_key(ctx, client_id))
 +        return None
  
      async def clear_active_instance(self, ctx) -> None:
@@ -179,10 +242,44 @@ index 82ba47f..ea1248f 100644
 +        if scope == "session":
 +            await ctx.set_state(self._ACTIVE_INSTANCE_STATE_KEY, None)
 +        elif scope == "client" and client_id is not None:
-+            self._client_selections.pop(client_id, None)
++            self._client_selections.pop(await self._client_selection_key(ctx, client_id), None)
++
++    async def _set_request_state(self, ctx, key: str, value) -> None:
++        """Per-request routing state (user_id, unity_instance, unity_session_id).
++
++        For session-scoped clients this goes to FastMCP's session store, as upstream does. For
++        2026-07-28 requests the session id is a throw-away per request, so a session-store write
++        would only leave an orphan entry behind for the store's 24 h TTL; keep it request-scoped
++        instead (``get_state`` reads request-scoped values first, and tool contexts inherit them).
++        """
++        if self.selection_scope(ctx)[0] == "session":
++            await ctx.set_state(key, value)
++        else:
++            await ctx.set_state(key, value, serializable=False)
  
      async def _discover_instances(self, ctx) -> list:
          """
+@@ -332,7 +463,7 @@ class UnityInstanceMiddleware(Middleware):
+                 "API key authentication required. Provide a valid X-API-Key header."
+             )
+         if user_id:
+-            await ctx.set_state("user_id", user_id)
++            await self._set_request_state(ctx, "user_id", user_id)
+ 
+         # Per-call routing: check if this tool call explicitly specifies unity_instance.
+         # context.message.arguments is a mutable dict on CallToolRequestParams; resource
+@@ -393,9 +524,9 @@ class UnityInstanceMiddleware(Middleware):
+                         exc_info=True
+                     )
+ 
+-            await ctx.set_state("unity_instance", active_instance)
++            await self._set_request_state(ctx, "unity_instance", active_instance)
+             if session_id is not None:
+-                await ctx.set_state("unity_session_id", session_id)
++                await self._set_request_state(ctx, "unity_session_id", session_id)
+ 
+     async def on_call_tool(self, context: MiddlewareContext, call_next):
+         """Inject active Unity instance into tool context if available."""
 diff --git a/src/transport/unity_transport.py b/src/transport/unity_transport.py
 index 9d07f47..9e2b901 100644
 --- a/src/transport/unity_transport.py

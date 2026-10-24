@@ -1,9 +1,9 @@
 diff --git a/src/transport/mcp_client_registry.py b/src/transport/mcp_client_registry.py
 new file mode 100644
-index 0000000..9b8c84b
+index 0000000..725c152
 --- /dev/null
 +++ b/src/transport/mcp_client_registry.py
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,152 @@
 +"""Track MCP client connections and fan out ``tools/list_changed`` on FastMCP 4 / MCP SDK 2.
 +
 +FastMCP 3 kept one ``MiddlewareServerSession`` per client, which plugin_hub used to patch so it
@@ -53,8 +53,12 @@ index 0000000..9b8c84b
 +def track_connection(connection: Any) -> bool:
 +    """Remember a connection that can receive server notifications. Returns True if newly added."""
 +    if connection is None or not getattr(connection, "has_standalone_channel", False):
-+        # Single-exchange (2026-07-28 HTTP) connections have no back-channel; they get events
-+        # through subscriptions/listen instead, so there is nothing to track.
++        # Single-exchange (2026-07-28 HTTP) connections have no back-channel.
++        return False
++    from transport.unity_instance_middleware import connection_is_persistent
++    if not connection_is_persistent(connection):
++        # 2026-07-28 stdio: a per-request Connection whose notify-only channel drops
++        # tools/list_changed (it is delivered via subscriptions/listen at that revision).
 +        return False
 +    if connection in _connections:
 +        return False
