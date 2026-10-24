@@ -5,6 +5,13 @@ Claude などの AI アシスタントと Unity Editor を MCP で接続する *
 - リスティング URL: `https://naoking1993.github.io/claude-unity-vpm/index.json`
 - 上流: https://github.com/CoplayDev/unity-mcp
 
+## 収録パッケージ
+
+| パッケージ | 内容 |
+| --- | --- |
+| `com.coplaydev.unity-mcp`（MCP for Unity） | Claude などと Unity を MCP で接続します。以下の「収録バージョン」以降はこのパッケージの説明です |
+| `io.github.naoking1993.avatar-checker`（Avatar Checker） | VRChat アバターのパフォーマンスランクの目安と、アップロード前に直したい問題点（Missing スクリプト、ピンクのマテリアル、パラメータ超過など）を一覧にします。アバターは書き換えません。結果は JSON でも出るので、MCP 経由で Claude からも使えます。詳しくは [`packages/io.github.naoking1993.avatar-checker/README.md`](packages/io.github.naoking1993.avatar-checker/README.md) |
+
 ## 収録バージョン
 
 | バージョン | 中身 | 用途 |
@@ -130,7 +137,10 @@ VCC のバージョン選択で **9.7.1** を選びます。9.7.1 の zip とエ
 | `tools/build_patched_zip.py` | 上流 9.7.1 zip（SHA256 照合つき）に `patches/<版>/` を当て、`RELEASES` にある各版の zip を作ります。エントリーの並び・名前（`\` 区切り）は上流 zip のままです。日時は、変更していないエントリーは上流のまま、差し替えた 2 エントリーは版ごとの固定の日時（`stamp`）にします（9.7.100 だけは上流のまま） |
 | `tools/verify_listing.py` | `index.json` と各 zip の整合性チェック、差分がパッチ由来の 2 ファイルだけであることのチェック、日時のチェック（差し替えたエントリーは上流より新しい・未来の日時でない・どの 2 版を比べても「同じ名前で同じ日時なら同じ中身」）、mono で `TerminalLauncher.cs` をコンパイルして日本語パスで生成される `.cmd` のバイト列の検証を行います |
 | `tests/cs/` | 上記検証用の最小スタブとハーネス |
-| `.github/workflows/verify.yml` | push / PR ごとに `verify_listing.py` を実行します |
+| `.github/workflows/verify.yml` | push / PR ごとに `verify_listing.py` と `verify_checker.py` を実行します |
+| `packages/io.github.naoking1993.avatar-checker/` | Avatar Checker のソース。`Editor/Core/` は Unity に依存しない部分（ランク表と JSON 出力）で、CI が mono でテストします |
+| `tools/build_checker_zip.py` | Avatar Checker の zip をソースから作ります（エントリーは名前順・無圧縮・固定日時で、同じ zip が再現できます）。`--write-meta` で足りない `.meta` を作ります |
+| `tools/verify_checker.py` | Avatar Checker の `index.json` / zip / `.meta` の整合性、zip がソースから再現できること、`Editor/Core` のテスト（`tests/checker/`）を確認します。`--unity-dlls` を付けると Editor コード全体を Unity の参照アセンブリでコンパイルします |
 
 これらのスクリプトは **Linux・WSL・CI 専用**です。Windows 版 Python の `zipfile` はエントリー名の `\` を `/` に変換するため、Windows で実行すると誤った失敗を報告します。
 
@@ -143,6 +153,8 @@ python3 tools/verify_listing.py      # "OK" で終われば合格（mono-mcs / m
 
 1. `tools/build_patched_zip.py` の `RELEASES` に新しい版を足し、`patches/<新バージョン>/` にパッチを置きます。`stamp` は公開日の**前日の 00:00:00**（秒は偶数）にします。実行時刻にしないのは同じ zip を再現できるようにするため、前日にするのはどのタイムゾーンでも未来の日時にならないようにするためです。
 2. ビルドで表示された SHA256 を、`index.json` の新しいエントリーの `zipSHA256` と、`tools/verify_listing.py` の `PUBLISHED` に記録します。
+
+Avatar Checker の新しい版を出すときは、`package.json` の `version` を上げ、`tools/build_checker_zip.py` の `RELEASES` に新しい版と `stamp`（同じく公開日の前日 00:00:00）を足してから `python3 tools/build_checker_zip.py --write-meta` を実行します。表示された SHA256 を `index.json` の新しいエントリーと `tools/verify_checker.py` の `PUBLISHED` に記録します。公開済みの版の zip は変更しません。
 
 ## ライセンス
 

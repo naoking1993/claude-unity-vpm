@@ -7,3 +7,9 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends mono-mcs mono-runtime patch
       - run: python3 tools/verify_listing.py
+      - name: Fetch Unity reference assemblies for the Avatar Checker compile check
+        run: |
+          curl -sSfL -o /tmp/unity-sdk.nupkg https://api.nuget.org/v3-flatcontainer/unity3d.sdk/2021.1.14.1/unity3d.sdk.2021.1.14.1.nupkg
+          echo "c8c455eaf62dfc915fe316cf5fede8530ec56dfcfcf05df1e74b80ca23b61b62  /tmp/unity-sdk.nupkg" | sha256sum -c -
+          unzip -q -j /tmp/unity-sdk.nupkg lib/UnityEngine.dll lib/UnityEditor.dll -d /tmp/unity-dlls
+      - run: python3 tools/verify_checker.py --unity-dlls /tmp/unity-dlls
