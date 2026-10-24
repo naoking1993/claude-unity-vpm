@@ -1,3 +1,4 @@
 *.patch text eol=lf
 *.zip binary
 *.whl text=false binary
+*.manifest text eol=lf
