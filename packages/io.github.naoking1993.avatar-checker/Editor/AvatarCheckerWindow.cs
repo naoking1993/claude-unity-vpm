@@ -114,8 +114,8 @@ namespace Naoking.AvatarChecker
         bool TextureTargetMismatch()
         {
             if (report.Stats.ContainsKey(PerformanceRank.TextureMemoryMB) && report.Stats[PerformanceRank.TextureMemoryMB] == 0) return false;
-            bool android = report.BuildTarget == "Android";
-            return platform == Platform.Mobile ? !android : android;
+            bool mobileTarget = report.BuildTarget == "Android" || report.BuildTarget == "iOS";  // as the SDK's IsMobilePlatform
+            return platform == Platform.Mobile ? !mobileTarget : mobileTarget;
         }
 
         static string Format(double v) { return v == System.Math.Floor(v) ? v.ToString("0") : v.ToString("0.0"); }

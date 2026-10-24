@@ -5,8 +5,6 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Animations;
-using UnityEngine.Experimental.Rendering;
-using UnityEngine.Profiling;
 using P = Naoking.AvatarChecker.PerformanceRank;
 
 namespace Naoking.AvatarChecker
@@ -55,6 +53,8 @@ namespace Naoking.AvatarChecker
                 foreach (var c in go.GetComponents<Component>())
                 {
                     if (c == null) continue;  // missing script, reported above
+                    var rend = c as Renderer;
+                    if (rend != null) AddTextures(rend.sharedMaterials, textures);  // the SDK sizes textures of every Renderer
                     if (VrcReflection.Is(c, VrcReflection.AvatarDescriptor))
                     {
                         if (go == root) descriptor = c; else descriptorsBelowRoot++;
@@ -64,7 +64,7 @@ namespace Naoking.AvatarChecker
                     if (smr != null)
                     {
                         stats[P.SkinnedMeshes]++;
-                        CountMesh(r, stats, smr.sharedMesh, smr.sharedMaterials, textures, nonReadable, path, id);
+                        CountMesh(r, stats, smr.sharedMesh, smr.sharedMaterials, nonReadable, path, id);
                         int nullBones = 0;
                         foreach (var b in smr.bones) { if (b == null) nullBones++; else bones.Add(b); }
                         if (nullBones > 0)
@@ -78,15 +78,24 @@ namespace Naoking.AvatarChecker
                     {
                         stats[P.BasicMeshes]++;
                         var mf = go.GetComponent<MeshFilter>();
-                        CountMesh(r, stats, mf != null ? mf.sharedMesh : null, mr.sharedMaterials, textures, nonReadable, path, id);
+                        CountMesh(r, stats, mf != null ? mf.sharedMesh : null, mr.sharedMaterials, nonReadable, path, id);
                         continue;
                     }
                     var ps = c as ParticleSystem;
-                    if (ps != null) { CountParticles(r, stats, ps, textures, nonReadable, path, id); continue; }
+                    if (ps != null) { CountParticles(stats, ps); continue; }
+                    var psr = c as ParticleSystemRenderer;
+                    if (psr != null)
+                    {
+                        // the SDK's Read/Write check takes every particle mesh, whatever the render mode
+                        var pm = new Mesh[psr.meshCount];
+                        int pn = psr.GetMeshes(pm);
+                        for (int i = 0; i < pn; i++) CheckReadable(r, pm[i], nonReadable, path, id);
+                        continue;
+                    }
                     var trail = c as TrailRenderer;
-                    if (trail != null) { stats[P.TrailRenderers]++; stats[P.MaterialSlots]++; AddTextures(trail.sharedMaterials, textures); continue; }
+                    if (trail != null) { stats[P.TrailRenderers]++; stats[P.MaterialSlots]++; continue; }
                     var line = c as LineRenderer;
-                    if (line != null) { stats[P.LineRenderers]++; stats[P.MaterialSlots]++; AddTextures(line.sharedMaterials, textures); continue; }
+                    if (line != null) { stats[P.LineRenderers]++; stats[P.MaterialSlots]++; continue; }
                     if (c is Animator) { stats[P.Animators]++; animators.Add((Animator)c); continue; }
                     if (c is Animation) { stats[P.Animators]++; continue; }  // the SDK counts legacy Animation too
                     if (c is Light) { stats[P.Lights]++; continue; }
@@ -174,7 +183,7 @@ namespace Naoking.AvatarChecker
             return false;
         }
 
-        static void CountMesh(CheckReport r, Dictionary<string, double> stats, Mesh mesh, Material[] mats, HashSet<Texture> textures, HashSet<Mesh> nonReadable, string path, int id)
+        static void CountMesh(CheckReport r, Dictionary<string, double> stats, Mesh mesh, Material[] mats, HashSet<Mesh> nonReadable, string path, int id)
         {
             if (mesh == null)
             {
@@ -197,54 +206,66 @@ namespace Naoking.AvatarChecker
                 else if (ShaderUtil.ShaderHasError(m.shader))
                     r.Add(Severity.Error, "shader-compile-error", "マテリアル「" + m.name + "」のシェーダー「" + m.shader.name + "」にコンパイルエラーがあります（ピンク表示）。シェーダーのバージョンを確認してください。", path, id);
             }
-            AddTextures(mats, textures);
             if (empty > 0)
                 r.Add(Severity.Warning, "empty-material", "空のマテリアル枠が " + empty + " 個あります（ピンク表示になります）。", path, id);
         }
 
-        // VRChat: a mesh with Read/Write disabled makes the rank Very Poor, and the SDK asks to fix it before upload.
+        // VRChat docs: a mesh with Read/Write disabled makes the rank Very Poor in game. The SDK build panel does not
+        // rank it, but refuses to upload while a model (ModelImporter) has Read/Write off.
         static void CheckReadable(CheckReport r, Mesh mesh, HashSet<Mesh> nonReadable, string path, int id)
         {
             if (mesh == null || nonReadable.Contains(mesh)) return;
             var importer = AssetImporter.GetAtPath(AssetDatabase.GetAssetPath(mesh)) as ModelImporter;
-            if (mesh.isReadable && (importer == null || importer.isReadable)) return;
+            bool importerOff = importer != null && !importer.isReadable;
+            if (mesh.isReadable && !importerOff) return;
             nonReadable.Add(mesh);
-            r.Add(Severity.Error, "mesh-read-write-disabled", "メッシュ「" + mesh.name + "」の Read/Write が無効です。ランクが Very Poor になり、SDK はアップロード前の修正を求めます。モデルの Import Settings で Read/Write にチェックを入れてください。", path, id);
+            r.Add(Severity.Error, "mesh-read-write-disabled", "メッシュ「" + mesh.name + "」の Read/Write が無効です。VRChat 上のランクが Very Poor になります。" +
+                (importerOff ? "SDK もこのままではアップロードできません。モデルの Import Settings で Read/Write にチェックを入れてください。" : "読み書きできるメッシュに作り直してください。"), path, id);
         }
 
-        // Mirrors the SDK's ParticlePerformanceScanner.
-        static void CountParticles(CheckReport r, Dictionary<string, double> stats, ParticleSystem ps, HashSet<Texture> textures, HashSet<Mesh> nonReadable, string path, int id)
+        // Mirrors the SDK's ParticlePerformanceScanner (and the particle part of LightPerformanceScanner).
+        static void CountParticles(Dictionary<string, double> stats, ParticleSystem ps)
         {
             var main = ps.main;
             int max = main.maxParticles;
             if (ps.lights.light != null) stats[P.Lights] += Math.Min(max, ps.lights.maxLights);
-            if (max <= 0 && main.ringBufferMode != ParticleSystemRingBufferMode.LoopUntilReplaced) return;
+            if (main.ringBufferMode == ParticleSystemRingBufferMode.LoopUntilReplaced)
+            {
+                var em = ps.emission;
+                max += Mathf.CeilToInt(em.rateOverTime.curve == null ? em.rateOverTime.constant : MaxKey(em.rateOverTime.curve) * em.rateOverTimeMultiplier);
+                max += Mathf.CeilToInt(em.rateOverDistance.curve == null ? em.rateOverDistance.constantMax : MaxKey(em.rateOverDistance.curve) * em.rateOverDistanceMultiplier);
+                for (int i = 0; i < em.burstCount; i++)
+                {
+                    var b = em.GetBurst(i);
+                    max += Mathf.CeilToInt(b.maxCount * b.cycleCount);
+                }
+            }
+            else if (max <= 0) return;
             stats[P.ParticleSystems]++;
             stats[P.ParticleTotalCount] += max;
-            if (ps.collision.enabled) stats[P.ParticleCollision] = 1;
             var psr = ps.GetComponent<ParticleSystemRenderer>();
-            if (psr == null) return;
-            stats[P.MaterialSlots]++;
-            AddTextures(psr.sharedMaterials, textures);
-            if (ps.trails.enabled)
+            if (psr != null)
             {
-                stats[P.ParticleTrails] = 1;
                 stats[P.MaterialSlots]++;
-                AddTextures(new[] { psr.trailMaterial }, textures);
-            }
-            if (psr.renderMode == ParticleSystemRenderMode.Mesh && psr.meshCount > 0)
-            {
-                var meshes = new Mesh[psr.meshCount];
-                int n = psr.GetMeshes(meshes);
-                long tris = 0;
-                for (int i = 0; i < n; i++)
+                if (psr.renderMode == ParticleSystemRenderMode.Mesh && psr.meshCount > 0)
                 {
-                    if (meshes[i] == null) continue;
-                    tris = Math.Max(tris, Triangles(meshes[i]));
-                    CheckReadable(r, meshes[i], nonReadable, path, id);
+                    var meshes = new Mesh[psr.meshCount];
+                    int n = psr.GetMeshes(meshes);
+                    long tris = 0;
+                    for (int i = 0; i < n; i++)
+                        if (meshes[i] != null) tris = Math.Max(tris, Triangles(meshes[i]));
+                    stats[P.ParticleMeshPolys] += (double)max * tris;
                 }
-                stats[P.ParticleMeshPolys] += (double)max * tris;
+                if (ps.trails.enabled) { stats[P.ParticleTrails] = 1; stats[P.MaterialSlots]++; }
             }
+            if (ps.collision.enabled) stats[P.ParticleCollision] = 1;
+        }
+
+        static float MaxKey(AnimationCurve curve)
+        {
+            float m = 0f;
+            foreach (var k in curve.keys) if (k.value > m) m = k.value;
+            return m;
         }
 
         static void AddTextures(Material[] mats, HashSet<Texture> textures)
@@ -272,31 +293,46 @@ namespace Naoking.AvatarChecker
             return n;
         }
 
-        // Like the SDK: size of every mip level from the texture's format (as imported for the active build target).
+        // The SDK's bytes-per-pixel table (MeshPerformanceScanner, SDK 3.10.5); formats not listed count 16.
+        static readonly Dictionary<TextureFormat, float> BytesPerPixel = new Dictionary<TextureFormat, float>
+        {
+            { (TextureFormat)1, 1f }, { (TextureFormat)2, 2f }, { (TextureFormat)3, 4f }, { (TextureFormat)4, 4f }, { (TextureFormat)5, 4f },
+            { (TextureFormat)7, 2f }, { (TextureFormat)9, 2f }, { (TextureFormat)10, 0.5f }, { (TextureFormat)12, 1f }, { (TextureFormat)13, 2f },
+            { (TextureFormat)14, 4f }, { (TextureFormat)15, 2f }, { (TextureFormat)16, 4f }, { (TextureFormat)17, 8f }, { (TextureFormat)18, 4f },
+            { (TextureFormat)19, 8f }, { (TextureFormat)20, 16f }, { (TextureFormat)26, 0.5f }, { (TextureFormat)27, 1f }, { (TextureFormat)24, 1f },
+            { (TextureFormat)25, 1f }, { (TextureFormat)28, 0.5f }, { (TextureFormat)29, 1f }, { (TextureFormat)30, 0.25f }, { (TextureFormat)31, 0.25f },
+            { (TextureFormat)32, 0.5f }, { (TextureFormat)33, 0.5f }, { (TextureFormat)34, 0.5f }, { (TextureFormat)41, 0.5f }, { (TextureFormat)42, 0.5f },
+            { (TextureFormat)43, 1f }, { (TextureFormat)44, 1f }, { (TextureFormat)45, 0.5f }, { (TextureFormat)46, 0.5f }, { (TextureFormat)47, 1f },
+            { (TextureFormat)48, 1f }, { (TextureFormat)49, 0.64f }, { (TextureFormat)50, 0.445f }, { (TextureFormat)51, 0.25f }, { (TextureFormat)52, 0.16f },
+            { (TextureFormat)53, 0.11125f }, { (TextureFormat)62, 2f }, { (TextureFormat)63, 1f }, { (TextureFormat)64, 0.5f }, { (TextureFormat)65, 1f },
+        };
+
+        static float Bpp(TextureFormat f) { float v; return BytesPerPixel.TryGetValue(f, out v) ? v : 16f; }
+
+        // Same formula as the SDK (one face for cubemaps, no mips for arrays and 3D textures). Formats depend on the
+        // active build target's import settings.
         static double TextureMemoryMB(HashSet<Texture> textures)
         {
-            double bytes = 0;
+            long bytes = 0;
             foreach (var t in textures)
             {
                 var t2 = t as Texture2D;
-                if (t2 != null) { bytes += MipChainBytes(GraphicsFormatUtility.GetGraphicsFormat(t2.format, false), t2.width, t2.height, t2.mipmapCount); continue; }
+                if (t2 != null) { bytes += MipChainBytes(Bpp(t2.format), t2.width, t2.height, t2.mipmapCount); continue; }
                 var cube = t as Cubemap;
-                if (cube != null) { bytes += 6 * MipChainBytes(GraphicsFormatUtility.GetGraphicsFormat(cube.format, false), cube.width, cube.height, cube.mipmapCount); continue; }
-                bytes += Profiler.GetRuntimeMemorySizeLong(t);
+                if (cube != null) { bytes += MipChainBytes(Bpp(cube.format), cube.width, cube.height, cube.mipmapCount); continue; }
+                var arr = t as Texture2DArray;
+                if (arr != null) { bytes += Mathf.RoundToInt((float)arr.width * arr.height * arr.depth * Bpp(arr.format)); continue; }
+                var t3 = t as Texture3D;
+                if (t3 != null) { bytes += Mathf.RoundToInt((float)t3.width * t3.height * t3.depth * Bpp(t3.format)); continue; }
             }
             return bytes / (1024.0 * 1024.0);
         }
 
-        static double MipChainBytes(GraphicsFormat f, int w, int h, int mips)
+        static long MipChainBytes(float bpp, int w, int h, int mips)
         {
-            if (f == GraphicsFormat.None) return (double)w * h * 16 * 4 / 3;  // unknown format: 16 bytes/pixel, like the SDK
-            uint bw = GraphicsFormatUtility.GetBlockWidth(f), bh = GraphicsFormatUtility.GetBlockHeight(f), bs = GraphicsFormatUtility.GetBlockSize(f);
-            double total = 0;
-            for (int i = 0; i < Math.Max(1, mips); i++)
-            {
-                long mw = Math.Max(1, w >> i), mh = Math.Max(1, h >> i);
-                total += (double)((mw + bw - 1) / bw) * ((mh + bh - 1) / bh) * bs;
-            }
+            long total = 0;
+            int pixels = w * h;
+            for (int i = 0; i < mips; i++) total += Mathf.RoundToInt((pixels >> 2 * i) * bpp);
             return total;
         }
 
@@ -417,7 +453,8 @@ namespace Naoking.AvatarChecker
             {
                 r.ExpressionParameterCost = cost.Value;
                 if (cost.Value > CheckReport.ExpressionParameterBudget)
-                    r.Add(custom ? Severity.Error : Severity.Warning, "parameter-budget", "Expression パラメータが " + cost.Value + " / " + CheckReport.ExpressionParameterBudget + " bit で上限を超えています。" + (custom ? "アップロードできません。" : "（Custom Expressions がオフのため今は使われていません）"), "", rootId);
+                    // the SDK checks this whether Custom Expressions is on or not
+                    r.Add(Severity.Error, "parameter-budget", "Expression パラメータが " + cost.Value + " / " + CheckReport.ExpressionParameterBudget + " bit で上限を超えています。アップロードできません。", "", rootId);
                 else if (custom && cost.Value > CheckReport.ExpressionParameterBudget * 0.9)
                     r.Add(Severity.Info, "parameter-budget-near", "Expression パラメータが " + cost.Value + " / " + CheckReport.ExpressionParameterBudget + " bit で上限に近づいています。", "", rootId);
             }

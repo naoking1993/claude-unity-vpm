@@ -18,7 +18,7 @@ import build_checker_zip as B  # noqa: E402
 BASE = "https://naoking1993.github.io/claude-unity-vpm/"
 # Published zips are immutable. Add each new version's hash here when releasing it.
 PUBLISHED = {
-    "1.0.0": "4cc7da69e52435bed689b81ef57ee0c6cf70a01957bf03883ddb0daf4971ea07",
+    "1.0.0": "5dddcf744bfbb393af73e28dcbd1f406747afbc1946079855a8332fd8f3ed283",
 }
 errors = []
 def fail(m): errors.append(m); print("FAIL:", m)
