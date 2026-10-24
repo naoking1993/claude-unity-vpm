@@ -62,9 +62,17 @@ def compress_archive_order(paths):
     return walk(tree, "", True)
 
 
-def git_tree(git, tree):
+def git(git_dir, args, **kw):
+    """subprocess.run(git -C git_dir *args) with captured output; exits with git's own stderr on failure."""
+    p = subprocess.run(["git", "-C", git_dir, *args], capture_output=True, **kw)
+    if p.returncode:
+        sys.exit(f"git {args[0]} failed: {p.stderr.decode(errors='replace').strip() or p.returncode}")
+    return p.stdout
+
+
+def git_tree(git_dir, tree):
     """[(path, blob sha1)] in `git ls-tree -r` order; every entry must be a regular file (mode 100644)."""
-    out = subprocess.run(["git", "-C", git, "ls-tree", "-r", "-z", tree], capture_output=True, check=True).stdout
+    out = git(git_dir, ["ls-tree", "-r", "-z", tree])
     rows = []
     for rec in out.split(b"\0"):
         if not rec:
@@ -77,11 +85,10 @@ def git_tree(git, tree):
     return rows
 
 
-def git_blobs(git, blobs):
+def git_blobs(git_dir, blobs):
     """{sha1: bytes} via one `git cat-file --batch` (raw blob contents, no filters)."""
-    p = subprocess.run(["git", "-C", git, "cat-file", "--batch"], input="\n".join(blobs).encode() + b"\n",
-                       capture_output=True, check=True)
-    fp, data = io.BytesIO(p.stdout), {}
+    out = git(git_dir, ["cat-file", "--batch"], input="\n".join(blobs).encode() + b"\n")
+    fp, data = io.BytesIO(out), {}
     for b in blobs:
         hdr = fp.readline().split()
         if hdr[:2] != [b.encode(), b"blob"]:
@@ -131,6 +138,8 @@ def main():
     ver = a.tag.lstrip("v")
     out_zip = a.out or ROOT / f"{PKG}-{ver}.zip"
     manifest = a.manifest or ROOT / "tools" / "upstream" / f"{a.tag}.manifest"
+    if not REF_ZIP.exists():
+        sys.exit(f"{REF_ZIP.name} missing; refusing to build")
     if sha(REF_ZIP.read_bytes()) != REF_SHA:
         sys.exit("9.7.1 zip hash mismatch; refusing to build")
     rows = git_tree(a.git, f"{a.tag}:{SUBDIR}")

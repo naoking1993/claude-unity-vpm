@@ -24,7 +24,7 @@ Claude などの AI アシスタントと Unity Editor を MCP で接続する *
 - **サーバーは新しい wheel が必要**です。上流 10.3.0 のサーバーは FastMCP 3 系専用なので、FastMCP 4 で動く `mcpforunityserver-10.3.0+fastmcp4.2-py3-none-any.whl`（`server/dist/`、SHA256 は `server/SHA256SUMS`）を `GitUrlOverride` で指定します。`GitUrlOverride` が空だと `mcpforunityserver==10.3.100`（PyPI に無い）を探して、わざと起動に失敗します。
 - **`GitUrlOverride` は PC 全体で 1 つ**です。Unity 側パッケージが 9.7.101 のプロジェクトと 10.3.100 のプロジェクトを同じ PC で混在させると、どちらかがサーバーと版違いになります。同じ日のうちに全プロジェクトを 10.3.100 にし、wheel も差し替えてください（戻すときも全部まとめて）。
 - **Unity を 2 台開いたとき**：Claude Code が使う MCP 2026-07-28 プロトコルではサーバーが「選んだ Unity」を覚えられないため、`set_active_instance` は「覚えられない」ことと `unity_instance="<Name@hash>"` を毎回付ける案内を返します。Claude Code は実測でその案内どおりに動きました。以前の wheel（`9.7.1+fastmcp4.2`）でこの状況に出ていた `Persistent Unity selection requires _meta.client_id on MCP 2026 requests` は、この案内に置き換わります。
-- 変更・追加した 220 ファイルの zip 日時は 2026-10-23 00:00:00 に固定しています（9.7.1 と同じ内容のファイルは 1985-10-26 のまま）。9.7.x から VCC で更新したとき、Unity が `MCPForUnity.Editor.dll` と `MCPForUnity.Runtime.dll` の両方を作り直すためです。
+- zip 日時：9.7.1 と内容が違うファイル・新しいファイル（220 個）は固定の新しい日時にしています（ビルド元の 10.3.0 ミラーで 2026-10-22 00:00:00、10.3.100 で差し替えた `package.json` だけ 2026-10-23 00:00:00）。9.7.1 と同じ内容の 524 ファイルは 1985-10-26 のままです。9.7.x から VCC で更新したとき、Unity が `MCPForUnity.Editor.dll` と `MCPForUnity.Runtime.dll` の両方を作り直すためです（9.7.1・9.7.101 のどちらから更新しても、内容が変わる 220 ファイルはすべて日時も変わることを `tools/verify_listing.py` で確認）。
 
 ## 9.7.101 の変更点
 

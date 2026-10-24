@@ -94,6 +94,8 @@ def main():
     bases = {}
     for ver, h in BASES.items():
         p = ROOT / f"{PKG}-{ver}.zip"
+        if not p.exists():
+            sys.exit(f"base {ver} zip missing ({p.name}); refusing to build")
         if sha(p.read_bytes()) != h:
             sys.exit(f"base {ver} zip hash mismatch; refusing to build")
         bases[ver] = zipfile.ZipFile(p)
