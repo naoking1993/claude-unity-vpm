@@ -15,6 +15,18 @@ namespace Naoking.ClaudeCreatorTools.Mcp
     /// </summary>
     internal static class CctMcpBridge
     {
+        /// <summary>
+        /// Appended to every tool Description. MCP for Unity 9.7.1 does not forward [ToolParameter] descriptions
+        /// to the LLM (only names/types/defaults), and on Python 3.14 servers parameterised custom tools are only
+        /// reachable through execute_custom_tool (no schema at all), so the Description must explain every parameter.
+        /// </summary>
+        internal const string CommonParamsDoc =
+            " Common parameters: detail = 'summary' (default; short response with errors first) or 'full' (whole report inline);" +
+            " max_issues = issues kept in a summary response (default 30); save_report = write the full JSON report to" +
+            " Library/ClaudeCreatorTools/Reports and return its path as report_path (default true); timeout_seconds = raise the" +
+            " MCP call timeout (default 30, max 3600) for big projects. If cct_* tools are not listed as separate MCP tools," +
+            " call them via execute_custom_tool(tool_name=\"cct_...\", parameters={...}).";
+
         public static object Handle(JObject @params, string toolName, Func<CctArgs, CctResult> tool, ICollection<string> summaryKeys)
         {
             CctArgs args;

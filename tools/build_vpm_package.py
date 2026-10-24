@@ -11,7 +11,9 @@ future in any time zone.
 
 Published zips are immutable: an existing zip is never overwritten, only compared.
 
-  python3 tools/build_vpm_package.py            # build missing zips / verify existing ones
+  python3 tools/build_vpm_package.py                 # build missing zips / verify existing ones
+  python3 tools/build_vpm_package.py --update-index  # also write the listing entry of each built zip
+                                                     # into index.json (fields copied from package.json)
 """
 import hashlib, io, json, pathlib, sys, zipfile
 
@@ -52,8 +54,33 @@ def build(name, version, stamp):
     return buf.getvalue()
 
 
+LISTING_KEYS = ("name", "displayName", "version", "unity", "description", "author", "license",
+                "dependencies", "vpmDependencies", "samples")
+BASE_URL = "https://naoking1993.github.io/claude-unity-vpm/"
+
+
+def listing_entry(name, version, zip_bytes):
+    pj = json.loads(zipfile.ZipFile(io.BytesIO(zip_bytes)).read("package.json").decode("utf-8"))
+    entry = {k: pj[k] for k in LISTING_KEYS if k in pj}
+    entry["url"] = f"{BASE_URL}{name}-{version}.zip"
+    entry["zipSHA256"] = sha(zip_bytes)
+    return entry
+
+
+def update_index(name, version, zip_bytes):
+    path = ROOT / "index.json"
+    idx = json.loads(path.read_text(encoding="utf-8"))
+    versions = idx["packages"].setdefault(name, {"versions": {}})["versions"]
+    new = {version: listing_entry(name, version, zip_bytes)}
+    new.update({v: e for v, e in versions.items() if v != version})  # newest first, like the existing listing
+    idx["packages"][name]["versions"] = new
+    path.write_text(json.dumps(idx, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print("index.json updated:", name, version)
+
+
 def main():
     failed = False
+    want_index = "--update-index" in sys.argv[1:]
     for name, releases in PACKAGES.items():
         src_version = json.loads((ROOT / "packages" / name / "package.json").read_text(encoding="utf-8"))["version"]
         for version, stamp in releases.items():
@@ -70,6 +97,8 @@ def main():
             else:
                 out.write_bytes(built)
                 print(out.name, "written", sha(built))
+            if want_index and out.read_bytes() == built:
+                update_index(name, version, built)
     sys.exit(1 if failed else 0)
 
 
