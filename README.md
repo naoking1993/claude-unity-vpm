@@ -140,7 +140,7 @@ VCC のバージョン選択で **9.7.1** を選びます。9.7.1 の zip とエ
 | `.github/workflows/verify.yml` | push / PR ごとに `verify_listing.py` と `verify_checker.py` を実行します |
 | `packages/io.github.naoking1993.avatar-checker/` | Avatar Checker のソース。`Editor/Core/` は Unity に依存しない部分（ランク表と JSON 出力）で、CI が mono でテストします |
 | `tools/build_checker_zip.py` | Avatar Checker の zip をソースから作ります（エントリーは名前順・無圧縮・固定日時で、同じ zip が再現できます）。`--write-meta` で足りない `.meta` を作ります |
-| `tools/verify_checker.py` | Avatar Checker の `index.json` / zip / `.meta` の整合性、zip がソースから再現できること、`Editor/Core` のテスト（`tests/checker/`）を確認します。`--unity-dlls` を付けると Editor コード全体を Unity の参照アセンブリでコンパイルします |
+| `tools/verify_checker.py` | Avatar Checker の `index.json` / zip / `.meta` の整合性、zip がソースから再現できること、日時のチェック（版ごとに新しい・未来でない・「同じ名前で同じ日時なら同じ中身」）、`Editor/Core` のテスト（`tests/checker/`）を確認します。`--unity-dlls` を付けると Editor コード全体を Unity の参照アセンブリでコンパイルします |
 
 これらのスクリプトは **Linux・WSL・CI 専用**です。Windows 版 Python の `zipfile` はエントリー名の `\` を `/` に変換するため、Windows で実行すると誤った失敗を報告します。
 
@@ -154,7 +154,7 @@ python3 tools/verify_listing.py      # "OK" で終われば合格（mono-mcs / m
 1. `tools/build_patched_zip.py` の `RELEASES` に新しい版を足し、`patches/<新バージョン>/` にパッチを置きます。`stamp` は公開日の**前日の 00:00:00**（秒は偶数）にします。実行時刻にしないのは同じ zip を再現できるようにするため、前日にするのはどのタイムゾーンでも未来の日時にならないようにするためです。
 2. ビルドで表示された SHA256 を、`index.json` の新しいエントリーの `zipSHA256` と、`tools/verify_listing.py` の `PUBLISHED` に記録します。
 
-Avatar Checker の新しい版を出すときは、`package.json` の `version` を上げ、`tools/build_checker_zip.py` の `RELEASES` に新しい版と `stamp`（同じく公開日の前日 00:00:00）を足してから `python3 tools/build_checker_zip.py --write-meta` を実行します。表示された SHA256 を `index.json` の新しいエントリーと `tools/verify_checker.py` の `PUBLISHED` に記録します。公開済みの版の zip は変更しません。
+Avatar Checker の新しい版を出すときは、`package.json` の `version` を上げ、`tools/build_checker_zip.py` の `RELEASES` に新しい版と `stamp`（同じく公開日の前日 00:00:00。同じ日に 2 版出すなどで前の版の `stamp` より新しくならないときは、前の版の `stamp` + 2 秒）を足してから `python3 tools/build_checker_zip.py --write-meta` を実行します。表示された SHA256 を `index.json` の新しいエントリーと `tools/verify_checker.py` の `PUBLISHED` に記録します。公開済みの版の zip は変更しません。
 
 ## ライセンス
 

@@ -10,8 +10,8 @@ namespace Naoking.AvatarChecker
 
     /// <summary>
     /// VRChat avatar performance rank limits (Excellent / Good / Medium / Poor; anything above Poor is Very Poor).
-    /// Values follow VRChat's published "Avatar Performance Ranking System" table. They are a guide only:
-    /// the SDK build panel is authoritative and VRChat may change the table.
+    /// Values follow VRChat's published "Avatar Performance Ranking System" table and the SDK 3.10.5 stat levels.
+    /// Bounds size and raycasts are not ranked here. The SDK build panel is authoritative and VRChat may change the table.
     /// </summary>
     public static class PerformanceRank
     {
@@ -36,6 +36,13 @@ namespace Naoking.AvatarChecker
         public const string PhysicsColliders = "physicsColliders";
         public const string Rigidbodies = "rigidbodies";
         public const string AudioSources = "audioSources";
+        public const string ParticleTotalCount = "particleTotalCount";  // sum of maxParticles
+        public const string ParticleMeshPolys = "particleMeshPolys";
+        public const string ParticleTrails = "particleTrails";          // 0/1 flag
+        public const string ParticleCollision = "particleCollision";    // 0/1 flag
+        public const string ClothVertices = "clothVertices";
+        public const string ConstraintDepth = "constraintDepth";
+        public const string NonReadableMeshes = "nonReadableMeshes";    // any Read/Write-disabled mesh = Very Poor
 
         // metric -> limits for Excellent, Good, Medium, Poor
         static readonly Dictionary<string, double[]> PcLimits = new Dictionary<string, double[]>
@@ -61,6 +68,13 @@ namespace Naoking.AvatarChecker
             { PhysicsColliders, new double[] { 0, 1, 8, 8 } },
             { Rigidbodies, new double[] { 0, 1, 8, 8 } },
             { AudioSources, new double[] { 1, 4, 8, 8 } },
+            { ParticleTotalCount, new double[] { 0, 300, 1000, 2500 } },
+            { ParticleMeshPolys, new double[] { 0, 1000, 2000, 5000 } },
+            { ParticleTrails, new double[] { 0, 0, 1, 1 } },
+            { ParticleCollision, new double[] { 0, 0, 1, 1 } },
+            { ClothVertices, new double[] { 0, 50, 100, 200 } },
+            { ConstraintDepth, new double[] { 20, 50, 80, 100 } },
+            { NonReadableMeshes, new double[] { 0, 0, 0, 0 } },
         };
 
         static readonly Dictionary<string, double[]> MobileLimits = new Dictionary<string, double[]>
@@ -81,6 +95,12 @@ namespace Naoking.AvatarChecker
             { ParticleSystems, new double[] { 0, 0, 0, 2 } },
             { TrailRenderers, new double[] { 0, 0, 0, 1 } },
             { LineRenderers, new double[] { 0, 0, 0, 1 } },
+            { ParticleTotalCount, new double[] { 0, 0, 0, 200 } },
+            { ParticleMeshPolys, new double[] { 0, 0, 0, 400 } },
+            { ParticleTrails, new double[] { 0, 0, 0, 1 } },
+            { ParticleCollision, new double[] { 0, 0, 0, 1 } },
+            { ConstraintDepth, new double[] { 5, 15, 35, 50 } },
+            { NonReadableMeshes, new double[] { 0, 0, 0, 0 } },
         };
 
         static Dictionary<string, double[]> Table(Platform p) { return p == Platform.PC ? PcLimits : MobileLimits; }

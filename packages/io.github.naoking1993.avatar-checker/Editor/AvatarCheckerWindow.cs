@@ -25,11 +25,13 @@ namespace Naoking.AvatarChecker
             if (wrap == null) wrap = new GUIStyle(EditorStyles.label) { wordWrap = true, richText = false };
 
             EditorGUILayout.Space();
+            EditorGUI.BeginChangeCheck();
             target = (GameObject)EditorGUILayout.ObjectField("アバター", target, typeof(GameObject), true);
+            if (EditorGUI.EndChangeCheck()) report = null;  // the report always describes the object shown above
             platform = (Platform)GUILayout.Toolbar((int)platform, PlatformLabels);
             using (new EditorGUILayout.HorizontalScope())
             {
-                if (GUILayout.Button("選択中を使う")) target = AvatarScanner.ResolveAvatarRoot(Selection.activeGameObject);
+                if (GUILayout.Button("選択中を使う")) { target = AvatarScanner.ResolveAvatarRoot(Selection.activeGameObject); report = null; }
                 using (new EditorGUI.DisabledScope(target == null))
                     if (GUILayout.Button("チェック", GUILayout.Height(24))) report = AvatarScanner.Scan(target);
             }
@@ -59,6 +61,8 @@ namespace Naoking.AvatarChecker
             EditorGUILayout.LabelField(report.AvatarName + "  —  " + PerformanceRank.Label(rank), EditorStyles.boldLabel);
             GUI.color = old;
             EditorGUILayout.LabelField("エラー " + report.Count(Severity.Error) + " / 警告 " + report.Count(Severity.Warning) + " / 情報 " + report.Count(Severity.Info));
+            if (TextureTargetMismatch())
+                EditorGUILayout.HelpBox("テクスチャメモリは今のビルドターゲット (" + report.BuildTarget + ") の設定で計算しています。" + PlatformLabels[(int)platform] + " の値を見るには、ビルドターゲットを切り替えてからチェックしてください。", MessageType.Info);
             if (report.ExpressionParameterCost >= 0)
                 EditorGUILayout.LabelField("Expression パラメータ", report.ExpressionParameterCost + " / " + CheckReport.ExpressionParameterBudget + " bit");
         }
@@ -96,13 +100,22 @@ namespace Naoking.AvatarChecker
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     EditorGUILayout.HelpBox((i.Path.Length > 0 ? i.Path + "\n" : "") + i.Message, type);
-                    if (target != null && GUILayout.Button("選択", GUILayout.Width(44), GUILayout.Height(38)))
-                    {
-                        var t = i.Path.Length > 0 ? target.transform.Find(i.Path) : target.transform;
-                        if (t != null) { Selection.activeTransform = t; EditorGUIUtility.PingObject(t.gameObject); }
-                    }
+                    var obj = i.ObjectId != 0 ? EditorUtility.InstanceIDToObject(i.ObjectId) : null;
+                    using (new EditorGUI.DisabledScope(obj == null))
+                        if (GUILayout.Button("選択", GUILayout.Width(44), GUILayout.Height(38)))
+                        {
+                            Selection.activeObject = obj;
+                            EditorGUIUtility.PingObject(obj);
+                        }
                 }
             }
+        }
+
+        bool TextureTargetMismatch()
+        {
+            if (report.Stats.ContainsKey(PerformanceRank.TextureMemoryMB) && report.Stats[PerformanceRank.TextureMemoryMB] == 0) return false;
+            bool android = report.BuildTarget == "Android";
+            return platform == Platform.Mobile ? !android : android;
         }
 
         static string Format(double v) { return v == System.Math.Floor(v) ? v.ToString("0") : v.ToString("0.0"); }

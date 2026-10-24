@@ -21,15 +21,18 @@ JSON の `issues[].code` は変わらない英語の識別子（`missing-script`
 
 | 種類 | 内容 |
 | --- | --- |
-| ランク（目安） | ポリゴン数、テクスチャメモリ、Skinned / 通常メッシュ数、マテリアル枠、ボーン数、PhysBone（コンポーネント・Transform・Collider・衝突チェック数）、Contact、Constraint、Animator、Light、Particle、Trail / Line、Cloth、Collider、Rigidbody、AudioSource |
-| エラー | Missing スクリプト、シェーダーが見つからない（ピンク）、Expression パラメータ 256 bit 超え、子オブジェクトに残った VRC Avatar Descriptor |
-| 警告 | 空のマテリアル枠、メッシュ未設定、ボーン参照切れ、PhysBone の Root がアバター外・Collider 参照切れ、Expressions の Menu / Parameters 未設定、View Position、ルートの Animator / Avatar 未設定 |
+| ランク（目安） | ポリゴン数、テクスチャメモリ、Skinned / 通常メッシュ数、マテリアル枠、ボーン数、PhysBone（コンポーネント・Transform・Collider・衝突チェック数）、Contact、Constraint（数と深さ）、Animator、Light、Particle（システム数・最大パーティクル数・メッシュポリゴン・Trails・Collision）、Trail / Line、Cloth（数と頂点数）、Collider、Rigidbody、AudioSource、Read/Write が無効なメッシュ |
+| エラー | Missing スクリプト、シェーダーが見つからない・コンパイルエラー（ピンク）、メッシュの Read/Write 無効、Expression パラメータ 256 bit 超え、Expressions の Menu と Parameters の片方だけ設定、子オブジェクトに残った VRC Avatar Descriptor |
+| 警告 | 空のマテリアル枠、メッシュ未設定、ボーン参照切れ、PhysBone の Root がアバター外・Collider 参照切れ、View Position、ルートの Animator / Avatar 未設定 |
 | 情報 | Root Bone 未設定、サブメッシュより多いマテリアル枠、揺れない PhysBone、ルート以外の Animator、Humanoid でない、パラメータ残量が少ない |
 
+- 数え方は VRChat SDK 3.10.5 の判定処理に合わせています。たとえばマテリアル枠はサブメッシュ数で数え、Local Only の Contact と、どの PhysBone からも使われていない PhysBone Collider は数えません。
 - 非アクティブなオブジェクトも数えます（VRChat も数えます）。`EditorOnly` タグのオブジェクトはアップロード時に消えるので数えません。
-- ランクの基準値は VRChat の公開している Performance Ranking の表に合わせています。テクスチャメモリと PhysBone の Transform / 衝突チェック数は推定値です。**最終的な判定は VRChat SDK のビルド画面**で確認してください。
+- テクスチャメモリは、**今のビルドターゲット**の圧縮形式とサイズで計算します。Quest 向けの値を見るときは、ビルドターゲットを Android に切り替えてからチェックしてください。
+- Bounds のサイズ、Raycast 数、LOD Group はランクに入れていません。Constraint の深さと PhysBone の数値は SDK の計算をまねた推定値です。**最終的な判定は VRChat SDK のビルド画面**で確認してください。
 - VRChat SDK が入っていなくても動きます（その場合 PhysBone などは数えません）。SDK の型は名前で探すので、SDK のバージョンに依存しません。
 - Modular Avatar などのビルド時に変わるツールを使っている場合、ここで見えるのは**ビルド前**の状態です。
+- シーン全体のチェックでは、Prefab Mode で開いているプレハブは対象外です。
 
 ## 動作環境
 

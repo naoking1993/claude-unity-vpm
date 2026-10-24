@@ -4,7 +4,12 @@
 The zip is reproducible: entries are sorted, stored uncompressed (so the bytes do not depend on the
 zlib build), and every entry gets the release's fixed `stamp` as its date_time. Like the MCP for Unity
 builds, the stamp is the day before the release date at 00:00:00 so it is never in the future in any
-time zone, and each new version needs a newer stamp so Unity recompiles the changed .cs files.
+time zone. Each new version needs a newer stamp than the previous one so Unity recompiles the changed
+.cs files: when the rule above would not give a newer one (two releases on the same day), use the
+previous stamp + 2 seconds (DOS times have 2-second resolution). tools/verify_checker.py checks this.
+
+Names starting with '.' or ending with '~' (e.g. Documentation~) are hidden from Unity: they get no
+.meta, and dot-files are not shipped.
 
 Every file and folder in the package must have a .meta with a stable GUID. `--write-meta` creates
 missing ones (GUID derived from the package name and path, so it never changes). Existing zips are
@@ -23,6 +28,7 @@ IMPORTERS = {
     ".cs": "MonoImporter:\n  externalObjects: {}\n  serializedVersion: 2\n  defaultReferences: []\n  executionOrder: 0\n  icon: {instanceID: 0}\n",
     ".asmdef": "AssemblyDefinitionImporter:\n  externalObjects: {}\n",
     ".json": "TextScriptImporter:\n  externalObjects: {}\n",
+    "package.json": "PackageManifestImporter:\n  externalObjects: {}\n",  # the package's root manifest
     ".md": "TextScriptImporter:\n  externalObjects: {}\n",
 }
 FOLDER_OR_OTHER = "DefaultImporter:\n  externalObjects: {}\n"
@@ -40,15 +46,20 @@ def meta_text(rel, is_dir):
     head = f"fileFormatVersion: 2\nguid: {guid(rel)}\n"
     if is_dir:
         head += "folderAsset: yes\n"
-    body = FOLDER_OR_OTHER if is_dir else IMPORTERS.get(pathlib.PurePosixPath(rel).suffix, FOLDER_OR_OTHER)
+    body = FOLDER_OR_OTHER if is_dir else IMPORTERS.get(rel, IMPORTERS.get(pathlib.PurePosixPath(rel).suffix, FOLDER_OR_OTHER))
     return head + body + "  userData: \n  assetBundleName: \n  assetBundleVariant: \n"
+
+
+def hidden(rel):
+    """Unity ignores a path when any part starts with '.' or ends with '~'."""
+    return any(part.startswith(".") or part.endswith("~") for part in pathlib.PurePosixPath(rel).parts)
 
 
 def assets():
     """(relative posix path, is_dir) for every asset that needs a .meta (the package root itself does not)."""
     out = []
     for p in sorted(SRC.rglob("*")):
-        if p.suffix == ".meta":
+        if p.suffix == ".meta" or hidden(p.relative_to(SRC).as_posix()):
             continue
         out.append((p.relative_to(SRC).as_posix(), p.is_dir()))
     return out
@@ -87,7 +98,10 @@ def build(stamp):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
         for p in sorted(x for x in SRC.rglob("*") if x.is_file()):
-            zi = zipfile.ZipInfo(p.relative_to(SRC).as_posix(), date_time=stamp)
+            rel = p.relative_to(SRC).as_posix()
+            if any(part.startswith(".") for part in pathlib.PurePosixPath(rel).parts):
+                continue  # dot-files are never shipped; '~' folders (Samples~) are, without .meta
+            zi = zipfile.ZipInfo(rel, date_time=stamp)
             zi.external_attr = 0o644 << 16
             z.writestr(zi, p.read_bytes())
     return buf.getvalue()

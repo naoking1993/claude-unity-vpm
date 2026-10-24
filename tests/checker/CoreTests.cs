@@ -27,6 +27,19 @@ public static class CoreTests
         Eq((double?)75, PerformanceRank.Limit(Platform.PC, PerformanceRank.TextureMemoryMB, Rank.Good), "pc tex good limit");
         Eq((double?)null, PerformanceRank.Limit(Platform.PC, PerformanceRank.Bones, Rank.VeryPoor), "no very poor limit");
 
+        // metrics added from the SDK 3.10.5 stat levels
+        Eq(Rank.VeryPoor, PerformanceRank.Rate(Platform.PC, PerformanceRank.ClothVertices, 1500), "pc cloth verts 1500");
+        Eq(false, PerformanceRank.IsRanked(Platform.Mobile, PerformanceRank.ClothVertices), "mobile cloth verts unranked");
+        Eq(Rank.Medium, PerformanceRank.Rate(Platform.PC, PerformanceRank.ParticleTotalCount, 1000), "pc particles 1000");
+        Eq(Rank.VeryPoor, PerformanceRank.Rate(Platform.Mobile, PerformanceRank.ParticleTotalCount, 1000), "mobile particles 1000");
+        Eq(Rank.Medium, PerformanceRank.Rate(Platform.PC, PerformanceRank.ParticleTrails, 1), "pc trails on");
+        Eq(Rank.Poor, PerformanceRank.Rate(Platform.Mobile, PerformanceRank.ParticleCollision, 1), "mobile collision on");
+        Eq(Rank.Medium, PerformanceRank.Rate(Platform.PC, PerformanceRank.ConstraintDepth, 60), "pc constraint depth 60");
+        Eq(Rank.VeryPoor, PerformanceRank.Rate(Platform.Mobile, PerformanceRank.ConstraintDepth, 51), "mobile constraint depth 51");
+        Eq(Rank.Excellent, PerformanceRank.Rate(Platform.PC, PerformanceRank.NonReadableMeshes, 0), "readable meshes");
+        Eq(Rank.VeryPoor, PerformanceRank.Rate(Platform.PC, PerformanceRank.NonReadableMeshes, 1), "pc non-readable mesh");
+        Eq(Rank.VeryPoor, PerformanceRank.Rate(Platform.Mobile, PerformanceRank.NonReadableMeshes, 1), "mobile non-readable mesh");
+
         // every PC table has 4 non-decreasing limits; mobile metrics are a subset of PC metrics
         foreach (var p in new[] { Platform.PC, Platform.Mobile })
             foreach (var m in PerformanceRank.Metrics(p))
@@ -57,6 +70,7 @@ public static class CoreTests
         Expect(json, "\"textureMemoryMB\": { \"value\": 12.35, \"pc\": \"Excellent\", \"mobile\": \"Good\" }");
         Expect(json, "\"lights\": { \"value\": 1, \"pc\": \"Poor\", \"mobile\": null }");
         Expect(json, "\"cost\": null, \"budget\": 256");
+        Expect(json, "\"hierarchyPath\": \"\",");
         Expect(json, "\"rank\": { \"pc\": \"Poor\", \"mobile\": \"Good\" }");
         Expect(json, "{ \"severity\": \"error\", \"code\": \"missing-script\", \"path\": \"Armature/Hips\", \"message\": \"Missing\\tスクリプト\" }");
         Eq(1, rep.Count(Severity.Error), "error count");

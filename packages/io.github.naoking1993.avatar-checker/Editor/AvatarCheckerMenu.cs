@@ -34,6 +34,7 @@ namespace Naoking.AvatarChecker
         [MenuItem(Root + "Check All Avatars In Scene (JSON)", false, 21)]
         public static void CheckScene()
         {
+            if (!VrcReflection.SdkFound) Debug.LogWarning(LogTag + " VRChat Avatars SDK が見つからないため、アバターを探せません（空の結果になります）。");
             var json = CheckSceneToJson();
             var file = Write("scene-report.json", json);
             Debug.Log(LogTag + " scene → " + file + "\n" + json);

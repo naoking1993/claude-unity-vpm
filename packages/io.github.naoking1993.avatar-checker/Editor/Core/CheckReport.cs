@@ -14,16 +14,19 @@ namespace Naoking.AvatarChecker
         public string Code;     // stable id, e.g. "missing-script", for tools that read the JSON
         public string Message;  // Japanese, for people
         public string Path;     // hierarchy path below the avatar root, or "" for the avatar itself
+        public int ObjectId;    // Unity instance ID of the object the issue is about (0 = none); not written to JSON
 
-        public Issue(Severity severity, string code, string message, string path)
+        public Issue(Severity severity, string code, string message, string path, int objectId = 0)
         {
-            Severity = severity; Code = code; Message = message; Path = path ?? "";
+            Severity = severity; Code = code; Message = message; Path = path ?? ""; ObjectId = objectId;
         }
     }
 
     public class CheckReport
     {
         public string AvatarName = "";
+        public string HierarchyPath = "";  // path from the scene root, to tell avatars with the same name apart
+        public string BuildTarget = "";    // texture sizes depend on the active build target's import settings
         public bool HasAvatarDescriptor;
         public bool VrcSdkFound;
         public int ExpressionParameterCost = -1;  // -1 = unknown (no SDK or no parameters asset)
@@ -31,9 +34,9 @@ namespace Naoking.AvatarChecker
         public readonly SortedDictionary<string, double> Stats = new SortedDictionary<string, double>(StringComparer.Ordinal);
         public readonly List<Issue> Issues = new List<Issue>();
 
-        public void Add(Severity s, string code, string message, string path = "")
+        public void Add(Severity s, string code, string message, string path = "", int objectId = 0)
         {
-            Issues.Add(new Issue(s, code, message, path));
+            Issues.Add(new Issue(s, code, message, path, objectId));
         }
 
         public int Count(Severity s)
@@ -51,6 +54,8 @@ namespace Naoking.AvatarChecker
             sb.Append("{\n");
             sb.Append("  \"tool\": \"io.github.naoking1993.avatar-checker\",\n");
             sb.Append("  \"avatar\": ").Append(Str(AvatarName)).Append(",\n");
+            sb.Append("  \"hierarchyPath\": ").Append(Str(HierarchyPath)).Append(",\n");
+            sb.Append("  \"buildTarget\": ").Append(Str(BuildTarget)).Append(",\n");
             sb.Append("  \"hasAvatarDescriptor\": ").Append(HasAvatarDescriptor ? "true" : "false").Append(",\n");
             sb.Append("  \"vrcSdkFound\": ").Append(VrcSdkFound ? "true" : "false").Append(",\n");
             sb.Append("  \"expressionParameters\": { \"cost\": ")
