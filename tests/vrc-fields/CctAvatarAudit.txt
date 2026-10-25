@@ -1,0 +1,154 @@
+# CctAvatarAudit (cct_avatar_audit): every VRChat SDK type / serialized path the tool reads (SDK 3.10.5).
+# Read through SerializedObject (CctSerialized) unless marked "reflection".
+
+# --- VRCAvatarDescriptor (Descriptor.cs, Expressions.cs, Checks.cs, PostBuild.cs)
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|ViewPosition
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|lipSync
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|VisemeSkinnedMesh
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|VisemeBlendShapes
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|enableEyeLook
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|autoFootsteps
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|autoLocomotion
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|customizeAnimationLayers
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|baseAnimationLayers[].animatorController
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|baseAnimationLayers[].type
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|baseAnimationLayers[].mask
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|baseAnimationLayers[].isDefault
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|baseAnimationLayers[].isEnabled
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|specialAnimationLayers[].animatorController
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|specialAnimationLayers[].type
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|specialAnimationLayers[].mask
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|specialAnimationLayers[].isDefault
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|specialAnimationLayers[].isEnabled
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|customExpressions
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|expressionsMenu
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|expressionParameters
+# enums mapped by int (FieldCheck enum dumps): AnimLayerType Base=0,Deprecated0=1,Additive=2,Gesture=3,Action=4,FX=5,Sitting=6,TPose=7,IKPose=8;
+# VRC_AvatarDescriptor+LipSyncStyle Default=0,JawFlapBone=1,JawFlapBlendShape=2,VisemeBlendShape=3,VisemeParameterOnly=4
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor+AnimLayerType
+VRC.SDKBase.VRC_AvatarDescriptor+LipSyncStyle
+
+# --- Expression parameters / menu (Expressions.cs, PostBuild.cs)
+# ValueType Int=0,Float=1,Bool=2; ControlType Button=101,Toggle=102,SubMenu=103,TwoAxisPuppet=201,FourAxisPuppet=202,RadialPuppet=203
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters|parameters[].name
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters|parameters[].valueType
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters|parameters[].saved
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters|parameters[].networkSynced
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters|parameters[].defaultValue
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu|controls[].name
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu|controls[].icon
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu|controls[].type
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu|controls[].parameter.name
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu|controls[].subParameters[].name
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu|controls[].subMenu
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu|controls[].labels[].icon
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters+ValueType
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionsMenu+Control+ControlType
+
+# --- PhysBones / colliders (Stats.cs estimator). AdvancedBool False=0,True=1,Other=2; MultiChildType Ignore=0,First=1,Average=2; ShapeType Sphere=0,Capsule=1,Plane=2
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBone|rootTransform
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBone|ignoreTransforms
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBone|ignoreOtherPhysBones
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBone|endpointPosition
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBone|multiChildType
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBone|colliders
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBone|isAnimated
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBone|allowGrabbing
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBone|allowPosing
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBone|allowCollision
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBone|parameter
+VRC.Dynamics.VRCPhysBoneBase|rootTransform
+VRC.Dynamics.VRCPhysBoneBase+AdvancedBool
+VRC.Dynamics.VRCPhysBoneBase+MultiChildType
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBoneCollider|globalCollision
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBoneCollider|shapeType
+VRC.Dynamics.VRCPhysBoneColliderBase|globalCollision
+VRC.Dynamics.VRCPhysBoneColliderBase+ShapeType
+
+# --- Contacts (Stats.cs): ContactBase is the base of VRCContactSender / VRCContactReceiver
+VRC.Dynamics.ContactBase|localOnly
+VRC.SDK3.Dynamics.Contact.Components.VRCContactReceiver|parameter
+VRC.SDK3.Dynamics.Contact.Components.VRCContactSender
+VRC.SDK3.Dynamics.Contact.Components.VRCContactReceiver
+
+# --- VRC constraints (Stats.cs). IVRCConstraint.LatestValidExecutionGroupIndex is a non-serialized property read by reflection.
+VRC.SDKBase.Validation.Performance.IVRCConstraint
+VRC.Dynamics.VRCConstraintBase|TargetTransform
+VRC.Dynamics.VRCConstraintBase|IsActive
+
+# --- Other component types matched by full name (type existence only)
+VRC.SDK3.Avatars.Components.VRCRaycast
+VRC.SDKBase.VRCStation
+VRC.SDK3.Avatars.Components.VRCStation
+VRC.SDK3.Avatars.Components.VRCHeadChop
+VRC.SDKBase.IEditorOnly
+VRC.Core.PipelineManager|blueprintId
+# Whitelist entries (Stats.cs WhitelistAll / WhitelistPcOnly) are copied from com.vrchat.base AvatarValidation.cs (source, not a DLL);
+# VRC types among them:
+VRC.SDK3.Avatars.Components.VRCSpatialAudioSource
+VRC.SDK3.Avatars.Components.VRCImpostorSettings
+VRC.SDK3.Avatars.Components.VRCImpostorEnvironment
+VRC.SDK3.Dynamics.Constraint.Components.VRCAimConstraint
+VRC.SDK3.Dynamics.Constraint.Components.VRCLookAtConstraint
+VRC.SDK3.Dynamics.Constraint.Components.VRCParentConstraint
+VRC.SDK3.Dynamics.Constraint.Components.VRCPositionConstraint
+VRC.SDK3.Dynamics.Constraint.Components.VRCRotationConstraint
+VRC.SDK3.Dynamics.Constraint.Components.VRCScaleConstraint
+# VRC.Core.PipelineSaver, VRC.SDK3.VRCTestMarker, LimbIK, LoadingAvatarTextureAnimation: listed by the SDK source but compiled only in
+# some configurations (#if !VRC_CLIENT / client-only types); matched by name only, absence is harmless.
+
+# --- SDK performance calculator (Sdk.cs, reflection). Method signatures (Initialize(), .ctor(bool),
+# AvatarPerformance.CalculatePerformanceStats(string, GameObject, AvatarPerformanceStats, bool),
+# GetPerformanceRatingForCategory(AvatarPerformanceCategory), CalculateAllPerformanceRatings(bool),
+# VRCConstraintManager.Sdk_ManuallyRefreshGroups(VRCConstraintBase[]), VRCConstraintManager.IsInitialized,
+# AvatarPerformance.ShouldIgnoreComponent) were resolved against the real 3.10.5 DLLs in research/avatar-limits.md §15.1
+# (factcheck/Lookup.exe); FieldCheck verifies the types and the public fields read below.
+VRC.SDKBase.Validation.Performance.AvatarPerformance
+VRC.SDKBase.Validation.Performance.AvatarPerformanceCategory
+# PerformanceRating None=0,Excellent=1,Good=2,Medium=3,Poor=4,VeryPoor=5 (= CctAvatarAudit.Ranks constants)
+VRC.SDKBase.Validation.Performance.PerformanceRating
+VRC.Dynamics.VRCConstraintManager
+VRC.Dynamics.VRCConstraintBase
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|polyCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|aabb
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|textureMegabytes
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|skinnedMeshCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|meshCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|materialCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|physBone
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats+PhysBoneStats|componentCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats+PhysBoneStats|transformCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats+PhysBoneStats|colliderCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats+PhysBoneStats|collisionCheckCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|contactCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|contactCompleteCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|constraintsCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|constraintDepth
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|animatorCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|boneCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|lightCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|particleSystemCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|particleTotalCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|particleMaxMeshPolyCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|particleTrailsEnabled
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|particleCollisionEnabled
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|trailRendererCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|lineRendererCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|raycastCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|clothCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|clothMaxVertices
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|physicsColliderCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|physicsRigidbodyCount
+VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats|audioSourceCount
+
+# Non-VRChat types (not checkable here; verified against the local source corpora):
+#   nadena.dev.modular_avatar.core.ModularAvatarConvertConstraints / ModularAvatarMenuInstaller / ModularAvatarMenuItem /
+#   ModularAvatarParameters / ModularAvatarMergeAnimator (MA Runtime, name only)
+#   nadena.dev.ndmf.AvatarProcessor.CanProcessObject(GameObject) / ProcessAvatar(GameObject, INDMFPlatformProvider) / ProcessAvatar(GameObject),
+#   nadena.dev.ndmf.OverrideTemporaryDirectoryScope(string), nadena.dev.ndmf.platform.AmbientPlatform.DefaultPlatform,
+#   nadena.dev.ndmf.ui.ErrorReportWindow.DISABLE_WINDOW, nadena.dev.ndmf.config.Config.ApplyOnBuild,
+#   BuildContext.Successful / ErrorReport.Errors, ErrorContext.TheError/Plugin/PassName, IError.Severity/ToMessage(),
+#   PluginBase.DisplayName (NDMF 1.15.0-beta.2 Editor sources; all resolved by reflection and fail soft)
+#   UnityEditor.TextureUtil.GetStorageMemorySizeLong (internal, reflection, not used for ranking)
+#   UnityEditor.ModelImporter.legacyComputeAllNormalsFromSmoothingGroupsWhenMeshHasBlendShapes (internal, reflection, as the SDK does)

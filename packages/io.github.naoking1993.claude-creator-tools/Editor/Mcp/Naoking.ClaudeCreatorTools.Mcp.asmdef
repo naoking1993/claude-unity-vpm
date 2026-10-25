@@ -1,0 +1,29 @@
+{
+    "name": "Naoking.ClaudeCreatorTools.Mcp",
+    "rootNamespace": "Naoking.ClaudeCreatorTools.Mcp",
+    "references": [
+        "Naoking.ClaudeCreatorTools.Editor",
+        "MCPForUnity.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "Newtonsoft.Json.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CCT_UNITY_MCP"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.coplaydev.unity-mcp",
+            "expression": "9.7.1",
+            "define": "CCT_UNITY_MCP"
+        }
+    ],
+    "noEngineReferences": false
+}

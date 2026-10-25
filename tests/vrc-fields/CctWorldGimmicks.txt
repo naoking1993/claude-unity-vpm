@@ -1,0 +1,10 @@
+# CctWorldGimmicks (cct_world_gimmicks): VRChat types probed by full name with CctSerialized.FindType (existence only; no component fields are read).
+VRC.SDK3.Components.VRCPickup
+VRC.SDK3.Components.VRCObjectSync
+VRC.SDK3.Persistence.PlayerData
+VRC.SDK3.UdonNetworkCalling.NetworkCallableAttribute
+# Source-only UdonSharp types (not in a DLL; verified against vrcsdk_worlds_3.10.5/Integrations/UdonSharp sources):
+#   UdonSharp.UdonSharpBehaviour       Runtime/UdonSharpBehaviour.cs (namespace UdonSharp)
+#   UdonSharp.UdonSharpProgramAsset    Editor/UdonSharpProgramAsset.cs L30/L45 (namespace UdonSharp, : UdonAssemblyProgramAsset)
+#   UdonSharp.UdonSharpProgramAsset|sourceCsScript   Editor/UdonSharpProgramAsset.cs L48 "public MonoScript sourceCsScript" (written via SerializedObject when creating program assets)
+# Non-VRChat probes (Unity packages, not checkable here): TMPro.TMP_Text, UnityEngine.UI.Slider

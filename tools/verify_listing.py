@@ -116,5 +116,76 @@ for (v1, z1), (v2, z2) in itertools.combinations(sorted(zips.items()), 2):
         if z1.getinfo(n).date_time == z2.getinfo(n).date_time and z1.read(n) != z2.read(n):
             fail(f"{v1} vs {v2}: {n} has the same date_time but different content (Unity would not recompile it)")
 
+# ---- packages built from source under packages/<name>/ (tools/build_vpm_package.py) ----
+sys.path.insert(0, str(ROOT / "tools"))
+import build_vpm_package as bvp  # noqa: E402
+# Pin every published zip here, exactly like PUBLISHED above.
+SRC_PUBLISHED = {
+    "io.github.naoking1993.claude-creator-tools": {
+        "0.1.0": "8bacf727b9a3057f283b85b6d26a96233c0e60a0587b1f45e685dccb27736ea1",
+    },
+}
+LISTING_KEYS_FROM_PJ = ("name", "displayName", "version", "unity", "description", "author", "license",
+                        "dependencies", "vpmDependencies", "samples")
+mcp_guids = {l.split(b"guid: ")[1].strip() for n in up.namelist() if n.endswith(".meta")
+             for l in up.read(n).splitlines() if l.startswith(b"guid: ")}
+utc_minus_12 = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None) - datetime.timedelta(hours=12)
+for name, releases in bvp.PACKAGES.items():
+    listed = idx["packages"].get(name, {}).get("versions", {})
+    pins = SRC_PUBLISHED.get(name, {})
+    src_pj = json.loads((ROOT / "packages" / name / "package.json").read_text(encoding="utf-8"))
+    for ver in pins:
+        if ver not in listed: fail(f"{name} {ver}: published version must stay listed")
+    for ver in listed:
+        if ver not in pins: fail(f"{name} {ver}: not pinned in SRC_PUBLISHED")
+        if ver not in releases: fail(f"{name} {ver}: no stamp in build_vpm_package.PACKAGES")
+    stamps = list(releases.values())
+    if len(set(stamps)) != len(stamps): fail(f"{name}: every release needs its own stamp (Unity recompiles by mtime)")
+    for ver, e in listed.items():
+        tag = f"{name} {ver}"
+        if not re.fullmatch(r"\d+\.\d+\.\d+", ver): fail(f"{tag}: must be plain MAJOR.MINOR.PATCH")
+        if e.get("version") != ver: fail(f"{tag}: key/version mismatch")
+        if e.get("url") != f"{BASE}{name}-{ver}.zip": fail(f"{tag}: url must be {BASE}{name}-{ver}.zip")
+        zp = ROOT / f"{name}-{ver}.zip"
+        if not zp.exists(): fail(f"{tag}: zip missing"); continue
+        b = zp.read_bytes()
+        if e.get("zipSHA256") != sha(b): fail(f"{tag}: zipSHA256 != file")
+        if ver in pins and pins[ver] != sha(b): fail(f"{tag}: published zip changed (bump the version instead)")
+        z = zipfile.ZipFile(zp)
+        names = z.namelist()
+        pj = json.loads(z.read("package.json").decode("utf-8"))
+        if pj.get("name") != name or pj.get("version") != ver: fail(f"{tag}: zip package.json name/version != listing")
+        for k in LISTING_KEYS_FROM_PJ:
+            if e.get(k) != pj.get(k): fail(f"{tag}: listing '{k}' != package.json")
+        extra = set(e) - set(LISTING_KEYS_FROM_PJ) - {"url", "zipSHA256"}
+        if extra: fail(f"{tag}: unexpected listing keys {sorted(extra)}")
+        if ver == src_pj["version"] and bvp.build(name, ver, releases[ver]) != b:
+            fail(f"{tag}: zip is not reproducible from packages/{name} (rebuild with tools/build_vpm_package.py)")
+        stamp_set = {zi.date_time for zi in z.infolist()}
+        if stamp_set != {tuple(releases.get(ver, ()))}: fail(f"{tag}: entries must all carry the release stamp")
+        for zi in z.infolist():
+            if datetime.datetime(*zi.date_time) > utc_minus_12: fail(f"{tag}: {zi.filename} date_time is in the future")
+            if "\\" in zi.filename or zi.filename.startswith("/") or ".." in zi.filename.split("/"):
+                fail(f"{tag}: bad entry name {zi.filename!r}")
+        # .meta coverage: every asset (file or folder, except '~' folders themselves) has one, no orphans, unique GUIDs
+        files = {n for n in names if not n.endswith(".meta")}
+        folders = {"/".join(n.split("/")[:i]) for n in files for i in range(1, len(n.split("/")))}
+        assets = {a for a in files | folders if not a.split("/")[-1].endswith("~")}
+        metas = {n[:-5] for n in names if n.endswith(".meta")}
+        for a in sorted(assets - metas): fail(f"{tag}: missing {a}.meta")
+        for a in sorted(metas - assets): fail(f"{tag}: orphan {a}.meta")
+        seen = {}
+        for m in sorted(metas):
+            g = next((l.split(b"guid: ")[1].strip() for l in z.read(m + ".meta").splitlines() if l.startswith(b"guid: ")), None)
+            if not g or not re.fullmatch(rb"[0-9a-f]{32}", g): fail(f"{tag}: bad guid in {m}.meta"); continue
+            if g in seen: fail(f"{tag}: duplicate guid {g.decode()} ({m}, {seen[g]})")
+            if g in mcp_guids: fail(f"{tag}: guid {g.decode()} collides with com.coplaydev.unity-mcp")
+            seen[g] = m
+        for n in names:
+            # JSON (package.json, .asmdef) must not carry a BOM; C# sources may (the U# samples use one on purpose so
+            # Japanese comments open correctly in Windows editors).
+            if n.endswith((".json", ".asmdef")) and z.read(n).startswith(b"\xef\xbb\xbf"):
+                fail(f"{tag}: {n} has a UTF-8 BOM")
+
 print("OK" if not errors else f"{len(errors)} failure(s)")
 sys.exit(1 if errors else 0)
