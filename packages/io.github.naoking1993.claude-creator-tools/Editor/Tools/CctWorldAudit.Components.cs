@@ -131,16 +131,34 @@ namespace Naoking.ClaudeCreatorTools
                     // ProBuilder removes its own components from the build by default (Preferences > ProBuilder >
                     // "Strip ProBuilder Scripts on Build"); the MeshFilter/MeshRenderer it generated stay.
                     bool probuilder = (type.Namespace ?? "").StartsWith("UnityEngine.ProBuilder", StringComparison.Ordinal);
-                    notAllowed.Add(new Dictionary<string, object>
+                    var strippedBy = probuilder ? null : KnownBuildStripper(type);
+                    var processors = probuilder || strippedBy != null ? null : SceneProcessorsReferencing(asm);
+                    // Tagging the object EditorOnly strips its whole subtree, so never suggest it over shipping content.
+                    var shipping = probuilder ? null : ShippingComponentUnder(ctx, type);
+                    var entry = new Dictionary<string, object>
                     {
                         ["type"] = FindTypeName(type), ["assembly"] = asm, ["count"] = kv.Value, ["examples"] = Examples(examples ?? new List<string>()),
-                        ["reason"] = probuilder ? "probuilder_stripped_at_build" : "not_in_allowlist",
-                    });
-                    ctx.Issue(probuilder ? CctSeverity.Info : CctSeverity.Warning, "NOT_WHITELISTED",
-                        probuilder
-                            ? $"'{FindTypeName(type)}' ({kv.Value} 個) は許可リストにありませんが、ProBuilder の既定設定 (Strip ProBuilder Scripts on Build) でビルド時に除去され、メッシュだけが残るため通常は問題ありません (設定を OFF にしている場合は除去されずクライアントで消えます)"
-                            : $"'{FindTypeName(type)}' ({kv.Value} 個) は SDK3 ワールドの許可リストにありません。VRChat がワールドを読み込むときに除去されると推定されます (SDK はビルド時にこれを検査しないため、アップロードはできてしまいます)。" +
-                              NotAllowedHint(type, v, asm),
+                        ["reason"] = probuilder ? "probuilder_stripped_at_build"
+                            : strippedBy != null ? "stripped_at_build"
+                            : processors != null ? "scene_processor_may_strip" : "not_in_allowlist",
+                    };
+                    if (strippedBy != null) entry["stripped_by"] = strippedBy.Value.Processor;
+                    if (processors != null) entry["scene_processors"] = processors.Cast<object>().ToList();
+                    if (shipping != null) entry["shipping_component_in_subtree"] = shipping;
+                    notAllowed.Add(entry);
+                    string message;
+                    if (probuilder)
+                        message = $"'{FindTypeName(type)}' ({kv.Value} 個) は許可リストにありませんが、ProBuilder の既定設定 (Strip ProBuilder Scripts on Build) でビルド時に除去され、メッシュだけが残るため通常は問題ありません (設定を OFF にしている場合は除去されずクライアントで消えます)";
+                    else if (strippedBy != null)
+                        message = $"'{FindTypeName(type)}' ({kv.Value} 個) は許可リストにありませんが、ビルド時に {strippedBy.Value.Label}ため、アップロードされるワールドには含まれません (対応不要)。" +
+                                  (shipping != null ? $"EditorOnly タグは付けないでください (子の '{shipping}' などもビルドから消えて動かなくなります)" : "");
+                    else if (processors != null)
+                        message = $"'{FindTypeName(type)}' ({kv.Value} 個) は許可リストにありません。同じパッケージの '{processors[0]}' がビルド時にシーンを処理するので、そこで除去・変換される可能性があります (推定。処理の中身は確認していません)。ビルド後も残っていれば、VRChat がワールドを読み込むときに除去すると推定されます。" +
+                                  NotAllowedHint(type, v, asm, shipping);
+                    else
+                        message = $"'{FindTypeName(type)}' ({kv.Value} 個) は SDK3 ワールドの許可リストにありません。VRChat がワールドを読み込むときに除去されると推定されます (SDK はビルド時にこれを検査しないため、アップロードはできてしまいます)。" +
+                                  NotAllowedHint(type, v, asm, shipping);
+                    ctx.Issue(probuilder || strippedBy != null || processors != null ? CctSeverity.Info : CctSeverity.Warning, "NOT_WHITELISTED", message,
                         path: examples?.FirstOrDefault(), value: Grouped(kv.Value, examples ?? new List<string>()));
                 }
                 else if (!v.AllowedExact && !v.ClientAssembly)
@@ -181,7 +199,7 @@ namespace Naoking.ClaudeCreatorTools
             catch (Exception) { return null; }
         }
 
-        static string NotAllowedHint(Type type, TypeVerdict v, string asm)
+        static string NotAllowedHint(Type type, TypeVerdict v, string asm, string shipping)
         {
             if ((v.Kinds & K.RawVideoPlayer) != 0) return "動画には VRC Unity Video Player / VRC AVPro Video Player を使ってください";
             if ((v.Kinds & K.LegacyAnimation) != 0) return "レガシー Animation の代わりに Animator を使ってください";
@@ -190,8 +208,103 @@ namespace Naoking.ClaudeCreatorTools
             // VRWorld Toolkit (community) reports Bakery lights the same way: "external scripts get removed in the upload
             // process" and the client logs errors for them; tagging the object EditorOnly removes them at build instead.
             if (asm != null && (asm.StartsWith("Assembly-CSharp", StringComparison.Ordinal) || !IsClientAssembly(asm)))
-                return "独自の C# スクリプト (MonoBehaviour) はワールドに含まれません。ベイク用などエディタでだけ使うものなら、その GameObject のタグを EditorOnly にするとビルド時に除去されます (読み込み時のエラーも出なくなります)。VRChat 内で動かしたい処理は UdonSharp で実装してください";
+                return shipping != null
+                    ? $"独自の C# スクリプト (MonoBehaviour) はワールドに含まれません。この GameObject か子に VRChat で使われる '{shipping}' があるので、EditorOnly タグは付けないでください (子ごとビルドから消えます)。VRChat 内で動かしたい処理は UdonSharp で実装してください"
+                    : "独自の C# スクリプト (MonoBehaviour) はワールドに含まれません。ベイク用などエディタでだけ使うものなら、その GameObject のタグを EditorOnly にするとビルド時に除去されます (読み込み時のエラーも出なくなります)。VRChat 内で動かしたい処理は UdonSharp で実装してください";
             return "";
+        }
+
+        // ------------------------------------------------------------------ scene build processors
+
+        /// <summary>
+        /// Components a third-party scene build processor destroys before the bundle is written (checked in its source), so the
+        /// client never sees them. iwaSync3: IwaSync3BuildProcessor (IProcessSceneWithReport) copies each component's settings
+        /// into its Udon children, moves them out and runs DestroyImmediate on every IwaSync3 / Playlist / Screen / Speaker of
+        /// the built scene (IwaSync3BuildProcessor.cs L14-53, Cleaning L99-103). Used only while the processor is compiled.
+        /// </summary>
+        const string IwaSync3StripLabel = "iwaSync3 の IwaSync3BuildProcessor が設定を Udon に写してから削除する";
+
+        static readonly Dictionary<string, (string Processor, string Label)> KnownBuildStrippedTypes =
+            new Dictionary<string, (string Processor, string Label)>(StringComparer.Ordinal)
+            {
+                [TIwaSync3] = (TIwaSync3BuildProcessor, IwaSync3StripLabel),
+                ["HoshinoLabs.IwaSync3.Playlist"] = (TIwaSync3BuildProcessor, IwaSync3StripLabel),
+                ["HoshinoLabs.IwaSync3.Screen"] = (TIwaSync3BuildProcessor, IwaSync3StripLabel),
+                [TIwaSync3Speaker] = (TIwaSync3BuildProcessor, IwaSync3StripLabel),
+            };
+
+        static (string Processor, string Label)? KnownBuildStripper(Type type)
+        {
+            if (!KnownBuildStrippedTypes.TryGetValue(FindTypeName(type) ?? "", out var known)) return null;
+            return CctSerialized.FindType(known.Processor) != null ? known : ((string, string)?)null;
+        }
+
+        sealed class SceneProcessor
+        {
+            public string Name, Assembly;
+            public HashSet<string> References;
+        }
+
+        static List<SceneProcessor> _sceneProcessors;
+
+        /// <summary>
+        /// Scene build processors (IProcessSceneWithReport implementers and [PostProcessScene] methods) compiled in package or
+        /// asmdef editor assemblies. Unity/VRChat processors are left out, and so are the predefined Assembly-CSharp* assemblies,
+        /// which reference every runtime assembly and so would match everything.
+        /// </summary>
+        static List<SceneProcessor> SceneProcessors()
+        {
+            if (_sceneProcessors != null) return _sceneProcessors;
+            var types = new List<Type>();
+            try { types.AddRange(TypeCache.GetTypesDerivedFrom<UnityEditor.Build.IProcessSceneWithReport>().Where(t => !t.IsAbstract && !t.IsInterface)); }
+            catch (Exception) { /* TypeCache unavailable */ }
+            try { types.AddRange(TypeCache.GetMethodsWithAttribute<UnityEditor.Callbacks.PostProcessSceneAttribute>().Select(m => m.DeclaringType)); }
+            catch (Exception) { /* TypeCache unavailable */ }
+            var list = new List<SceneProcessor>();
+            foreach (var t in types.Where(t => t != null).Distinct())
+            {
+                var asm = SafeAssemblyName(t);
+                if (asm == null || IsPredefinedAssembly(asm) || IsClientAssembly(asm) || asm.StartsWith("UnityEditor", StringComparison.Ordinal)) continue;
+                HashSet<string> refs;
+                try { refs = new HashSet<string>(t.Assembly.GetReferencedAssemblies().Select(a => a.Name), StringComparer.Ordinal); }
+                catch (Exception) { continue; }
+                list.Add(new SceneProcessor { Name = FindTypeName(t), Assembly = asm, References = refs });
+            }
+            return _sceneProcessors = list;
+        }
+
+        static bool IsPredefinedAssembly(string asm) => asm.StartsWith("Assembly-CSharp", StringComparison.Ordinal);
+
+        /// <summary>Scene processors whose assembly is, or references, <paramref name="asm"/> (null when none: estimate only).</summary>
+        static List<string> SceneProcessorsReferencing(string asm)
+        {
+            if (asm == null || IsPredefinedAssembly(asm)) return null;
+            var names = SceneProcessors().Where(p => p.Assembly == asm || p.References.Contains(asm)).Select(p => p.Name).ToList();
+            return names.Count > 0 ? names : null;
+        }
+
+        /// <summary>
+        /// A component that ships and runs in VRChat (allowlisted, not a Transform, not on an EditorOnly object) on an audited
+        /// instance of <paramref name="type"/> or below it: tagging that GameObject EditorOnly would strip it too. Null if none.
+        /// </summary>
+        static string ShippingComponentUnder(Ctx ctx, Type type)
+        {
+            var seen = new HashSet<GameObject>();
+            foreach (var item in ctx.Components)
+            {
+                if (!item.Audited || item.C == null || item.C.GetType() != type || !seen.Add(item.C.gameObject)) continue;
+                if (seen.Count > ExampleCap * 5) break;
+                foreach (var c in item.C.GetComponentsInChildren<Component>(true))
+                {
+                    if (c == null || c is Transform) continue;
+                    var o = ObjOf(ctx, c);
+                    if (o != null && o.EditorOnly) continue;
+                    var cv = Classify(c.GetType());
+                    if ((cv.Kinds & K.EditorOnlyComponent) != 0 || cv.AllowedVia == null || (!cv.AllowedExact && !cv.ClientAssembly)) continue;
+                    return FindTypeName(c.GetType());
+                }
+            }
+            return null;
         }
 
         // ------------------------------------------------------------------ missing references
@@ -274,6 +387,34 @@ namespace Naoking.ClaudeCreatorTools
                        first.propertyType == SerializedPropertyType.ManagedReference;
             }
             catch (Exception) { return true; }
+        }
+
+        /// <summary>
+        /// The <paramref name="targets"/> that serialized object references of <paramref name="so"/> point at (UdonBehaviour
+        /// public variables, U# proxy fields, ...). Walks like the missing-reference scan; m_GameObject / m_Script skipped.
+        /// </summary>
+        static List<UnityEngine.Object> FindReferencesTo(SerializedObject so, HashSet<UnityEngine.Object> targets)
+        {
+            var found = new List<UnityEngine.Object>();
+            if (so == null || targets == null || targets.Count == 0) return found;
+            try
+            {
+                var it = so.GetIterator();
+                bool enter = true;
+                int visited = 0;
+                while (it.Next(enter))
+                {
+                    enter = true;
+                    if (++visited > MaxPropertiesPerComponent) break;
+                    if (it.propertyType == SerializedPropertyType.String) { enter = false; continue; }
+                    if (it.propertyType == SerializedPropertyType.Generic && it.isArray && !ArrayMayHoldReferences(it)) { enter = false; continue; }
+                    if (it.propertyType != SerializedPropertyType.ObjectReference || it.propertyPath == "m_GameObject" || it.propertyPath == "m_Script") continue;
+                    var value = it.objectReferenceValue;
+                    if (value != null && targets.Contains(value) && !found.Contains(value)) found.Add(value);
+                }
+            }
+            catch (Exception) { /* unreadable: keep what was found */ }
+            return found;
         }
 
         static void ScanAllMissingReferences(Ctx ctx, Dictionary<string, object> d)
@@ -478,14 +619,15 @@ namespace Naoking.ClaudeCreatorTools
 
         /// <summary>
         /// Estimated max dimension on a mobile platform: the source size (or, if unknown, the size imported for the current
-        /// build target) capped by that platform's override Max Size, else the default Max Size.
+        /// build target) scaled by the importer's Non-Power of 2 setting (shared by every platform), then capped by that
+        /// platform's override Max Size, else the default Max Size.
         /// </summary>
         static int MobileTextureSize(TextureInfo ti, string platformName)
         {
             int current = Math.Max(ti.Width, ti.Height);
             if (ti.Importer == null) return current;
             int source = SourceTextureMaxDimension(ti.Importer);
-            if (source > 0) current = source;
+            if (source > 0) current = NpotScaled(source, ti.Importer);
             int max = ti.Importer.maxTextureSize;
             try
             {
@@ -494,6 +636,25 @@ namespace Naoking.ClaudeCreatorTools
             }
             catch (Exception) { /* keep default */ }
             return max > 0 ? Math.Min(current, max) : current;
+        }
+
+        /// <summary>
+        /// A non-power-of-two source size as the importer rounds it (TextureImporter.npotScale: ToNearest / ToLarger /
+        /// ToSmaller; None keeps it). Rounding is monotonic, so rounding the larger dimension gives the larger imported one.
+        /// </summary>
+        static int NpotScaled(int size, TextureImporter importer)
+        {
+            if (size <= 0 || Mathf.IsPowerOfTwo(size)) return size;
+            TextureImporterNPOTScale scale;
+            try { scale = importer.npotScale; }
+            catch (Exception) { return size; }
+            switch (scale)
+            {
+                case TextureImporterNPOTScale.ToNearest: return Mathf.ClosestPowerOfTwo(size);
+                case TextureImporterNPOTScale.ToLarger: return Mathf.NextPowerOfTwo(size);
+                case TextureImporterNPOTScale.ToSmaller: return Mathf.NextPowerOfTwo(size) / 2;
+                default: return size;
+            }
         }
     }
 }

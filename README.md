@@ -147,10 +147,11 @@ VCC のバージョン選択で **9.7.1** を選びます。9.7.1 の zip とエ
 | `cct_dependency_report` | 依存関係・使用元の逆引き・プレハブ化で切れる参照 |
 | `cct_world_gimmicks` | UdonSharp のワールドギミック 8 種の取り込み（UdonSharp がある時だけ） |
 
-- 導入は MCP for Unity と同じく VCC の Manage Project から（`0.1.0`）。追加・更新したら MCP サーバーを再起動してください。
-- **0.1.0 の実機確認はアバタープロジェクト 1 件だけです**（2026-10-25、Unity 2022.3.22f1・VRChat SDK 3.10.5・MCP for Unity 9.7.101、日本語名のプロジェクト）。パッケージの README の「初回確認」1〜7 は合格で、ワールドプロジェクト（8）は未確認です。zip 内の README・`package.json` の「未検証」の記述は、公開済みの zip を変えない運用のため 0.1.0 のままです。
+- 導入は MCP for Unity と同じく VCC の Manage Project から（`0.1.1`）。追加・更新したら MCP サーバーを再起動してください。
+- **実機確認（2026-10-25、Unity 2022.3.22f1・VRChat SDK 3.10.5）**: 0.1.0 をアバタープロジェクト「ひかるん」（MCP for Unity 9.7.101）とワールドプロジェクト「泡ワールド」（同 9.7.1）で確かめ、パッケージの README の「初回確認」1〜8 はすべて合格でした。ワールド監査の 28 件はシーン・SDK・同梱パッケージのソースと突き合わせ、iwaSync3 まわりの誤検知と、文面・重さが不正確だった項目を **0.1.1** で直しました（[CHANGELOG](packages/io.github.naoking1993.claude-creator-tools/CHANGELOG.md)）。**0.1.1 自体は Unity の中ではまだ動かしていません。** 0.1.0 の zip は公開済みなので変えていません（zip 内の「未検証」の記述は 0.1.0 のままです）。
   - 利用者のサーバー（Python 3.14）では `cct_*` は単独ツールとして登録されず（`Failed to register custom tool 'cct_…' globally: '<最初の引数名>'`）、`execute_custom_tool` 経由で呼びます。
-  - Unity を開いたまま `Packages/` にフォルダーを置いて入れると、最初の更新ではパッケージとして認識されるだけで中身が取り込まれないことがありました。手で入れたときは Unity を開き直すか、もう一度更新してください（VCC から入れる場合は関係ありません）。
+  - 手で `Packages/` にフォルダーを置いて入れたときは、**Unity を開き直してください**。Unity を開いたまま置くと、パッケージとしては認識されても中身が取り込まれないことがありました（2026-10-25 の確認では、もう一度の更新や Package Manager の再解決で取り込まれた例もあります）。VCC から入れる場合は関係ありません。
+  - `cct_capture_views` の `front` は対象の +Z（アバターの一部ならアバターのルートの +Z）です。小物は +Z が見た目の正面とは限らず、泡ワールドの椅子では `front` に背もたれ側が写りました。逆なら `back` を見てください。
 - Claude 用のスキル（`claude-skills/`）: `claude-creator-tools`（ツールの使い方）、`vrchat-world-creation`（ワールド制作）、`avatar-world-skill-guide`（改訂版）。登録手順は [`claude-skills/README-CHANGES.md`](claude-skills/README-CHANGES.md)。
 
 ## 開発者向け
@@ -169,7 +170,7 @@ VCC のバージョン選択で **9.7.1** を選びます。9.7.1 の zip とエ
 | `tools/build_checker_zip.py` | Avatar Checker の zip をソースから作ります（エントリーは名前順・無圧縮・固定日時で、同じ zip が再現できます）。`--write-meta` で足りない `.meta` を作ります |
 | `tools/verify_checker.py` | Avatar Checker の `index.json` / zip / `.meta` の整合性、zip がソースから再現できること、日時のチェック（版ごとに新しい・未来でない・「同じ名前で同じ日時なら同じ中身」）、`Editor/Core` のテスト（`tests/checker/`）を確認します。`--unity-dlls` を付けると Editor コード全体を Unity の参照アセンブリでコンパイルします |
 
-これらのスクリプトは **Linux・WSL・CI 専用**です。Windows 版 Python の `zipfile` はエントリー名の `\` を `/` に変換するため、Windows で実行すると誤った失敗を報告します。
+これらのスクリプトは **Linux・WSL・CI 専用**です。Windows 版 Python の `zipfile` はエントリー名の `\` を `/` に変換するため、Windows で実行すると誤った失敗を報告します。ただし `tools/build_vpm_package.py` はエントリー名を最初から `/` で作るので、Windows の Python でも同じ zip になります（2026-10-25、0.1.0 の zip がバイト単位で再現できることを確認）。
 
 ```sh
 python3 tools/build_patched_zip.py   # 既存の zip と同じものが再現できるかを確認（公開済みの zip は上書きしません）
