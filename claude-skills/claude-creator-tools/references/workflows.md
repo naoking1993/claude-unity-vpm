@@ -2,7 +2,9 @@
 
 各専門スキルの工程で `cct_*` をどう使うかの手順。何を直すか、何を合格とするかは専門スキルが決める。ここに書くのは、呼ぶ順番、そろえる条件、結果のどこを読むか。引数とコードの意味は [ツールの仕様](tool-reference.md)。
 
-どの手順も、Unity を MCP で操作する規律（計画を1〜3行で示す、1件で試す、失敗後は再送せず読み戻す）は `unity-mcp-operations` に従う。手順はすべて Unity 実機で未検証（[台帳](verified-facts.md)）。
+どの手順も、Unity を MCP で操作する規律（計画を1〜3行で示す、1件で試す、失敗後は再送せず読み戻す）は `unity-mcp-operations` に従う。
+
+実機で確かめた範囲（2026-10-25、[台帳](verified-facts.md)）：`cct_environment`、アバターの4方向の撮影、`cct_avatar_audit`（`post_build` なし）、`cct_snapshot` の create・diff と restore のドライラン、`cct_world_gimmicks` の list と import のドライラン、`cct_world_audit`。比較撮影（`compare_with`）、`post_build`、restore・delete・import の実行、`cct_animator_inspect`、`cct_dependency_report` は実機で呼んだ記録が無い。それらを使う手順は、コードから組み立てたもの。
 
 ## 目次
 
@@ -174,8 +176,11 @@ Claude に見えるのは戻り値と、ディスクから読んだファイル�
 2. `cct_world_audit`：対象のプラットフォームを決めて呼ぶ（PC だけなら `platform: "pc"`）。大きいワールドは `timeout_seconds: 120`。
    1. `verdict` を先に読む：`build_blockers`（SDK・UdonSharp が実際に止める）→ `upload_blockers` → `other_errors`（止まらないが壊れる）。
    2. 次に warning。`ANDROID_*` はモバイルにも上げる場合だけ。`NOT_WHITELISTED` は SDK が検査しない推定（クライアントが消す）。
-   3. コードと `vrchat-world-creation` の章の対応は、そのスキルの「負荷とプラットフォーム」12章（目安。正はこのスキルの [ツールの仕様](tool-reference.md)）。
-   4. `not_checked` を報告に写す。
+   3. `NOT_WHITELISTED` を直す前に、重大度とレポートの `components.not_whitelisted[].reason` を見る。`stripped_at_build`（iwaSync3 など、ビルド時にパッケージ自身が消す）は info で対応不要。`scene_processor_may_strip` は推定なので、消えるかどうかはそのパッケージの説明で確かめる。`not_in_allowlist` だけが warning。EditorOnly タグを付けるのは、issue の文がそう勧めているときだけ（`shipping_component_in_subtree` がある物に付けると、子の Udon・AudioSource ごとビルドから消える）。`tool_version` が 0.1.0 なら iwaSync3 の4種と `VIDEO_PLAYER_NO_AUDIO` は誤検知で、EditorOnly の助言に従わない。
+   4. 0.1.1 で条件を絞ったもの（`MULTIPLE_SCENES_LOADED`＝info なら空のシーンだけ、`UI_NO_EVENT_SYSTEM`、`STATION_NO_COLLIDER`、`PICKUP_NOT_SYNCED`、`VIDEO_PLAYER_NO_AUDIO`、`LIGHTMAP_UV_MISSING`）は、出ていても直す前に文面の条件を読む。出なかった理由はレポートの `interactables.stations.no_collider_but_used_from_other_udon`、`interactables.pickups.not_synced_udon_controlled`、`interactables.video_players.items[].audio_sources_at_build`、`lighting.lightmaps.uv0_fallback_ok` にある。
+   5. PhysBone・Contact の数を報告するときは、どちらの数え方かを書く（`counts`・`interactables.dynamics.in_scope_shipped` はアップロードするシーンで EditorOnly を除く数、`interactables.dynamics.physbones` などは SDK と同じ読み込み中の全シーン）。
+   6. コードと `vrchat-world-creation` の章の対応は、そのスキルの「負荷とプラットフォーム」12章（目安。正はこのスキルの [ツールの仕様](tool-reference.md)）。
+   7. `not_checked` を報告に写す。
 3. ギミックの取り込み：
    1. `cct_world_gimmicks` の `list`：`udonsharp_installed`、`vrchat_worlds_sdk_version`、`samples[].missing_requirements`、`importable`、`dest_problem`、`found_elsewhere`。
    2. `import` をドライランで（`only` に `importable` から選んだ名前）。`plan` と `program_assets_planned` を見せる。
@@ -183,7 +188,7 @@ Claude に見えるのは戻り値と、ディスクから読んだファイル�
    4. Unity のコンパイルを待つ（`EDITOR_BUSY` が出なくなるまで）。もう一度 `list` で `imported` と `program_asset` を確かめる。
    5. `<dest>/README.md` を読み、配置と配線を `vrchat-world-creation` のレシピどおりに行う（cct の外の操作）。
    6. もう一度 `cct_world_audit` で `UDON_*`・`USHARP_*`・`EDITOR_LOG_USHARP_ERRORS` を見る。
-4. ライティングの前後：ベイクはユーザーに押してもらう（長い処理を1回の MCP 呼び出しでしない）。前後を `cct_capture_views` の `mode: "scene"` で撮り、`compare_with` で比べる。`isolated` はライトマップを外すので、ライティングの比較に使わない。
+4. ライティングの前後：ベイクはユーザーに押してもらう（長い処理を1回の MCP 呼び出しでしない）。前後を `cct_capture_views` の `mode: "scene"` で撮り、`compare_with` で比べる。`isolated` はライトマップを外すので、ライティングの比較に使わない。家具や部屋を `target` にすると `front` はその物の +Z から見た画で、見た目の正面とは限らない（ワールドの椅子では背もたれ側が写った）。最初の撮影の `contact_sheet` で向きを確かめ、報告ではビューの名前でなく写っている側で書く。
 5. 購入アセットや既存のギミックを消す・置き換える前は、`cct_dependency_report` の `reverse` と `cct_snapshot create`。
 
 ## 10. BPM・State の速度（vrchat-bpm-controls）

@@ -2,7 +2,7 @@
 
 `cct_*` が呼べない、止まる、結果がおかしいときの切り分け。MCP サーバー（Python・FastMCP）そのものの更新や改修は `unity-mcp-maintenance`、接続の切り分け表と既知エラーは `unity-mcp-operations` の verified-facts が正。ここには cct に関わる部分だけを書く。
 
-根拠は MCP for Unity 9.7.1 の Unity 側と Python サーバー（PyPI の wheel）のソースを読んだ調査（2026-10-24）と、パッケージのコード。ユーザーのサーバーはローカル改修版 `9.7.1+fastmcp4.2`（Python 3.14.5）で、改修版での挙動は**未実測**（[台帳](verified-facts.md)）。
+根拠は MCP for Unity 9.7.1 の Unity 側と Python サーバー（PyPI の wheel）のソースを読んだ調査（2026-10-24）と、パッケージのコード。ユーザーのサーバーはローカル改修版 `9.7.1+fastmcp4.2`（Python 3.14.5）。2026-10-25 の確認で、改修版でも cct は単独 tool として登録されず、`execute_custom_tool` で呼べることが分かった。それ以外の改修版での挙動（打ち切りの応答など）は**未実測**（[台帳](verified-facts.md)）。
 
 ## 目次
 
@@ -21,17 +21,17 @@
 ## 1. cct が tool 一覧に無い
 
 1. **`execute_custom_tool` で呼んでみる**：`{"tool_name": "cct_environment", "parameters": {}}`。成功すれば Unity 側の登録はできていて、単独 tool として出ていないだけ。以後もこの形で呼ぶ（引数の説明は [ツールの仕様](tool-reference.md)。この経路には引数のスキーマが無い。ツールの Description はリソース `mcpforunity://custom-tools` でも読める）。
-   - 単独 tool として出ない理由で最も疑わしいのは Python 3.14：9.7.1 のサーバーは、引数を持つカスタムツールを 3.14 で登録すると `KeyError: '<最初の引数名>'` で失敗する（手元で再現、上流の main では修正済み）。8つとも引数を持つ。ユーザーの改修版がこの修正を含むかは未確認。
-   - `execute_custom_tool` は、サーバーを `--project-scoped-tools` 付きで起動したときだけある。ユーザーの起動コマンドには付いている記録がある（2026-09-28〜29）。
+   - 単独 tool として出ない理由は Python 3.14：9.7.1 のサーバーは、引数を持つカスタムツールを 3.14 で登録すると `KeyError: '<最初の引数名>'` で失敗する（手元で再現、上流の main では修正済み）。8つとも引数を持つ。ユーザーの改修版はこの修正を含んでおらず、2026-10-25 の確認で8つとも失敗した（MCP for Unity 9.7.101 と 9.7.1 のプロジェクトの両方）。ユーザーの環境では単独 tool が無いのが通常の状態なので、最初から `execute_custom_tool` で呼んでよい。
+   - `execute_custom_tool` は、サーバーを `--project-scoped-tools` 付きで起動したときだけある。ユーザーの環境にはある（2026-10-25 の確認でこの経路で呼べた）。
 2. **`execute_custom_tool` も「Tool 'cct_…' not found」**なら、Unity がツールを登録していない。順に確かめる：
-   1. Claude Creator Tools がプロジェクトに入っているか（`Packages/io.github.naoking1993.claude-creator-tools`）。
+   1. Claude Creator Tools がプロジェクトに入っているか（`Packages/io.github.naoking1993.claude-creator-tools`）。VCC を使わず Unity を開いたままフォルダーを置いた場合は、パッケージとして認識されても中身の取り込みとコンパイルが走らないことがある（2026-10-25 の実例）。Unity を開き直してもらう。
    2. MCP for Unity（`com.coplaydev.unity-mcp`）が 9.7.1 以上か。MCP 用のアセンブリ（`Naoking.ClaudeCreatorTools.Mcp`）は、その版があるときだけコンパイルされる（`versionDefines` で `CCT_UNITY_MCP`）。無ければメニューだけが使える。
    3. コンパイルエラーで止まっていないか（5章）。
    4. Window > MCP for Unity の Tools で、Custom Tools の欄に `cct_*` があり On か（2章）。
    5. Unity が接続中か。複数の Unity を開いているなら、接続先のインスタンスがこのプロジェクトか（`unity-mcp-operations` の切り分け表）。
 3. **Unity が登録したツールの一覧**は MCP のリソース `mcpforunity://custom-tools` で読める。PC 上ならサーバーの `GET http://127.0.0.1:8080/api/custom-tools` でも見える（ソース上。ユーザーの改修版では未確認）。
 4. **サーバーのログ** `%LOCALAPPDATA%\UnityMCP\Logs\unity_mcp_server.log`（時刻は JST）で次の行を探す：
-   - `Failed to register custom tool 'cct_…' globally: '<引数名>'`：上の Python 3.14 の問題。そのツールだけ単独登録されず、`execute_custom_tool` では呼べる。
+   - `Failed to register custom tool 'cct_…' globally: '<引数名>'`：上の Python 3.14 の問題。そのツールだけ単独登録されず、`execute_custom_tool` では呼べる（ユーザーの環境では8つともこの行が出る）。
    - `Unexpected error during global custom tool registration`：登録の処理全体の失敗。
    - `already registered with a different schema; keeping existing definition.`：古い定義が残っている（4章）。
    - 単独登録の修正はサーバー側の変更で、このスキルの範囲外（`unity-mcp-maintenance`）。サーバーのファイルを直接編集しない。
@@ -85,8 +85,8 @@ MCP が使えない間の代わり：ユーザーに Unity の Tools > Claude Cr
 
 - ツールはファイルを UTF-8（BOM なし）で書き、返すパスは区切り `/` の絶対パスで、日本語をそのまま残す。
 - フォルダー名：撮影は `<日時>-<4桁>_<label>`。label の日本語は残り、ファイル名に使えない文字・空白・`%` は `_` になり、40字で切る。スナップショットの id は日時と label の ASCII の部分だけ。スナップショットの中のファイル名は Windows の MAX_PATH を避けるため短い。
-- 深い日本語のプロジェクトパスで、撮影の比較画像（`compare_<view>.png`）まで含めたパスが長くなりうる。Windows の長いパスでの書き込みは未実測。`WRITE_FAILED` が出たら label を短くする。
-- Claude Code の Read・Grep で、日本語を含む `/` 区切りの Windows パスを開けるかは未実測。開けなければ `\` 区切りに直して試す。
+- 深い日本語のプロジェクトパスで、撮影の比較画像（`compare_<view>.png`）まで含めたパスが長くなりうる。比較画像の書き込みは未実測（比較なしの撮影は `…/VRChatProjects/ひかるん/…` で書けた）。`WRITE_FAILED` が出たら label を短くする。
+- Claude Code の Read で、日本語を含む `/` 区切りの Windows パスの `contact_sheet.png` を開けた（2026-10-25）。開けないときは `\` 区切りに直して試す。
 - MCP for Unity 自体の日本語パスの不具合（起動バッチの文字化け、pid ファイル）は cct と別の問題で、9.7.101 で直っている（`unity-mcp-operations`）。
 
 ## 7. 出力の場所と片付け
@@ -114,7 +114,7 @@ MCP が使えない間の代わり：ユーザーに Unity の Tools > Claude Cr
 - **見つけられない参照**：コードからの名前での使用（`Shader.Find`・`Resources.Load`、導入補助が固定 GUID で探すもの）、バイナリで保存されたアセット（`BINARY_SERIALIZATION`）。
 - **プラットフォームの見積もり**：テクスチャメモリはアクティブなビルドターゲットのインポート結果。別のプラットフォームの値は推定（`estimate_for`）。
 - **版の前提**：ランクの表は SDK 3.10.5 の値。SDK の計算が使えるときは SDK が正（`RANK_TABLE_MISMATCH`）。MA のビルド時の予測は MA 1.19.0-alpha.2・NDMF 1.15.0-beta.2 のソースで確かめたもので、ユーザーの記録にある MA 1.18.7・NDMF 1.14.8 でも同じと仮定している（メッセージに「推定」と書く）。
-- **ワールドの許可リスト**：`NOT_WHITELISTED` は、SDK がビルド時に検査せずクライアントが読み込み時に除去する、という推定に基づく。
+- **ワールドの許可リスト**：`NOT_WHITELISTED` は、SDK がビルド時に検査せずクライアントが読み込み時に除去する、という推定に基づく。ビルド時にパッケージのシーン処理が消す型は info にするが、処理の中身をソースで確かめてあるのは iwaSync3 だけで、ほかは「同じパッケージにシーン処理がある」ことからの推定（`reason: scene_processor_may_strip`）。ビルド後のシーンは読まない。
 
 ## 9. その他の症状
 
@@ -124,6 +124,9 @@ MCP が使えない間の代わり：ユーザーに Unity の Tools > Claude Cr
 | `INVALID_ARGUMENT`（platform） | `platform` は all・pc・android・ios だけ。Quest は `android` |
 | `TARGET_NOT_FOUND`（instance ID） | ドメインリロードで ID が変わった。階層パスで指定し直す |
 | 撮影に対象が写っていない・小さい | `contact_sheet` を見て確かめる。`NO_HUMANOID_HEAD`・`FRAMING_OUTLIERS_EXCLUDED`・`BAKE_FAILED` を見る。Play 中なら編集モードで撮る |
+| 小物・家具の `front` に背面が写る | 故障ではない。`front` は対象の +Z で、見た目の正面とは限らない（ワールドの椅子で実例）。`back` を正面として読む（tool-reference.md 4章） |
+| ワールド監査が iwaSync3 の `IwaSync3`・`Playlist`・`Screen`・`Speaker` を warning の `NOT_WHITELISTED` にし、EditorOnly タグを勧める | 0.1.0 の誤検知（`tool_version` を見る）。iwaSync3 はビルド時に自分で消すので対応不要で、EditorOnly タグを付けると子の Udon・AudioSource ごと消えてプレイヤーが壊れる。付けない。0.1.1 に上げると info になる。同じ版の `VIDEO_PLAYER_NO_AUDIO`（iwaSync3 の Unity プレイヤー）も誤検知 |
+| ワールド監査の PhysBone の数が `counts` と `interactables.dynamics` で違う | `dynamics.physbones` などは SDK と同じく読み込み中の全シーン・EditorOnly 込みで数える。`counts` と同じ数え方の値は 0.1.1 の `dynamics.in_scope_shipped` |
 | 前後の差が全体に出る | `COMPARE_CAMERA_DIFFERS`・`COMPARE_MISMATCH` を見る。`_Time` で動くシェーダーの差、`TEXTURE_STREAMING` の粗いミップも差になる |
 | 監査の値が Play 中と違う | Play 中は NDMF の Apply on Play で処理済みのことがある（`PLAY_MODE`）。Play を止めて比べる |
 | ブリッジが `no_unity_session` になった | cct はダイアログを出さない。SDK などのモーダルダイアログが開いていないかをユーザーに確かめてもらう（`unity-mcp-operations`） |

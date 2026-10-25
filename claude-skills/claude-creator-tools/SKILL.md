@@ -5,7 +5,7 @@ description: Unityに入れた自作VPMパッケージ Claude Creator Tools のM
 
 # Claude Creator Tools（cct_*）の使い方
 
-**ステータス: v0（2026-10-25 作成・Claude Creator Tools 0.1.0 に対応・Unity実機で未検証）。**
+**ステータス: v1（2026-10-25 改訂・Claude Creator Tools 0.1.1 に対応）。0.1.0 は 2026-10-25 にユーザーの PC（Unity 2022.3.22f1・VRChat SDK 3.10.5）のアバタープロジェクトとワールドプロジェクトで初回確認に合格。0.1.1（`cct_world_audit` の誤検知と文面の修正）は同じ日にワールドプロジェクトで `cct_world_audit` を1回実行し、0.1.0 の誤検知が出なくなったことを確かめた（項目ごとの突き合わせは未完了）。**
 
 自作の VPM パッケージ `io.github.naoking1993.claude-creator-tools`（表示名 Claude Creator Tools）が MCP for Unity に登録する8つの `cct_*` ツールを、どの工程で、どの引数で呼び、戻り値・レポート・画像をどう読むかをまとめる。何をどう直すかは決めない。それは各専門スキルが決める。引数・既定値・出力キー・issue コードは、パッケージのコード（`Editor/Mcp/*Tool.cs` の Description と Parameters、`Editor/Tools/*.cs` の冒頭コメントと `Run()`）から写した。記憶で補わない。
 
@@ -22,10 +22,10 @@ Unity への接続確認、破壊的操作の前の確認、計画の提示、1�
 ## 最初に確かめること
 
 1. **接続**：Unity MCP の tool が今のセッションに実在するか、接続先が意図したプロジェクトかは `unity-mcp-operations` の原則1で確かめる。
-2. **パッケージ**：Claude Creator Tools（0.1.0）がプロジェクトに入っているか。MCP ツールとして登録されるのは、MCP for Unity（`com.coplaydev.unity-mcp`）9.7.1 以上が入っているときだけ。入っていなければ Unity の Tools > Claude Creator Tools のメニューだけが使える。
-3. **見え方**：`cct_*` が単独の tool として一覧にあるか。無ければ `execute_custom_tool(tool_name="cct_...", parameters={...})` で呼ぶ。ユーザーのサーバーは Python 3.14 で動いており、引数を持つカスタムツールは単独 tool として登録されない可能性がある（8つとも引数を持つ）。どちらでも呼べなければ [トラブル対応](references/troubleshooting.md) の1章。
+2. **パッケージ**：Claude Creator Tools がプロジェクトに入っているか、版は何か（`cct_environment` の `tool_version`）。このスキルは 0.1.1 に合わせてある。0.1.0 の `cct_world_audit` は iwaSync3 の部品を warning にして EditorOnly タグを勧める（従うとプレイヤーが壊れる）ので、0.1.0 なら 0.1.1 に上げるよう伝える。MCP ツールとして登録されるのは、MCP for Unity（`com.coplaydev.unity-mcp`）9.7.1 以上が入っているときだけ。入っていなければ Unity の Tools > Claude Creator Tools のメニューだけが使える。
+3. **見え方**：`cct_*` が単独の tool として一覧にあるか。無ければ `execute_custom_tool(tool_name="cct_...", parameters={...})` で呼ぶ。ユーザーのサーバー（Python 3.14）では、2026-10-25 の確認で8つとも単独 tool として登録されず（サーバーログに `Failed to register custom tool 'cct_…' globally: '<最初の引数名>'`）、`execute_custom_tool` で呼べた。どちらでも呼べなければ [トラブル対応](references/troubleshooting.md) の1章。
 4. **最初の呼び出し**：`cct_environment` を呼ぶ。Unity の版、プロジェクトの種類（`project_kind`）、開いているシーンと未保存の有無、Play 中か、VRChat 関連パッケージの版、シーン内のアバターとワールド記述子（Blueprint ID 付き）、選択中のオブジェクト、出力フォルダーを1回で返す。コンパイル中なら `EDITOR_BUSY` で失敗する（返る `is_compiling` はふつう false）。Editor.log のコンパイルエラーは数えない（ワールドなら `cct_world_audit` が数える）。
-5. **更新の後**：パッケージを更新してツールの説明や引数が変わったときは、MCP サーバーを再起動するまで古い定義のまま動く。ユーザーに MCP for Unity ウィンドウで Stop Server → Start Server を押してもらい、Claude Code 側は `/mcp` で再接続する。
+5. **更新の後**：パッケージを更新してツールの説明や引数が変わったときは、MCP サーバーを再起動するまで古い定義のまま動く。ユーザーに MCP for Unity ウィンドウで Stop Server → Start Server を押してもらい、Claude Code 側は `/mcp` で再接続する（0.1.0 → 0.1.1 は説明と引数が同じなので、コンパイルが終われば新しいコードが動く）。VCC を使わず `Packages/` にフォルダーを置いて入れたときは、Unity を開き直してもらう（開いたまま置くと、パッケージとして認識されても中身が取り込まれないことがあった。2026-10-25）。
 6. **Play とコンパイル**：コンパイル中はどのツールも `EDITOR_BUSY` で止まるので、終わってから呼ぶ。Play 中は実行時の状態を読む（`PLAY_MODE`）。アップロード前の状態を見るときは Play を止めてから呼ぶ。
 
 ## 8つのツール
@@ -47,7 +47,7 @@ Unity への接続確認、破壊的操作の前の確認、計画の提示、1�
 - 全文は `report_path` の JSON（`<プロジェクト>/Library/ClaudeCreatorTools/Reports/`）にある。要約で足りないとき、または `data.response_trimmed` が付いている（応答が大きく一覧を短くした）ときだけ開き、Grep で必要なキーに絞る。`detail: "full"` で全文を会話に流さない。
 - 失敗すると `success: false`。原因のコードは `data.code`（`TARGET_NOT_FOUND`・`AMBIGUOUS_TARGET`・`INVALID_ARGUMENT`・`EDITOR_BUSY` など）。対象の候補は `data.candidates`（`cct_avatar_audit`・`cct_animator_inspect`）か `data.details`（`cct_capture_views` は `details.candidates`、`cct_dependency_report` は `details`）に並ぶ。推測で選ばず、ユーザーに選んでもらう。
 - issue の `code` は変わらない英字のコード、`message` は日本語の説明。コードの意味は [ツールの仕様](references/tool-reference.md)。
-- 画像は会話に返らない。PNG の絶対パスが返るので Read で開く。最初は `contact_sheet`（全ビューを並べた1枚）だけを開く。
+- 画像は会話に返らない。PNG の絶対パスが返るので Read で開く（日本語を含むパスでも開けた。2026-10-25）。最初は `contact_sheet`（全ビューを並べた1枚）だけを開く。`front` は対象の +Z（アバターの一部ならアバターのルートの +Z）で、小物では見た目の正面とは限らない（ワールドの椅子では `front` に背もたれ側が写った）。向きは画像で確かめてから報告する。
 - 対象の指定（`target`）：`""` か `"selection"` は選択中のもの、`"/Root/Child"` は階層パス、`"#12345"` は instance ID（ドメインリロードで変わる）、ほかにシーン内でユニークな名前、`"Assets/.../X.prefab"`。候補が複数あると `AMBIGUOUS_TARGET` で失敗するので、ユーザーに選んでもらってから呼び直す。
 - 時間：1回の呼び出しは既定30秒で打ち切られる。大きいアバター・ワールド、`post_build`、高解像度の撮影には `timeout_seconds`（例 120）を渡す。240 より大きくしない（Claude Code は HTTP の MCP 呼び出しから5分間何も返らないと中断する）。打ち切られても Unity 側で処理が続くことがあるので、書き込み系は再送せず `list`・`diff` で状態を確かめる。
 
@@ -75,7 +75,7 @@ Unity への接続確認、破壊的操作の前の確認、計画の提示、1�
 | `vrchat-hand-prop-setup` | 導入時の欠落確認、握り位置の目視 | 導入前に `cct_snapshot create`。`cct_avatar_audit` の `MISSING_SCRIPT`・`MISSING_SCRIPT_GUID`（m_Script の GUID）・`HUMANOID_OPTIONAL_BONES_MISSING`（指）。撮影は `cct_capture_views` の `views: "turnaround"`・`framing: "upper"` で両手と側面、近接は `target` を小物にして `mode: "scene"`。`face` プリセットは頭部の構図なので、持ったときの表情を見るときだけ使う |
 | `vrchat-bpm-controls` | State の速度設定を読む | `cct_animator_inspect` のレポートの `graph` で `speed`・`speed_param`・`motion_time_param` と Motion を読む（`speed` は 1 以外のときだけ、パラメーターは有効なときだけキーが入る）。2つの Controller を直接比べる機能は無い（2回呼んでレポートを比べる） |
 | `unity-mcp-operations` | 原則2の破壊的操作の前後 | 前に `cct_snapshot create`（変更するアセットと開いているシーン）。後に `diff` で何が変わったかを確かめ、戻すなら `restore` をドライラン → 同意 → `confirm: true`。MCP の削除は Undo に載らないので、削除の前は必ず退避する |
-| `vrchat-world-creation` | 点検、ギミック、ライティングの前後 | `cct_world_audit` の `verdict` を先に読む。ギミックは `cct_world_gimmicks` の `list` → ドライラン → `confirm: true`。ライティングの前後は `cct_capture_views` を `mode: "scene"` で撮る。ベイクのやり直しや置き換えの前は `cct_snapshot`、購入アセットを消す前は `cct_dependency_report` の `reverse` |
+| `vrchat-world-creation` | 点検、ギミック、ライティングの前後 | `cct_world_audit` の `verdict` を先に読む。`NOT_WHITELISTED` は重大度と `reason` を見る（`stripped_at_build` はビルド時にパッケージ自身が消すので対応不要。子に Udon・音源がある物に EditorOnly タグを付けない）。ギミックは `cct_world_gimmicks` の `list` → ドライラン → `confirm: true`。ライティングの前後は `cct_capture_views` を `mode: "scene"` で撮る。ベイクのやり直しや置き換えの前は `cct_snapshot`、購入アセットを消す前は `cct_dependency_report` の `reverse` |
 
 ## 完了の判断
 

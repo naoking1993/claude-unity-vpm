@@ -1,6 +1,6 @@
-# ツールの仕様（Claude Creator Tools 0.1.0）
+# ツールの仕様（Claude Creator Tools 0.1.1）
 
-出典はパッケージ `io.github.naoking1993.claude-creator-tools` 0.1.0 のコード：`Editor/Mcp/<Class>Tool.cs`（ツールの Description と Parameters、要約に残すキー `SummaryKeys`）、`Editor/Tools/<Class>*.cs`（冒頭コメントの issue コード表と `Run()`）、`Editor/Core/`（`CctResult`・`CctRunner`・`CctPaths`・`CctTargets`・`CctArgs`）。2026-10-25 にコードを読んで写した。Unity 実機での動作は未検証（[台帳](verified-facts.md)）。
+出典はパッケージ `io.github.naoking1993.claude-creator-tools` 0.1.1 のコード：`Editor/Mcp/<Class>Tool.cs`（ツールの Description と Parameters、要約に残すキー `SummaryKeys`）、`Editor/Tools/<Class>*.cs`（冒頭コメントの issue コード表と `Run()`）、`Editor/Core/`（`CctResult`・`CctRunner`・`CctPaths`・`CctTargets`・`CctArgs`）。2026-10-25 にコードを読んで写した。0.1.0 との違いは `cct_world_audit`（3章）と版の表記だけ（パッケージの `CHANGELOG.md` の 0.1.1 節）。0.1.0 は同じ日にユーザーの PC で初回確認に合格し、0.1.1 は `cct_world_audit` だけをワールドプロジェクトで1回実行した（[台帳](verified-facts.md)）。
 
 コードが変わったらこのファイルを直す。ここに無い引数やコードを記憶で足さない。
 
@@ -22,8 +22,8 @@
 
 ### 0.1 呼び方は2通り
 
-- **単独 tool**：一覧に `cct_avatar_audit` などがあれば、引数オブジェクトを渡して呼ぶ。Claude Code での名前は MCP サーバーの登録名が前に付く。ユーザーの記録ではサーバー名が `UnityMCP` なので `mcp__UnityMCP__cct_avatar_audit` の形と推定する（未実測）。
-- **`execute_custom_tool`**：単独 tool が無いときは、MCP for Unity の `execute_custom_tool` に `tool_name` と `parameters` を渡す。この経路はスキーマの検証も既定値の補完もしない（サーバー 9.7.1 の `services/tools/execute_custom_tool.py`）。既定値は C# 側で補うので、省いた引数は既定値になる。ツールの説明文は、MCP のリソース `mcpforunity://custom-tools` の `data.tools[].description` で読める（パッケージの README による。このファイルの方が詳しい）。
+- **単独 tool**：一覧に `cct_avatar_audit` などがあれば、引数オブジェクトを渡して呼ぶ。Claude Code での名前は MCP サーバーの登録名が前に付く。ユーザーの記録ではサーバー名が `UnityMCP` なので `mcp__UnityMCP__cct_avatar_audit` の形と推定する（ユーザーのサーバーでは単独 tool として出たことがなく、未実測）。
+- **`execute_custom_tool`**：単独 tool が無いときは、MCP for Unity の `execute_custom_tool` に `tool_name` と `parameters` を渡す。ユーザーのサーバー（Python 3.14）では 2026-10-25 の確認で単独 tool の登録が8つとも失敗し、この経路で呼べた。この経路はスキーマの検証も既定値の補完もしない（サーバー 9.7.1 の `services/tools/execute_custom_tool.py`）。既定値は C# 側で補うので、省いた引数は既定値になる。ツールの説明文は、MCP のリソース `mcpforunity://custom-tools` の `data.tools[].description` で読める（パッケージの README による。このファイルの方が詳しい）。
 
 この先の例は、各呼び出しを2行で書く。1行目が単独 tool の引数、2行目が `execute_custom_tool` の引数。
 
@@ -62,7 +62,7 @@
 
 - `issues` の `path`・`asset`・`value`・`limit` は、そのコードで意味があるときだけ入る。
 - 要約が推定約 7,000 トークンを超えるときは、`CctMcpBridge` がすべての一覧を40件（それでも大きければ25・15・10・5件）まで短くして `data.response_trimmed` を付ける（`lists` = 切った一覧のパスと元の件数、`kept_per_list` = 残した件数、`keys_omitted` = 丸ごと省いたキー）。issue は `max_issues` を既定の30より増やしていなければ15件、10件まで減る。これが付いていたら、要約の一覧は全件ではないので `report_path` を Grep する。`detail: "full"` は切らない。
-- 要約に残るキーはツールごとに決まっている（各章の「要約に残るキー」）。どのツールでも、それに加えて `tool`・`tool_version`（`0.1.0`）・`elapsed_ms` と、失敗の補足の `details`・`candidates` は要約に残る（`CctMcpBridge` の AlwaysKeptKeys）。`cct_environment` は全キーを要約に残す。
+- 要約に残るキーはツールごとに決まっている（各章の「要約に残るキー」）。どのツールでも、それに加えて `tool`・`tool_version`（`0.1.1`）・`elapsed_ms` と、失敗の補足の `details`・`candidates` は要約に残る（`CctMcpBridge` の AlwaysKeptKeys）。`cct_environment` は全キーを要約に残す。
 - 同じコードの issue が多いときは、ツールが1コードあたりの件数を絞る。残りの数の出し方はツールで違う：`cct_avatar_audit`・`cct_animator_inspect` は25件まで載せ、同じコードで「ほかに N 件」の issue を1つ足す（`value` が残りの数）。`cct_world_audit` は20件まで載せ、`ISSUES_TRUNCATED`（info、`value` に `code`・`total`・`omitted`）を足す。`cct_dependency_report` は100件まで載せ、`ISSUES_CAPPED`（info）を足し、コードごとの省いた数を `issues_capped` に入れる。
 
 失敗：`success: false`。日本語の理由は外側の `error` と `data.message` に、失敗コード（`TARGET_NOT_FOUND` など）は `data.code` に入る。外側の `message` は null になる。Unity 側の `ErrorResponse` は外側の `code` にも理由の文字列を入れるが、サーバー 9.7.1 は応答を `{success, message, error, data, hint}` に詰め替えるときにそれを捨てる（`services/custom_tool_service.py` の `_normalize_response`。ユーザーの改修版では未実測）。コードは必ず `data.code` で見る。
@@ -154,7 +154,7 @@ restore と delete はメニューに無い（id と確認が要るため）。�
 | `avatar_roots[]` / `world_descriptors[]` | 読み込み中のシーンの VRCAvatarDescriptor / VRC Scene Descriptor：`name`・`path`・`instance_id`・`active_in_hierarchy`・`scene`・`blueprint_id` |
 | `selection` | 選択中の GameObject（無ければ null） |
 | `output_dirs` | `reports`・`captures`・`snapshots` の絶対パス |
-| `tool`・`tool_version`・`elapsed_ms` | ツール名、パッケージ版（`0.1.0`）、所要時間 |
+| `tool`・`tool_version`・`elapsed_ms` | ツール名、パッケージ版（`0.1.1`。0.1.0 のままならワールド監査の誤検知が残っている）、所要時間 |
 
 `packages` の版は Package Manager の登録情報で、読み込まれている DLL の中身ではない。UdonSharp は SDK 3.4.0 以降 `com.vrchat.worlds` に含まれるので、`com.vrchat.udonsharp` が無くても U# が無いとは限らない（U# の有無は `cct_world_gimmicks list` の `udonsharp_installed`）。Editor.log のエラー、MCP サーバーの版、MCP for Unity の DLL は読まない。
 
@@ -344,11 +344,24 @@ restore と delete はメニューに無い（id と確認が要るため）。�
 | キー | 中身 |
 | --- | --- |
 | `verdict` | `sdk_build_blocked`（bool）、`build_blockers[{code, count}]`（SDK と UdonSharp が実際に止める error だけ）、`upload_blockers`（直近の Android/iOS ビルドが 100 MB 超）、`other_errors`（止まらないが VRChat で壊れる error）、`note` |
+| `scenes` | `scope`・`uploaded_scene`・`loaded[]`（`name`・`path`・`active`・`in_scope`・`is_dirty`・`root_count`・`gameobjects`・`editor_only_gameobjects`・`ndmf_preview`）・`hidden_objects_skipped`。`ndmf_preview: true` は NDMF が自分で開くプレビューシーン（`___NDMF Preview___`。閉じられない）で、`MULTIPLE_SCENES_LOADED` には数えない |
 | `platforms` | `requested`・`checked`・`active_build_target`・`active_target_is_mobile` |
-| `counts` | GameObject・コンポーネント・Renderer・三角形（全体とアクティブ）・Material・Texture・Light・Camera・ミラー・UdonBehaviour・Pickup・Station・ObjectSync・動画プレイヤー・AudioSource・PhysBone・Contact |
+| `counts` | GameObject・コンポーネント・Renderer・三角形（全体とアクティブ）・Material・Texture・Light・Camera・ミラー・UdonBehaviour・Pickup・Station・ObjectSync・動画プレイヤー・AudioSource・PhysBone・Contact（`scene` の範囲、EditorOnly を除く） |
+| `project` | アバター用パッケージ `avatar_packages`（`名前@版`）と、それを `package.json` の `dependencies`／`vpmDependencies` で必要としている入りのパッケージ `avatar_packages_required_by`（`{アバター用パッケージ: [必要としている側]}`）など |
+| `lighting` | `lightmaps` に `without_uv2`（`LIGHTMAP_UV_MISSING` の件数）と `uv0_fallback_ok`（UV2 は無いが UV0 が 0〜1 の重なりの無い展開なので出さなかった Renderer の件数と例）など |
 | `descriptor` | スポーン、Respawn の高さ、Reference Camera、Blueprint ID |
 | `gimmicks` | VRChat の動画プレイヤー、U# のクラス（名前空間ごと）、AudioLink・LTCGI・ProTV・VideoTXL・VizVid などの名前からの推定 |
 | `not_checked` | 確かめていないこと（実ビルド、U# のコンパイル結果そのもの、ClientSim と実機、サーバー側の設定、アカウントの条件、クライアントが実際に除去するコンポーネント、フレームレート） |
+
+レポートにだけ入るキーのうち、issue を出さなかった理由が分かるもの（0.1.1 で足した）：
+
+| キー | 中身 |
+| --- | --- |
+| `components.not_whitelisted[]` | 許可リスト外の型ごとに `type`・`assembly`・`count`・`examples`・`reason`。`reason` は `not_in_allowlist`（warning）、`stripped_at_build`（既知のシーン処理がビルド時に消す。`stripped_by` に処理の型）、`scene_processor_may_strip`（同じパッケージにシーン処理がある。推定。`scene_processors` に名前）、`probuilder_stripped_at_build`、`derived_in_project_assembly`（`NOT_WHITELISTED_DERIVED`）。その GameObject か子に VRChat で使われるコンポーネントがあれば `shipping_component_in_subtree` にその型 |
+| `interactables.pickups.not_synced_udon_controlled` | Object Sync は無いが Udon が置き場所を決めているピックアップ（件数と例）。`PICKUP_NOT_SYNCED` に数えない |
+| `interactables.stations.no_collider_but_used_from_other_udon[]` | Collider は無いが、別の GameObject の UdonBehaviour / U# が参照している Station（`station`・`referenced_by`）。`STATION_NO_COLLIDER` を出さない |
+| `interactables.video_players.items[].audio_sources_at_build` | Target Audio Sources は空だが、iwaSync3 がビルド時に Speaker を割り当てる Unity プレイヤー（`assigned_by`・`speakers`）。`VIDEO_PLAYER_NO_AUDIO` を出さない |
+| `interactables.dynamics` | `physbones`・`physbone_colliders`・`contacts` は SDK と同じく読み込み中の全シーン（EditorOnly を含む。`scope: "all_loaded_scenes"`）。`in_scope_shipped` は `counts.physbones` などと同じ数え方（`scene` の範囲、EditorOnly を除く）。0.1.0 ではこの2つが食い違って見えた |
 
 `build_blockers` に数えるコード：`NO_SCENE_DESCRIPTOR`・`MULTIPLE_SCENE_DESCRIPTORS`・`DESCRIPTOR_NOT_IN_UPLOAD_SCENE`・`PIPELINE_MANAGER_MISSING`・`MULTIPLE_PIPELINE_MANAGERS`・`PREFAB_STAGE_SDK_COMPONENTS`・`NO_SPAWNS`・`LAYERS_NOT_SETUP`・`COLLISION_MATRIX_NOT_SETUP`・`SDK2_EVENT_HANDLER`・`SDK2_COMPONENT`・`OBJECT_SYNC_MANUAL_UDON`・`OBJECT_SYNC_WITH_POOL`・`ANDROID_TEXTURE_FORMAT_NOT_ASTC`・`SCRIPT_COMPILATION_FAILED`・`USHARP_PROGRAM_NO_SOURCE`・`USHARP_SCRIPT_NOT_IN_USHARP_ASSEMBLY`・`USHARP_DUPLICATE_PROGRAM_ASSET`（いずれも error のとき）。`upload_blockers`：`BUNDLE_TOO_LARGE_MOBILE`。
 
@@ -357,7 +370,7 @@ restore と delete はメニューに無い（id と確認が要るため）。�
 | コード | 重大度 | 出どころ | 意味 |
 | --- | --- | --- | --- |
 | `PLAY_MODE` | warning | — | Play 中。ClientSim などが作った物も数える |
-| `MULTIPLE_SCENES_LOADED` | warning | SDK | 複数シーン。SDK は全部を数え、アクティブだけを上げる |
+| `MULTIPLE_SCENES_LOADED` | warning / info | EST | アクティブシーンのほかに中身（GameObject）のあるシーンが読み込まれている（warning。`value` にパスと中身）、またはほかのシーンが空（info、影響なし）。SDK は記述子・PipelineManager を読み込み中の全シーンで数えるが、ビルドするのはアクティブシーンだけ。NDMF のプレビューシーンは数えない。SDK 3.10.5 に複数シーンの検査そのものは無い |
 | `SCENE_UNSAVED` / `SCENE_DIRTIED` | info / warning | SDK / — | 未保存のシーン / 監査中に変更扱いになった（起きないはず） |
 | `SECTION_FAILED` | warning | — | 1つの節が例外。その節のデータは不完全 |
 | `UNITY_VERSION_MISMATCH` | warning | SDK | Unity が 2022.3.22f1 でない |
@@ -369,7 +382,7 @@ restore と delete はメニューに無い（id と確認が要るため）。�
 | `COLOR_SPACE_GAMMA` | info | SDK | Gamma（ビルド時に Linear へ切り替わる） |
 | `BUNDLE_TOO_LARGE_MOBILE` | error | SDK | 直近の Android/iOS ビルドが 104,857,600 B 超（アップロード拒否） |
 | `BUNDLE_LARGE_PC` | info | DOC | 直近の PC ビルドが 200 MB 超 |
-| `AVATAR_PACKAGES_IN_WORLD_PROJECT` | info | COM | ワールドプロジェクトにアバター用パッケージ |
+| `AVATAR_PACKAGES_IN_WORLD_PROJECT` | info | COM | ワールドプロジェクトにアバター用パッケージ。それを使うアバター用プラグインのエディタ拡張が API と合わずにコンパイルできないと Assembly-CSharp が作られない（Editor.log の `error CS` を確かめる。無ければ今は問題ない）。外すときは、それを必要としている側（`project.avatar_packages_required_by`）も一緒に外す |
 | `SDK2_EVENT_HANDLER` / `SDK2_COMPONENT` | error | SDK | VRC_EventHandler / VRCSDK2 のコンポーネント |
 | `EDITOR_LOG_CS_ERRORS` | info | EST | Editor.log 末尾の `error CS`（直っている可能性もある） |
 | `EDITOR_LOG_USHARP_ERRORS` | warning | EST | Editor.log 末尾の UdonSharp のエラー |
@@ -396,7 +409,8 @@ restore と delete はメニューに無い（id と確認が要るため）。�
 | `LAYER_SDK_CHECK_UNAVAILABLE` | info | — | SDK の比較を呼べず、自前で比較した |
 | `RESERVED_LAYER_USED` | warning | DOC | 予約レイヤーに物がある |
 | `MIRROR_REFLECTION_LAYER_RENDERER` | info | DOC | MirrorReflection レイヤーの Renderer（ミラーにだけ映る） |
-| `LIGHTMAP_NOT_BAKED` / `LIGHTMAP_OUTDATED` / `LIGHTMAP_UV_MISSING` | warning / info / info | DOC / EST / COM | 未ベイク / 一部にライトマップが無い / UV2 が無い |
+| `LIGHTMAP_NOT_BAKED` / `LIGHTMAP_OUTDATED` | warning / info | DOC / EST | 未ベイク / 一部にライトマップが無い |
+| `LIGHTMAP_UV_MISSING` | info | COM | Contribute GI のメッシュに UV2 が無く Generate Lightmap UVs も OFF で、Unity が代わりに使う UV0（1番目の UV）が 0〜1 に収まった重なりの無い展開でない。組み込みの Quad のように UV0 で足りるものは出さない（`lighting.lightmaps.uv0_fallback_ok`）。Read/Write が OFF のメッシュと 2万三角形を超えるメッシュは UV0 を確かめずに数える。Unity 組み込みのメッシュには Generate Lightmap UVs が無いことも文に書く |
 | `REALTIME_SHADOW_LIGHTS` | warning | DOC/EST | 影付きのリアルタイムライトが2つ以上 |
 | `BAKED_LIGHT_NOT_BAKED` | warning | COM | Baked/Mixed のライトが焼かれていない |
 | `NO_LIGHT_PROBES` | info | COM | ベイクしたのにライトプローブが無い |
@@ -430,28 +444,33 @@ restore と delete はメニューに無い（id と確認が要るため）。�
 | `USHARP_DUPLICATE_PROGRAM_ASSET` | error | UB | 1つのスクリプトを2つ以上のプログラムアセットが指す |
 | `USHARP_SCAN_TRUNCATED` | info | — | U# の走査が時間で止まった |
 | `PICKUP_NO_RIGIDBODY` / `PICKUP_NO_COLLIDER` | error / warning | SDK | Pickup に Rigidbody / Collider が無い |
-| `PICKUP_NOT_SYNCED` / `PICKUP_COLLIDES_WITH_PLAYER` | info | DOC | 同期していない / プレイヤーとぶつかるレイヤー |
-| `STATION_NO_COLLIDER` / `STATION_NO_INTERACT_UDON` | info | DOC | Station に Collider / Udon が無い |
+| `PICKUP_NOT_SYNCED` | info | DOC | VRC Object Sync（と旧式の Udon の SynchronizePosition）の無いピックアップ。Udon が置き場所を決めているもの（自分に UdonBehaviour があり開始時に掴めない、または祖先に Manual / Continuous の UdonBehaviour がある）は数えない（`interactables.pickups.not_synced_udon_controlled`、`value.udon_controlled_not_counted`）。Udon が動かしている物に Object Sync を足すと位置制御と競合することがある |
+| `PICKUP_COLLIDES_WITH_PLAYER` | info | DOC | Kinematic でないピックアップがプレイヤーとぶつかるレイヤーにある |
+| `STATION_NO_COLLIDER` | info | DOC | Station と同じ GameObject に Collider が無い（その物自体を Interact しても座れない）。別の GameObject の UdonBehaviour / U# がその Station を参照していれば出さない（例：椅子の Interact から UseStation。`interactables.stations.no_collider_but_used_from_other_udon`） |
+| `STATION_NO_INTERACT_UDON` | info | DOC | Station と同じ GameObject に UdonBehaviour が無い |
 | `MESH_COLLIDER_NONCONVEX_RIGIDBODY` | warning | EST | 動く Rigidbody の下に凹型の MeshCollider |
 | `OBJECT_POOL_EMPTY_ENTRY` | warning | EST | ObjectPool に空の項目 |
 | `PORTAL_NOT_AT_ROOT` / `PORTAL_NO_DESTINATION` | warning | DOC | ポータルがルートに無い / 行き先が無い |
 | `PEDESTAL_NO_BLUEPRINT` | warning | DOC | ペデスタルに blueprintId が無い |
 | `VIDEO_PLAYER_TOO_MANY` / `VIDEO_PLAYER_AUTOPLAY_MULTIPLE` | warning | DOC | 動画プレイヤーが3台以上 / 2台以上が自動再生 |
-| `VIDEO_PLAYER_NO_OUTPUT` / `VIDEO_PLAYER_NO_AUDIO` | warning / info | EST | 出力先 / 音の出口が無い |
+| `VIDEO_PLAYER_NO_OUTPUT` | warning | EST | Unity プレイヤーの Target Texture / Target Material Renderer が未設定、AVPro を参照する Screen が無い |
+| `VIDEO_PLAYER_NO_AUDIO` | info | EST | Unity プレイヤーの Target Audio Sources が空、AVPro を参照する Speaker が無い。iwaSync3 の下の Unity プレイヤーで、その iwaSync3 を参照する Speaker がある（ビルド時に `IwaSync3BuildProcessor` が割り当てる）なら出さない（`interactables.video_players.items[].audio_sources_at_build`）。同じ GameObject の AVPro プレイヤーに Speaker があれば「Unity プレイヤーで再生するモードのときだけ音が出ない可能性」という文になる |
 | `VIDEO_PLAYER_URL_NOT_ALLOWLISTED` / `VIDEO_PLAYER_HTTP_MOBILE` | info / warning | DOC | 既定 URL が許可リスト外 / http:// |
 | `AUDIO_NO_SPATIAL` / `AUDIO_ONSP_DEPRECATED` | warning | SDK | VRC Spatial Audio Source が無い / ONSPAudioSource |
 | `PHYSBONE_NO_PARENT` / `PHYSBONE_SHAPES_OVER_LIMIT` / `CONTACTS_OVER_LIMIT` | warning | SDK | PhysBone のルートに親が無い / PhysBone＋コライダー 1024 超 / Contact 1024 超 |
-| `UI_SHAPE_NO_CANVAS` / `UI_SHAPE_ON_UI_LAYER` / `UI_SHAPE_NOT_WORLD_SPACE` / `UI_SHAPE_NO_RAYCASTER` / `UI_NO_EVENT_SYSTEM` | warning | DOC | VRC Ui Shape の設定 |
+| `UI_SHAPE_NO_CANVAS` / `UI_SHAPE_ON_UI_LAYER` / `UI_SHAPE_NOT_WORLD_SPACE` / `UI_SHAPE_NO_RAYCASTER` | warning | DOC | VRC Ui Shape の設定 |
+| `UI_NO_EVENT_SYSTEM` | info | DOC | VRC Ui Shape があるのに EventSystem が無い。docs は必要としているが、ClientSim は自前の EventSystem を使い、VRChat クライアントでも EventSystem の無いワールドで UI が動いた例がある（2026-10-25）。クライアントで UI が反応しないときだけ確かめる |
 | `UI_CANVAS_NO_UI_SHAPE` / `UI_NAVIGATION_NOT_NONE` / `UI_SCROLL_SENSITIVITY` | info | DOC | 操作できる Canvas に Ui Shape が無い / Navigation が None でない / スクロール感度 |
 | `MISSING_SCRIPT` | error | EST | Missing Script |
 | `MISSING_REFERENCE` / `MISSING_PREFAB` | warning | EST | 削除済みの物への参照 / 元のプレハブが無い |
-| `NOT_WHITELISTED` | warning（ProBuilder は info） | WV | SDK3 ワールドの許可リストに無いコンポーネント（SDK は検査せず、クライアントが除去すると推定） |
+| `NOT_WHITELISTED` | warning / info | WV | SDK3 ワールドの許可リストに無いコンポーネント（SDK は検査せず、クライアントが読み込み時に除去すると推定）。info になるのは：ProBuilder の型（既定でビルド時に除去）、既知のシーン処理がビルド時に消す型（iwaSync3 の `IwaSync3`・`Playlist`・`Screen`・`Speaker`。`IwaSync3BuildProcessor` が設定を Udon に写してから削除する。その処理がコンパイルされているときだけ）、同じパッケージのエディタ用アセンブリにシーン処理（`IProcessSceneWithReport`／`[PostProcessScene]`）がある型（推定）。どれかは `components.not_whitelisted[].reason`。独自スクリプトに「EditorOnly タグを付ける」と助言するのは、その GameObject と子に VRChat で使われるコンポーネント（UdonBehaviour・AudioSource など）が無いときだけで、あるときは付けないよう案内する |
 | `NOT_WHITELISTED_DERIVED` | warning | WV/EST | 許可された型を継承したプロジェクト内の型 |
 | `EDITOR_ONLY_COMPONENTS` | info | WV | IEditorOnly のコンポーネント |
 | `REFERENCE_SCAN_TRUNCATED` / `SERIALIZE_FAILED` / `SDK_FIELD_NOT_FOUND` / `ISSUES_TRUNCATED` | info | — | 走査の打ち切り / 読めないコンポーネント / SDK の版違いでフィールドが無い（その検査は省く） / 1コード20件を超えた |
 | `ANDROID_SHADER_NOT_SUPPORTED` | warning（一部 info） | SDK | モバイルの許可リストに無いシェーダー |
 | `ANDROID_POST_PROCESSING` / `ANDROID_REALTIME_LIGHT` / `ANDROID_TRIANGLE_BUDGET` / `ANDROID_UNSUPPORTED_COMPONENT` | warning | DOC | モバイル：ポストプロセス無効 / リアルタイムライト / 25万三角形超 / Cloth・Dynamic Bone |
-| `ANDROID_LARGE_TEXTURE` / `ANDROID_TRANSPARENT_MATERIALS` / `ANDROID_GPU_INSTANCING_OFF` | info | DOC | モバイル：1024 px 超 / 透過・カットアウト / GPU Instancing OFF |
+| `ANDROID_LARGE_TEXTURE` | info | DOC | モバイルで 1024 px を超えると推定されるテクスチャ。元画像の長辺に Non-Power of 2 の丸め（`npotScale`）を当ててから、Android/iOS の Override の Max Size（無ければ既定の Max Size）で抑えた値で比べる（2の累乗でない 1300〜1440 px 程度の画像は 1024 で取り込まれるので数えない） |
+| `ANDROID_TRANSPARENT_MATERIALS` / `ANDROID_GPU_INSTANCING_OFF` | info | DOC | モバイル：透過・カットアウト / GPU Instancing OFF |
 
 `ANDROID_*` はワールドを Quest・モバイルにも上げる場合だけ関係がある。PC だけなら `platform: "pc"` で省く。
 
@@ -475,6 +494,8 @@ restore と delete はメニューに無い（id と確認が要るため）。�
 ## 4. cct_capture_views
 
 **目的**：対象の前方（対象の +Z。アバターの一部なら、そのアバターのルートの前方）を基準に、決まった角度から PNG を描く。前後で同じカメラ・ポーズ・照明にそろえて見た目を比べる。材質調整・軽量化・衣装や BlendShape の編集の前後に使う。
+
+**`front` の向き**：`front` はいつも対象の +Z から見た画で、見た目の正面とは限らない。アバターは +Z が顔の向きなので合うが、ワールドの家具・小物は作り方しだいで、2026-10-25 の確認ではワールドの椅子の `front` に背もたれ側が写った。向きを変える引数は無いので、`contact_sheet` で確かめ、逆なら `back` を正面として読む（`left`・`right` も入れ替わる）。
 
 **引数**（`compare_with` があると、省いた引数は前回の撮影から引き継ぐ）
 
