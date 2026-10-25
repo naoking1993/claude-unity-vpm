@@ -152,9 +152,12 @@ namespace Naoking.ClaudeCreatorTools
                 var requiredBy = PackageDependents(folders, avatarNames);
                 p["avatar_packages_required_by"] = requiredBy.ToDictionary(kv => kv.Key, kv => (object)kv.Value.Cast<object>().ToList());
                 var needed = requiredBy.Select(kv => $"{kv.Key} は {string.Join(", ", kv.Value)} が必要としています").ToList();
+                var alone = avatarNames.Where(n => !requiredBy.ContainsKey(n)).ToList();
                 ctx.Issue(CctSeverity.Info, "AVATAR_PACKAGES_IN_WORLD_PROJECT",
                     $"ワールドプロジェクトにアバター用パッケージが入っています ({string.Join(", ", avatarNames)})。これを使うアバター用プラグインのエディタ拡張が、入っている版の API と合わずにコンパイルできないと、Assembly-CSharp が作られなくなります (実例あり)。Editor.log に error CS が無ければ今は問題ありません。" +
-                    (needed.Count > 0 ? $"外すときは依存する側も一緒に外してください ({string.Join("。", needed)})" : "不要なら VCC から外せます"),
+                    (needed.Count == 0 ? "不要なら VCC から外せます"
+                        : (alone.Count > 0 ? $"{string.Join(", ", alone)} は入っている他のパッケージから必要とされていないので、不要なら単独で VCC から外せます。ほかを外すときは" : "外すときは") +
+                          $"依存する側も一緒に外してください ({string.Join("。", needed)})"),
                     value: avatarPackages);
             }
         }

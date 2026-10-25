@@ -218,19 +218,28 @@ namespace Naoking.ClaudeCreatorTools
 
         /// <summary>
         /// Components a third-party scene build processor destroys before the bundle is written (checked in its source), so the
-        /// client never sees them. iwaSync3: IwaSync3BuildProcessor (IProcessSceneWithReport) copies each component's settings
-        /// into its Udon children, moves them out and runs DestroyImmediate on every IwaSync3 / Playlist / Screen / Speaker of
-        /// the built scene (IwaSync3BuildProcessor.cs L14-53, Cleaning L99-103). Used only while the processor is compiled.
+        /// client never sees them. iwaSync3: IwaSync3BuildProcessor (IProcessSceneWithReport) runs each component's editor
+        /// ApplyModifiedProperties, moves the children it keeps out and runs DestroyImmediate on every IwaSync3 / DesktopBar /
+        /// Playlist / Queuelist / ListTab / Screen / Speaker of the built scene (IwaSync3BuildProcessor.cs L20-52, Cleaning
+        /// L99-104). What the editors write first differs: IwaSync3Editor (L203-391) sets the VideoCore / VideoController /
+        /// IwaSync3 Udon and the VRC Unity / AVPro video players, the DesktopBar / Playlist / Queuelist / ListTab / Screen
+        /// editors set their Udon child, and SpeakerEditor (L96-122) sets the child AudioSource and VRC Spatial Audio Source
+        /// and, when the mask has Live, adds a VRC AVPro Video Speaker - no Udon. Used only while the processor is compiled.
         /// </summary>
-        const string IwaSync3StripLabel = "iwaSync3 の IwaSync3BuildProcessor が設定を Udon に写してから削除する";
+        const string IwaSync3StripLabel = "iwaSync3 の IwaSync3BuildProcessor が設定を子の Udon に写してから削除する";
+        const string IwaSync3MainStripLabel = "iwaSync3 の IwaSync3BuildProcessor が設定を子の Udon (VideoCore など) と VRC 動画プレイヤーに写してから削除する";
+        const string IwaSync3SpeakerStripLabel = "iwaSync3 の IwaSync3BuildProcessor が音量・最大距離などの設定を子の AudioSource と VRC Spatial Audio Source に (Live 用なら VRC AVPro Video Speaker も付けて) 写してから削除する";
 
         static readonly Dictionary<string, (string Processor, string Label)> KnownBuildStrippedTypes =
             new Dictionary<string, (string Processor, string Label)>(StringComparer.Ordinal)
             {
-                [TIwaSync3] = (TIwaSync3BuildProcessor, IwaSync3StripLabel),
+                [TIwaSync3] = (TIwaSync3BuildProcessor, IwaSync3MainStripLabel),
+                ["HoshinoLabs.IwaSync3.DesktopBar"] = (TIwaSync3BuildProcessor, IwaSync3StripLabel),
                 ["HoshinoLabs.IwaSync3.Playlist"] = (TIwaSync3BuildProcessor, IwaSync3StripLabel),
+                ["HoshinoLabs.IwaSync3.Queuelist"] = (TIwaSync3BuildProcessor, IwaSync3StripLabel),
+                ["HoshinoLabs.IwaSync3.ListTab"] = (TIwaSync3BuildProcessor, IwaSync3StripLabel),
                 ["HoshinoLabs.IwaSync3.Screen"] = (TIwaSync3BuildProcessor, IwaSync3StripLabel),
-                [TIwaSync3Speaker] = (TIwaSync3BuildProcessor, IwaSync3StripLabel),
+                [TIwaSync3Speaker] = (TIwaSync3BuildProcessor, IwaSync3SpeakerStripLabel),
             };
 
         static (string Processor, string Label)? KnownBuildStripper(Type type)
@@ -641,6 +650,9 @@ namespace Naoking.ClaudeCreatorTools
         /// <summary>
         /// A non-power-of-two source size as the importer rounds it (TextureImporter.npotScale: ToNearest / ToLarger /
         /// ToSmaller; None keeps it). Rounding is monotonic, so rounding the larger dimension gives the larger imported one.
+        /// The texture type is deliberately not looked at: in Unity 2022.3.22f1 a 600x300 Sprite or Editor GUI texture is
+        /// imported at 512x256 when its npotScale is ToNearest. Choosing Sprite / GUI (the textureType setter or the Inspector's
+        /// TextureImporterSettings.ApplyTextureType) sets npotScale to None, and the texture then keeps 600x300.
         /// </summary>
         static int NpotScaled(int size, TextureImporter importer)
         {

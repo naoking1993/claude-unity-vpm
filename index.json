@@ -67,6 +67,29 @@
     },
     "io.github.naoking1993.claude-creator-tools": {
       "versions": {
+        "0.1.2": {
+          "name": "io.github.naoking1993.claude-creator-tools",
+          "displayName": "Claude Creator Tools",
+          "version": "0.1.2",
+          "unity": "2022.3",
+          "description": "VRChat のアバター改変・ワールド制作を Claude (MCP for Unity) から行うための Editor ツール集。アバター/ワールドの静的監査、多方向キャプチャと比較、変更前スナップショットと復元、Animator 解析、依存関係レポート、UdonSharp のワールドギミックのサンプルを MCP ツール (cct_*) と Tools メニューで提供します。MCP for Unity 9.7.1 以上が入っていれば cct_* ツールが自動登録されます (無くてもメニューから使えます)。0.1.0 は Unity 2022.3.22f1 のアバター・ワールドプロジェクトで初回確認済み、0.1.1 (そのときのワールド監査の誤検知・文面の修正) は同じワールドの再監査で確認済み、0.1.2 はその再監査で見つかった細かいずれの修正です。",
+          "author": {
+            "name": "naoking1993",
+            "url": "https://github.com/naoking1993/claude-unity-vpm"
+          },
+          "license": "MIT",
+          "dependencies": {},
+          "vpmDependencies": {},
+          "samples": [
+            {
+              "displayName": "World Gimmicks (UdonSharp)",
+              "description": "ワールドプロジェクト専用 (UdonSharp 必須)。アバタープロジェクトに入れるとコンパイルエラーになります。Tools/Claude Creator Tools のインポート機能を使うと UdonSharp の有無を確認してから取り込みます。",
+              "path": "Samples~/WorldGimmicks"
+            }
+          ],
+          "url": "https://naoking1993.github.io/claude-unity-vpm/io.github.naoking1993.claude-creator-tools-0.1.2.zip",
+          "zipSHA256": "976b17d9f6b4823f329331c86206b596b958aef5eb95c439628c5cf1b4bd707a"
+        },
         "0.1.1": {
           "name": "io.github.naoking1993.claude-creator-tools",
           "displayName": "Claude Creator Tools",
