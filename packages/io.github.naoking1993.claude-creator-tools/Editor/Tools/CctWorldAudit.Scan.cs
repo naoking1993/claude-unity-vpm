@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using UnityEditor;
 using UnityEngine;
 
@@ -131,6 +132,7 @@ namespace Naoking.ClaudeCreatorTools
 
         // ---- SDK3 world component allowlist ([WV] WorldValidation.cs 3.10.5: ComponentTypeWhiteListCommon L46-285 +
         // ComponentTypeWhiteListSdk3 L441-529; machine-checked against the file in research/world-requirements.md 6.1).
+        // These embedded copies are the fallback; the installed SDK's own arrays are preferred (see LoadSdkLists).
         // Matching mirrors ValidationUtils.WhitelistedTypes/AddDerivedClasses: a type is allowed when it or any base type is
         // listed. Names that do not resolve in the project are simply never matched (the SDK ignores them too).
 
@@ -247,8 +249,68 @@ namespace Naoking.ClaudeCreatorTools
             "Cinemachine.CinemachineCore",
         };
 
-        static readonly HashSet<string> AllowedNames = new HashSet<string>(AllowlistCommon.Concat(AllowlistSdk3), StringComparer.Ordinal);
         static readonly HashSet<string> AllowedPcOnlyNames = new HashSet<string>(AllowlistPcOnly, StringComparer.Ordinal);
+
+        // The lists above are copies of SDK 3.10.5. When the installed SDK exposes its own lists (WorldValidation is compiled
+        // from source in the VRC.SDKBase assembly: private static readonly string[] ComponentTypeWhiteListCommon /
+        // ComponentTypeWhiteListSdk3, public static readonly string[] ShaderWhiteList), those are used instead, so a newer or
+        // older SDK is mirrored exactly (its #if UNITY_STANDALONE / VRC_ENABLE_PLAYER_PERSISTENCE / UNITY_6000 branches as
+        // compiled in this editor). Read-only reflection; any failure falls back to the embedded copies.
+        const string TWorldValidation = "VRC.SDKBase.Validation.WorldValidation";
+
+        sealed class SdkLists
+        {
+            public HashSet<string> Allowed;        // Common + Sdk3, without the PC-only post-processing entries
+            public HashSet<string> MobileShaders;  // WorldValidation.ShaderWhiteList
+            public string AllowlistSource, ShaderListSource;
+        }
+
+        static SdkLists _sdkLists;
+        static SdkLists Lists => _sdkLists ?? (_sdkLists = LoadSdkLists());
+        static HashSet<string> AllowedNames => Lists.Allowed;
+
+        static SdkLists LoadSdkLists()
+        {
+            var l = new SdkLists();
+            var common = ReadSdkStringArray(TWorldValidation, "ComponentTypeWhiteListCommon");
+            var sdk3 = ReadSdkStringArray(TWorldValidation, "ComponentTypeWhiteListSdk3");
+            if (common != null && sdk3 != null && common.Length > 0 && sdk3.Length > 0)
+            {
+                l.Allowed = new HashSet<string>(common.Concat(sdk3).Where(n => !string.IsNullOrEmpty(n) && !AllowedPcOnlyNames.Contains(n)),
+                    StringComparer.Ordinal);
+                l.AllowlistSource = "sdk (" + TWorldValidation + ")";
+            }
+            else
+            {
+                l.Allowed = new HashSet<string>(AllowlistCommon.Concat(AllowlistSdk3), StringComparer.Ordinal);
+                l.AllowlistSource = "embedded copy (SDK 3.10.5)";
+            }
+            var shaders = ReadSdkStringArray(TWorldValidation, "ShaderWhiteList");
+            if (shaders != null && shaders.Length > 0)
+            {
+                l.MobileShaders = new HashSet<string>(shaders.Where(n => n != null), StringComparer.Ordinal);
+                l.ShaderListSource = "sdk (" + TWorldValidation + ".ShaderWhiteList)";
+            }
+            else
+            {
+                l.MobileShaders = new HashSet<string>(EmbeddedMobileShaderWhiteList, StringComparer.Ordinal);
+                l.ShaderListSource = "embedded copy (SDK 3.10.5)";
+            }
+            return l;
+        }
+
+        /// <summary>A static string[] field of a VRChat SDK type (any visibility); null when the type/field is absent.</summary>
+        static string[] ReadSdkStringArray(string typeName, string fieldName)
+        {
+            try
+            {
+                var t = CctSerialized.FindType(typeName);
+                if (t == null || !(t.Assembly.GetName().Name ?? "").StartsWith("VRC", StringComparison.Ordinal)) return null;
+                var f = t.GetField(fieldName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+                return f != null && f.FieldType == typeof(string[]) ? f.GetValue(null) as string[] : null;
+            }
+            catch (Exception) { return null; }
+        }
 
         /// <summary>
         /// Assemblies the VRChat client ships (Unity modules/packages, VRChat SDK, Cinemachine). A component that is only

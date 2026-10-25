@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using Object = UnityEngine.Object;
 
@@ -62,6 +63,7 @@ namespace Naoking.ClaudeCreatorTools
                     path: PathOf(descs[0]), value: Examples(descs.Select(PathOf)));
 
             AuditPipelineManagers(ctx, d, descs);
+            AuditPrefabStage(ctx, d, descs.Count, ctx.Get(K.PipelineManager).Count);
             if (descs.Count == 0) return;
 
             var primary = descs.FirstOrDefault(i => i.O.Scene == ctx.ActiveIndex);
@@ -73,6 +75,11 @@ namespace Naoking.ClaudeCreatorTools
                     path: PathOf(primary), value: primary.C.gameObject.scene.path);
             }
             ctx.Descriptor = primary;
+            // Estimate: the SDK finds it in the editor scene, but Unity strips EditorOnly-tagged objects from the built bundle.
+            if (primary.O.EditorOnly)
+                ctx.Issue(CctSeverity.Error, "DESCRIPTOR_EDITOR_ONLY",
+                    "VRC Scene Descriptor が EditorOnly タグ (自身か親) の付いたオブジェクトにあります。ビルド時に除去されるため、アップロードしたワールドに記述子が残りません (推定)。タグを Untagged にしてください",
+                    path: primary.O.Path);
             d["path"] = primary.O.Path;
             d["scene"] = primary.C.gameObject.scene.path;
             d["instance_id"] = primary.C.GetInstanceID();
@@ -103,6 +110,46 @@ namespace Naoking.ClaudeCreatorTools
             }
         }
 
+        /// <summary>
+        /// The SDK counts descriptors and PipelineManagers with Resources.FindObjectsOfTypeAll, which also returns the objects
+        /// of an open Prefab Mode stage: VRC.Tools.FindSceneObjectsOfTypeAll keeps every object whose scene name is not null
+        /// ([WB] A1-A3, [EX] D1) and GatherComponentsOfTypeInScene everything that is not a persistent asset ([WB] C4/C5).
+        /// The scene scan cannot see that preview scene, so the stage is checked here (read-only; only while one is open).
+        /// </summary>
+        static void AuditPrefabStage(Ctx ctx, Dictionary<string, object> d, int sceneDescriptors, int scenePipelineManagers)
+        {
+            MonoBehaviour[] behaviours;
+            try
+            {
+                var stage = StageUtility.GetCurrentStageHandle();
+                if (!stage.IsValid() || stage == StageUtility.GetMainStageHandle()) return;
+                behaviours = stage.FindComponentsOfType<MonoBehaviour>();
+            }
+            catch (Exception) { return; }
+            int stageDescriptors = 0, stagePipelineManagers = 0;
+            var examples = new List<string>();
+            foreach (var b in behaviours)
+            {
+                if (b == null || IsSdkExcluded(b.gameObject.hideFlags)) continue;
+                bool isDescriptor = CctSerialized.IsType(b, TSceneDescriptorBase);
+                bool isPipeline = !isDescriptor && CctSerialized.IsType(b, TPipelineManager);
+                if (!isDescriptor && !isPipeline) continue;
+                if (isDescriptor) stageDescriptors++;
+                else stagePipelineManagers++;
+                if (examples.Count < ExampleCap) examples.Add(CctTargets.GetPath(b.transform) + " (" + b.GetType().Name + ")");
+            }
+            d["prefab_stage"] = new Dictionary<string, object>
+            {
+                ["open"] = true, ["scene_descriptors"] = stageDescriptors, ["pipeline_managers"] = stagePipelineManagers, ["examples"] = Examples(examples),
+            };
+            if (stageDescriptors + stagePipelineManagers == 0) return;
+            bool blocks = sceneDescriptors + stageDescriptors > 1 || scenePipelineManagers + stagePipelineManagers > 1;
+            ctx.Issue(blocks ? CctSeverity.Error : CctSeverity.Warning, "PREFAB_STAGE_SDK_COMPONENTS",
+                $"Prefab Mode で開いているプレハブに VRC Scene Descriptor が {stageDescriptors} 個、PipelineManager が {stagePipelineManagers} 個あります。SDK はこれらもシーンの分と合わせて数えるため" +
+                (blocks ? "、「複数ある」エラーでビルドできません" : "、ビルド結果が変わるおそれがあります") + "。Prefab Mode を閉じてからビルドしてください",
+                path: examples.FirstOrDefault(), value: Examples(examples));
+        }
+
         static string EnumName(string[] names, int value) =>
             value >= 0 && value < names.Length ? names[value] : value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
@@ -122,9 +169,14 @@ namespace Naoking.ClaudeCreatorTools
                 return;
             }
             if (pms.Count > 1)
+            {
+                // Typical cause: an avatar (or a prefab exported from another project) left in the world scene keeps its own one.
+                var extra = pms.Where(p => !descs.Any(s => s.C != null && p.C != null && s.C.gameObject == p.C.gameObject)).Select(PathOf).ToList();
                 ctx.Issue(CctSeverity.Error, "MULTIPLE_PIPELINE_MANAGERS",
-                    $"PipelineManager が {pms.Count} 個あります。SDK はちょうど 1 個 (Scene Descriptor と同じ GameObject) でないとビルダーを開かず、ビルドも失敗します",
-                    path: PathOf(pms[0]), value: Examples(pms.Select(PathOf)));
+                    $"PipelineManager が {pms.Count} 個あります。SDK はちょうど 1 個 (Scene Descriptor と同じ GameObject) でないとビルダーを開かず、ビルドも失敗します" +
+                    (extra.Count > 0 ? $"。Scene Descriptor 以外の GameObject にあるもの ({extra.Count} 個、例: {extra[0]}) を削除してください (シーンに置いたアバターなどに付いていることが多いです)" : ""),
+                    path: extra.Count > 0 ? extra[0] : PathOf(pms[0]), value: Examples(pms.Select(PathOf)));
+            }
 
             var onDescriptor = pms.FirstOrDefault(p => descs.Any(s => s.C != null && p.C != null && s.C.gameObject == p.C.gameObject));
             pm["on_descriptor_object"] = onDescriptor.IsValid;
@@ -144,6 +196,11 @@ namespace Naoking.ClaudeCreatorTools
 
         static void ReadSpawns(Ctx ctx, Dictionary<string, object> d, Item descriptor, SerializedObject so)
         {
+            if (!HasProps(ctx, so, descriptor.C, "spawns", "RespawnHeightY"))
+            {
+                d["spawns"] = new Dictionary<string, object> { ["unknown"] = true };
+                return;
+            }
             var spawnsProp = so.FindProperty("spawns");
             var valid = new List<Transform>();
             int nullCount = 0, missingCount = 0;

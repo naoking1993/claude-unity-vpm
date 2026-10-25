@@ -172,6 +172,13 @@ namespace Naoking.ClaudeCreatorTools
             lb["modified"] = fi.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
 
             ParseBundleName(fi.Name, out var bundleTarget, out var bundleScene);
+            lb["target_source"] = "file_name";
+            if (bundleTarget == null)
+            {
+                // Unparsable name: decide mobile like the Builder panel does (ValidationEditorHelpers.IsMobilePlatform() = active target).
+                bundleTarget = EditorUserBuildSettings.activeBuildTarget.ToString().ToLowerInvariant();
+                lb["target_source"] = "active_build_target";
+            }
             lb["target"] = bundleTarget;
             lb["scene"] = bundleScene;
             bool matchesScene = bundleScene != null && ctx.Active.IsValid() &&
@@ -261,15 +268,17 @@ namespace Naoking.ClaudeCreatorTools
             {
                 var line = rawLine.TrimEnd('\r');
                 if (line.Length == 0) continue;
-                if (CsErrorRegex.IsMatch(line))
+                // U# first: its compile errors may quote Roslyn "error CS####" text but are U# (not Unity) failures.
+                if (IsUdonSharpErrorLine(line))
+                {
+                    usCount++;
+                    var clean = CleanLogLine(line);
+                    if (seenUs.Add(clean) && us.Count < ExampleCap) us.Add(Trim(clean, 400));
+                }
+                else if (CsErrorRegex.IsMatch(line))
                 {
                     csCount++;
                     if (seenCs.Add(line) && cs.Count < ExampleCap) cs.Add(Trim(line, 400));
-                }
-                else if (IsUdonSharpErrorLine(line))
-                {
-                    usCount++;
-                    if (seenUs.Add(line) && us.Count < ExampleCap) us.Add(Trim(line, 400));
                 }
             }
             d["cs_error_lines"] = csCount;
@@ -286,10 +295,27 @@ namespace Naoking.ClaudeCreatorTools
                     value: us.Cast<object>().ToList());
         }
 
-        static bool IsUdonSharpErrorLine(string line) =>
-            line.IndexOf("does not belong to a U# assembly", StringComparison.Ordinal) >= 0 ||
-            line.IndexOf("Failed to compile UdonSharp", StringComparison.Ordinal) >= 0 ||
-            (line.IndexOf("[UdonSharp]", StringComparison.Ordinal) >= 0 &&
-             (line.IndexOf("error", StringComparison.OrdinalIgnoreCase) >= 0 || line.IndexOf("exception", StringComparison.OrdinalIgnoreCase) >= 0));
+        // UdonSharp writes its log lines with a rich-text prefix, "[<color=#FF00FF>UdonSharp</color>] ..." for warnings and
+        // errors (UdonSharpUtils.LogWarning/LogError), and compile errors as "[<color=#FF00FF>UdonSharp</color>] <file>(<line>,
+        // <col>): <message>" (UdonSharpUtils.LogBuildError). Editor.log keeps the tags, so a plain "[UdonSharp]" never matches.
+        static readonly Regex UdonSharpPrefixRegex = new Regex(@"\[(?:<color=#[0-9A-Fa-f]{6,8}>)?UdonSharp(?:</color>)?\]", RegexOptions.Compiled);
+        static readonly Regex UdonSharpCompileErrorRegex = new Regex(@"UdonSharp(?:</color>)?\] .+\(\d+,\d+\): ", RegexOptions.Compiled);
+        static readonly Regex ColorTagRegex = new Regex(@"</?color(?:=[^>]*)?>", RegexOptions.Compiled);
+
+        static bool IsUdonSharpErrorLine(string line)
+        {
+            if (line.IndexOf("does not belong to a U# assembly", StringComparison.Ordinal) >= 0 ||
+                line.IndexOf("Failed to compile UdonSharp", StringComparison.Ordinal) >= 0 ||
+                line.IndexOf("Compile validation failed", StringComparison.Ordinal) >= 0)
+                return true;
+            if (line.IndexOf("UdonSharp", StringComparison.Ordinal) < 0 || !UdonSharpPrefixRegex.IsMatch(line)) return false;
+            return UdonSharpCompileErrorRegex.IsMatch(line) ||
+                   line.IndexOf("error", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   line.IndexOf("exception", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   line.IndexOf("is null", StringComparison.Ordinal) >= 0;
+        }
+
+        /// <summary>Log line for the report: rich-text color tags removed.</summary>
+        static string CleanLogLine(string line) => ColorTagRegex.Replace(line, "");
     }
 }

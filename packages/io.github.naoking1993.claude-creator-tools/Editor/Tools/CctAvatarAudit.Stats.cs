@@ -633,6 +633,9 @@ namespace Naoking.ClaudeCreatorTools
                     ["memory_mb"] = Round(Ranks.BytesToMegabytes(te.Bytes), 3),
                     ["used_by_materials"] = te.UsedBy.Count,
                 };
+                // Size the Unity texture inspector shows (internal TextureUtil, informational only; ranks use the SDK formula above).
+                var storage = StorageBytes(te.Texture);
+                if (storage.HasValue) row["storage_mb"] = Round(storage.Value / 1048576.0, 3);
                 if (te.Depth > 1) row["depth"] = te.Depth;
                 if (!Ranks.IsKnownFormat(te.Format) && (te.Kind != Ranks.TextureKind.RenderTexture && te.Kind != Ranks.TextureKind.Other))
                     row["note"] = "SDK の表に無い形式のため 16 byte/pixel で計算 (SDK と同じ)";

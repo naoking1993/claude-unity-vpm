@@ -55,9 +55,9 @@ namespace Naoking.ClaudeCreatorTools
     /// | TEXTURE_MAX_SIZE_OVER_8192        | error           | TextureImporter.maxTextureSize > 8192 (SDK upload error) |
     /// | TEXTURE_UNCOMPRESSED              | warning/info    | importer compression Uncompressed (warning when the texture costs >= 4 MB) |
     /// | TEXTURE_BOX_MIP_FILTER            | info            | Box mip filter (SDK suggests Kaiser) |
-    /// | ANDROID_INCOMPATIBLE_SHADER       | error/warning   | shader not in the SDK mobile whitelist (error when the active build target is Android/iOS) |
+    /// | ANDROID_INCOMPATIBLE_SHADER       | error/warning/info | shader not in the SDK mobile whitelist (error when the active build target is Android/iOS); info for Toon Standard (Outline), which mobile clients replace |
     /// | MISSING_SCRIPT                    | error           | GameObject with missing MonoBehaviours (GameObjectUtility.GetMonoBehavioursWithMissingScriptCount, nulls never filtered first) |
-    /// | MISSING_SCRIPT_GUID               | info            | m_Script GUID of a missing script found in the scene/prefab YAML, with whether that script exists in the project |
+    /// | MISSING_SCRIPT_GUID               | info            | m_Script GUID of a missing script found in the saved scene/prefab YAML (prefab chain of each object), with why it does not resolve (script_not_found / class_not_loadable / class_not_in_dll) |
     /// | MISSING_REFERENCE                 | warning         | ObjectReference pointing at a deleted/unloadable object (SerializedObject scan, capped) |
     /// | NOT_WHITELISTED                   | error           | component not allowed on avatars for the active build target (SDK error "will be removed by the client") |
     /// | NOT_WHITELISTED_MOBILE            | warning/error   | allowed on PC but not on Android/iOS (FinalIK, Cloth, Light, colliders, Rigidbody, joints, Unity constraints, Camera, AudioSource, ...) |
@@ -73,16 +73,21 @@ namespace Naoking.ClaudeCreatorTools
     /// | AVATAR_NOT_HUMANOID               | warning         | Animator avatar is not humanoid |
     /// | AVATAR_INACTIVE                   | error           | humanoid avatar is disabled in the hierarchy (SDK error; warning for prefab assets) |
     /// | HUMANOID_BONES_MISSING            | error           | required humanoid bones unmapped (SDK checks feet / upper arms / head / hands) |
-    /// | HUMANOID_OPTIONAL_BONES_MISSING   | info            | optional bones (fingers, eyes, jaw, upper chest, toes, shoulders) unmapped |
+    /// | HUMANOID_OPTIONAL_BONES_MISSING   | info            | optional bones (upper chest, toes, eyes, jaw, fingers) unmapped |
+    /// | HUMANOID_SPINE_HIERARCHY          | error           | shoulders / neck are not children of UpperChest (or Chest) (SDK AnalyzeIK error) |
+    /// | HUMANOID_LIMB_CHILD_ORDER         | warning         | lower arm/leg not the first child of the upper one, or hand/foot not the first child (SDK warning) |
+    /// | HUMANOID_SPLIT_HIERARCHY          | warning         | Hips is not an ancestor of both hands and feet (SDK warning) |
+    /// | ARMATURE_NOT_DIRECT_CHILD         | warning         | Animator.avatarRoot is a descendant of the avatar root, not the root itself (SDK error; read from the cached value, so warning) |
     /// | AVATAR_HEIGHT                     | error/warning   | shoulder height < 0.2 m (error), < 1.0 m / > 2.5 m / > 5 m (warning) (SDK builder rules) |
     /// | FEET_BELOW_ORIGIN                 | warning         | left foot below the avatar root (SDK warning) |
     /// | VISEME_MESH_MISSING               | error           | Lip Sync = Viseme Blend Shape without a face mesh (SDK error) |
-    /// | VIEWPOINT_SUSPICIOUS              | warning         | View Position at (0,0,0), below the root, or > 0.35 m (x avatar scale) from the head bone (heuristic) |
+    /// | VIEWPOINT_SUSPICIOUS              | warning         | View Position at (0,0,0), below the root, or farther from the head bone than 0.35 m x max(root scale, shoulder height / 1.4 m) (heuristic) |
     /// | LAYER_CONTROLLER_MISSING          | warning         | customised playable layer (not default) without controller, or the controller reference is missing |
     /// | GESTURE_MASK_MISSING              | error           | custom humanoid Gesture controller whose first layer has no AvatarMask (SDK error) |
     /// | WD_MIXED                          | warning         | one playable-layer controller mixes Write Defaults on/off (SDK rule: Additive layers and Direct blend tree states excluded) |
     /// | WD_MIXED_ACROSS_CONTROLLERS       | info            | controllers are each uniform but differ from each other (docs: keep WD consistent across the avatar) |
     /// | WD_OFF_EMPTY_MOTION               | warning         | WD-off state with no motion / empty clip / empty blend tree child (SDK warning) |
+    /// | WD_MERGE_ANIMATOR_NOT_CHECKED     | info            | MA Merge Animator controllers are merged at build time and are not part of the Write Defaults checks |
     /// | BLUEPRINT_ID_EMPTY                | info            | PipelineManager has no blueprint ID (uploads as a new avatar) |
     /// | EXPRESSIONS_ASSET_MISSING         | error           | only one of Expressions Menu / Parameters is set, or the reference is missing (SDK error) |
     /// | PARAM_BUDGET_EXCEEDED             | error           | synced parameter cost > 256 bits (SDK error) |
@@ -103,9 +108,14 @@ namespace Naoking.ClaudeCreatorTools
     /// | POST_BUILD_NDMF_ERROR             | error/warning/info | error reported by an NDMF plugin while processing the clone (Error/InternalError block uploads) |
     /// | POST_BUILD_PARTIAL                | info            | the clone was processed by NDMF only (VRCFury / other SDK build hooks did not run) |
     /// | NDMF_APPLY_ON_BUILD_OFF           | warning         | NDMF "Apply on Build" is off: a real upload would skip MA/AAO entirely |
-    /// | POST_BUILD_CLEANUP_FAILED         | warning         | the temporary preview scene or clone could not be removed |
+    /// | POST_BUILD_CLEANUP_FAILED         | warning         | the temporary preview scene or clone could not be removed, or an NDMF plugin wrote temporary assets (deleted again) |
+    /// | POST_BUILD_STRAY_OBJECTS          | info            | root objects created in the user's scenes during NDMF processing were destroyed so they are not saved |
     /// | SCENE_DIRTIED                     | warning         | a loaded scene became dirty during the audit and could not be restored to clean |
+    /// | SCENE_DIRTY_CLEARED               | info            | a scene that was clean before became dirty (temporary clone creation) and its dirty flag was cleared again |
+    /// | AUDIT_SECTION_FAILED              | warning         | one section threw unexpectedly; it is omitted (value = stack excerpt) and the rest of the result stays valid |
     /// Per code at most <see cref="MaxIssuesPerCode"/> issues are listed; the rest are summarised in one extra issue.
+    /// Failure codes (success=false, data.candidates lists paths + instance IDs): TARGET_NOT_FOUND (spec does not resolve),
+    /// AMBIGUOUS_TARGET (several avatars / same-named objects), NO_AVATAR (nothing selected and no avatar in the loaded scenes).
     /// </summary>
     public static partial class CctAvatarAudit
     {
@@ -162,6 +172,7 @@ namespace Naoking.ClaudeCreatorTools
                 var ctx = new Ctx(args, r, root, platform, clock)
                 {
                     PrefabAssetPath = found.PrefabAssetPath,
+                    AssetObject = found.PrefabAssetPath != null ? found.Root : null,
                     FromPrefabContents = loadedPrefabRoot != null,
                     ExplicitTarget = !string.IsNullOrWhiteSpace(targetSpec) && !string.Equals(targetSpec.Trim(), "selection", StringComparison.OrdinalIgnoreCase),
                 };
@@ -175,6 +186,7 @@ namespace Naoking.ClaudeCreatorTools
                     try { PrefabUtility.UnloadPrefabContents(loadedPrefabRoot); }
                     catch (Exception e) { r.AddIssue(CctSeverity.Warning, "POST_BUILD_CLEANUP_FAILED", "プレハブの一時読み込みを解放できませんでした: " + e.Message, asset: found.PrefabAssetPath); }
                 }
+                MeshTriangleCache.Clear(); // static cache: do not keep meshes (or destroyed post_build meshes) referenced after the call
                 RestoreSceneDirtiness(r, dirtyBefore);
             }
             return r;
@@ -319,6 +331,9 @@ namespace Naoking.ClaudeCreatorTools
                 if (!cleared)
                     r.AddIssue(CctSeverity.Warning, "SCENE_DIRTIED",
                         $"監査中にシーン '{s.name}' が未保存状態になりました。内容は変更していませんが、保存せずに閉じても問題ありません", value: s.path);
+                else
+                    r.AddIssue(CctSeverity.Info, "SCENE_DIRTY_CLEARED",
+                        $"監査中 (一時オブジェクトの作成時) にシーン '{s.name}' が変更ありと記録されたため、元の未変更の状態に戻しました", value: s.path);
             }
         }
 
@@ -342,10 +357,22 @@ namespace Naoking.ClaudeCreatorTools
             public readonly int TopN;
             public readonly bool IncludeLists;
             public string PrefabAssetPath;
+            /// <summary>The resolved object inside the prefab asset (stable instance ID) when auditing loaded prefab contents.</summary>
+            public GameObject AssetObject;
             public bool FromPrefabContents;
             public bool ExplicitTarget;
             public Component Descriptor;
             public Animator RootAnimator;
+            /// <summary>Playable layers read from the descriptor (Descriptor.cs), used by the layer / Write Defaults checks.</summary>
+            public readonly List<LayerInfo> Layers = new List<LayerInfo>();
+            /// <summary>Humanoid mapping of the root Animator (Descriptor.cs); null when there is no Animator.</summary>
+            public HumanInfo Human;
+            /// <summary>Rows for data.components.non_whitelisted (Checks.cs).</summary>
+            public readonly List<object> NonWhitelisted = new List<object>();
+            /// <summary>Expression Parameters of the descriptor (Expressions.cs); compared with the NDMF-processed clone in PostBuild.cs.</summary>
+            public List<ParamDef> ParamDefs;
+            /// <summary>Short post_build summary appended to the result message ("ビルド後 PC Good / Android VeryPoor").</summary>
+            public string PostBuildSummary;
 
             /// <summary>The one pass over the audited hierarchy (Stats.cs).</summary>
             public HierarchyScan Scan;
@@ -433,29 +460,60 @@ namespace Naoking.ClaudeCreatorTools
                     "Play モード中です。SDK の計算は動作中の PhysBone を初期化し直すため使わず、自前の推定値を出しています。NDMF の Apply on Play 済みなら値はビルド後に近い状態です");
 
             // 1) SDK calculator first (it refreshes VRC constraint groups that the estimator then reads), 2) estimator.
+            // Every section below fails soft (AUDIT_SECTION_FAILED) so one unexpected exception does not hide the rest.
             SdkResult sdk = null;
             if (!ctx.PlayMode) sdk = RunSdkCalculator(ctx.Root, ctx.WantPc, ctx.WantMobile);
-            var est = Estimate(ctx, ctx.Scan);
+            Est est;
+            try { est = Estimate(ctx, ctx.Scan); }
+            catch (Exception e)
+            {
+                SectionFailed(ctx, "estimate", e);
+                est = new Est();
+            }
 
-            var avatar = DescribeAvatar(ctx);
-            r.Put("avatar", avatar);
+            r.Put("avatar", Section(ctx, "avatar", () => DescribeAvatar(ctx)));
             var output = BuildStatsOutput(ctx, est, sdk, true);
             r.Put("method", output.Method);
             r.Put("ranks", output.Ranks);
             r.Put("stats", output.Stats);
 
-            if (ctx.Descriptor != null) r.Put("expressions", AuditExpressions(ctx));
+            if (ctx.Descriptor != null) r.Put("expressions", Section(ctx, "expressions", () => AuditExpressions(ctx)));
             RunChecks(ctx, est, output);
-            r.Put("missing_scripts", output.MissingScripts ?? new Dictionary<string, object> { ["total"] = 0 });
-            r.Put("components", DescribeComponents(ctx));
-            r.Put("notes", BuildNotes(ctx, output));
-            if (ctx.IncludeLists) r.Put("breakdown", est.Breakdown(ctx.TopN));
-            r.Put("rank_tables", RankTablesForReport(ctx));
+            r.Put("missing_scripts", output.MissingScripts ?? new Dictionary<string, object> { ["total"] = ctx.Scan.MissingScriptTotal });
+            r.Put("components", Section(ctx, "components", () => DescribeComponents(ctx)));
+            r.Put("notes", Section(ctx, "notes", () => BuildNotes(ctx, output)));
+            if (ctx.IncludeLists) r.Put("breakdown", Section(ctx, "breakdown", () => est.Breakdown(ctx.TopN)));
+            r.Put("rank_tables", Section(ctx, "rank_tables", () => RankTablesForReport(ctx)));
 
-            if (ctx.Args.GetBool("post_build", false)) r.Put("post_build", RunPostBuild(ctx, output));
+            if (ctx.Args.GetBool("post_build", false)) r.Put("post_build", Section(ctx, "post_build", () => RunPostBuild(ctx, output)));
 
             ctx.FlushSuppressed();
             r.Message = BuildMessage(ctx, output);
+        }
+
+        static Dictionary<string, object> Section(Ctx ctx, string name, Func<Dictionary<string, object>> build)
+        {
+            try { return build() ?? new Dictionary<string, object>(); }
+            catch (Exception e)
+            {
+                SectionFailed(ctx, name, e);
+                return new Dictionary<string, object> { ["error"] = Unwrap(e).GetType().Name + ": " + Unwrap(e).Message };
+            }
+        }
+
+        static void Guard(Ctx ctx, string name, Action check)
+        {
+            try { check(); }
+            catch (Exception e) { SectionFailed(ctx, name, e); }
+        }
+
+        static void SectionFailed(Ctx ctx, string name, Exception e)
+        {
+            e = Unwrap(e);
+            var stack = e.StackTrace ?? "";
+            if (stack.Length > 600) stack = stack.Substring(0, 600) + "...";
+            ctx.R.AddIssue(CctSeverity.Warning, "AUDIT_SECTION_FAILED",
+                $"{name} の処理中に例外が発生したため、この部分を省略しました ({e.GetType().Name}: {e.Message})。ほかの結果は有効です", value: stack);
         }
 
         static Component FindDescriptorComponent(GameObject go)
@@ -477,7 +535,8 @@ namespace Naoking.ClaudeCreatorTools
             }
             var r = ctx.R;
             var head = ctx.Descriptor != null ? $"アバター '{ctx.Root.name}'" : $"階層 '{ctx.Root.name}' (Descriptor なし)";
-            return $"{head}: {string.Join(" / ", parts)}{(o.UsedSdk ? "" : " [推定値]")} / error {r.CountIssues(CctSeverity.Error)}, warning {r.CountIssues(CctSeverity.Warning)}";
+            var post = string.IsNullOrEmpty(ctx.PostBuildSummary) ? "" : $" / {ctx.PostBuildSummary}";
+            return $"{head}: {string.Join(" / ", parts)}{(o.UsedSdk ? "" : " [推定値]")}{post} / error {r.CountIssues(CctSeverity.Error)}, warning {r.CountIssues(CctSeverity.Warning)}";
         }
 
         // =====================================================================================================================

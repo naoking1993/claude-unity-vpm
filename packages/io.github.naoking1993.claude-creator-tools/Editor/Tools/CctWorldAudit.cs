@@ -33,7 +33,21 @@ namespace Naoking.ClaudeCreatorTools
     /// NotEditable/HideAndDontSave excluded), but the exporter builds only the ACTIVE scene. So the SDK-blocking checks
     /// (descriptor/pipeline counts, VRC_EventHandler, ObjectSync conflicts, PhysBone limits) use every loaded scene, and the
     /// content audit uses the 'scene' scope (default: active scene). Objects tagged EditorOnly (self or ancestor) are stripped
-    /// by Unity at build and are excluded from the content audit (but not from the SDK-mirrored counts).
+    /// by Unity at build and are excluded from the content audit (but not from the SDK-mirrored counts). FindObjectsOfTypeAll
+    /// also returns an open Prefab Mode stage, so descriptors/PipelineManagers there are reported (PREFAB_STAGE_SDK_COMPONENTS).
+    /// The component allowlist and the mobile shader list are read from the installed SDK (WorldValidation) by reflection, with
+    /// the embedded 3.10.5 copies as fallback (data: components.allowlist_source, android.shader_list_source). SDK fields that
+    /// a different SDK version lacks are reported as SDK_FIELD_NOT_FOUND and the dependent checks are skipped.
+    ///
+    /// Arguments: scene ('active' default | 'all' | path or name of a loaded scene), platform ('all' default | 'pc' | 'android' |
+    /// 'ios'; android and ios share the mobile limits), top_n (15, 1-500), check_references (true), max_reference_scan (5000),
+    /// check_editor_log (true), timeout_seconds (30; the missing-reference scan stops when the audit has run timeout - 10 s,
+    /// the UdonSharp program-asset scan after a quarter of that), plus the common detail / max_issues / save_report.
+    ///
+    /// Estimates (the output says so): triangles from index counts; texture memory from TextureUtil (current build target);
+    /// mobile texture size from the imported size and the platform override; "not whitelisted" because the SDK never checks the
+    /// allowlist itself (research 2.6-F: the client strips unknown components when loading); lightmap / probe / camera /
+    /// post-processing advice marked "community" comes from VRWorld Toolkit, not from VRChat.
     ///
     /// Issue codes (severity / origin: SDK = the SDK reports it the same way, DOC = creator docs, COM = community knowledge,
     /// EST = this tool's estimate):
@@ -64,9 +78,12 @@ namespace Naoking.ClaudeCreatorTools
     /// | NO_SCENE_DESCRIPTOR               | error   | SDK    | 0 VRC_SceneDescriptor in loaded scenes [WB A2, EX D1]                |
     /// | MULTIPLE_SCENE_DESCRIPTORS        | error   | SDK    | >1 descriptor in loaded scenes [WB A3, EX D1]                        |
     /// | DESCRIPTOR_NOT_IN_UPLOAD_SCENE    | error   | SDK    | the descriptor is not in the active scene [EX D5a/D5b]               |
+    /// | DESCRIPTOR_EDITOR_ONLY            | error   | EST    | descriptor object tagged EditorOnly (stripped from the bundle)       |
     /// | PIPELINE_MANAGER_MISSING          | error   | SDK    | 0 PipelineManager [WB C5, E1, PostBuildValidator]                    |
     /// | MULTIPLE_PIPELINE_MANAGERS        | error   | SDK    | >1 PipelineManager [WB A1/C4]                                        |
     /// | PIPELINE_MANAGER_NOT_ON_DESCRIPTOR| warning | SDK    | the PipelineManager is not on the descriptor's GameObject            |
+    /// | PREFAB_STAGE_SDK_COMPONENTS       | error / warning | SDK | open Prefab Mode stage holds descriptors/PipelineManagers: the |
+    /// |                                   |         |        | SDK's FindObjectsOfTypeAll counts include it (error if total > 1)    |
     /// | NO_SPAWNS                         | error   | SDK    | GetValidatedSpawnList() empty [WB C9, EX D3]                         |
     /// | SPAWN_NULL                        | warning | EST    | null / missing entries in spawns (ignored by the SDK)                |
     /// | SPAWN_TOO_FAR                     | warning | SDK    | a spawn axis >= 1000 [WB VerifySpawnPlacement]                       |
@@ -96,7 +113,8 @@ namespace Naoking.ClaudeCreatorTools
     /// | MATERIAL_SLOT_EMPTY               | info    | EST    | renderer has empty material slots                                    |
     /// | LARGE_TEXTURE                     | warning | SDK    | TextureImporter.maxTextureSize > 8192 [WB/PB]                        |
     /// | TEXTURE_MIP_BOX_FILTER            | info    | SDK    | mipmaps with Box filter (Kaiser recommended) [WB/PB]                 |
-    /// | SUBSTANCE_MATERIAL                | warning | SDK    | material asset is .sbsar [WB/PB]                                     |
+    /// | SUBSTANCE_MATERIAL                | warning | SDK    | material asset is .sbsar [WB/PB] (3.10.5 never shows it: its scan  |
+    /// |                                   |         |        | GetSubstanceObjects(null) returns early)                             |
     /// | PARTICLE_BILLBOARD_ROLL           | info    | SDK    | Billboard particle renderer with allowRoll [WB]                      |
     /// | TMP_RECOMMENDED                   | info    | SDK    | UI.Text/TextMesh used and no TextMeshPro [WB]                        |
     /// | UI_DEFAULT_SHADER                 | info    | SDK    | uGUI graphic with UI/Default while Supersampled UI exists [WB]       |
@@ -105,6 +123,7 @@ namespace Naoking.ClaudeCreatorTools
     /// | PP_VOLUME_ON_MAIN_CAMERA          | warning | SDK    | PostProcessVolume under Camera.main [WB; hidden by ResetIssues]      |
     /// | PP_LAYER_MISSING                  | info    | COM    | volumes exist but Reference Camera has no PostProcessLayer           |
     /// | PP_VOLUME_LAYER_EMPTY             | info    | COM    | Reference Camera's PostProcessLayer volumeLayer is Nothing           |
+    /// | PP_HEAVY_EFFECT                   | info    | DOC    | active volume enables chromatic aberration / SSR / AO                |
     /// | MIRROR_ENABLED_AT_START           | warning | DOC    | mirror active+enabled in the saved scene                             |
     /// | MIRROR_MULTIPLE_ENABLED           | warning | DOC    | >= 2 mirrors enabled at start                                        |
     /// | MIRROR_NO_RENDERER                | warning | SDK    | no Renderer/material on the mirror object (it disables itself)       |
@@ -119,15 +138,20 @@ namespace Naoking.ClaudeCreatorTools
     /// | UDON_BUILTIN_MESH_REFERENCE       | warning | SDK    | Udon public variable references a builtin primitive mesh [WB]        |
     /// | OBJECT_SYNC_MANUAL_UDON           | error   | SDK    | VRCObjectSync with a Manual UdonBehaviour on the same object [WB C7] |
     /// | OBJECT_SYNC_WITH_POOL             | error   | SDK    | VRCObjectSync with VRCObjectPool on the same object [WB C8]          |
-    /// | USHARP_PROXY_NO_BACKING           | error   | UB     | UdonSharpBehaviour without its backing UdonBehaviour (leftover)      |
+    /// | USHARP_PROXY_NO_BACKING           | warning | UB     | UdonSharpBehaviour without backing UdonBehaviour (U# normally repairs|
+    /// |                                   |         |        | it on scene open/Play/compile; left only if its program asset fails) |
     /// | USHARP_PROGRAM_NO_SOURCE          | error   | UB     | UdonSharpProgramAsset.sourceCsScript is null                         |
     /// | USHARP_SCRIPT_NOT_IN_USHARP_ASSEMBLY | error | UB    | program asset's script in an asmdef without U# Assembly Definition   |
     /// | USHARP_SCRIPT_IN_NON_USHARP_ASSEMBLY | info | UB     | same, but no program asset found (U# compile is not blocked)         |
-    /// | USHARP_ASSEMBLY_DEFINITION_NO_SOURCE | error | UB    | U# Assembly Definition asset with no sourceAssembly                  |
+    /// | USHARP_ASSEMBLY_DEFINITION_NO_SOURCE | warning | UB  | U# Assembly Definition asset with no sourceAssembly (U# ignores it)  |
+    /// | USHARP_DUPLICATE_PROGRAM_ASSET    | error   | UB     | one script referenced by >1 UdonSharpProgramAsset (U# aborts compile)|
+    /// | USHARP_SCAN_TRUNCATED             | info    | -      | program-asset scan stopped at the time budget                        |
     /// | PICKUP_NO_RIGIDBODY               | error   | SDK    | VRCPickup without Rigidbody (RequireComponent)                       |
     /// | PICKUP_NO_COLLIDER                | warning | SDK    | VRCPickup without Collider on the same object (inspector warning)    |
-    /// | PICKUP_NOT_SYNCED                 | info    | DOC    | pickups without VRCObjectSync (position is local)                    |
+    /// | PICKUP_NOT_SYNCED                 | info    | DOC    | pickups without VRCObjectSync or Udon (position is local)            |
+    /// | PICKUP_COLLIDES_WITH_PLAYER       | info    | DOC    | non-kinematic pickup on a layer that collides with players           |
     /// | STATION_NO_COLLIDER               | info    | DOC    | VRCStation without Collider (cannot be interacted with)              |
+    /// | STATION_NO_INTERACT_UDON          | info    | DOC    | VRCStation without an UdonBehaviour on the same object               |
     /// | MESH_COLLIDER_NONCONVEX_RIGIDBODY | warning | EST    | non-convex MeshCollider under a non-kinematic Rigidbody (unsupported)|
     /// | OBJECT_POOL_EMPTY_ENTRY           | warning | EST    | VRCObjectPool.Pool has null entries                                  |
     /// | PORTAL_NOT_AT_ROOT                | warning | DOC    | VRCPortalMarker not at the scene root (instance not synced)          |
@@ -151,13 +175,19 @@ namespace Naoking.ClaudeCreatorTools
     /// | UI_SCROLL_SENSITIVITY             | info    | DOC    | ScrollRect scroll sensitivity != 0                                   |
     /// | MISSING_SCRIPT                    | error   | EST    | GameObjectUtility.GetMonoBehavioursWithMissingScriptCount > 0        |
     /// | MISSING_REFERENCE                 | warning | EST    | object reference to a deleted asset/object (SerializedObject scan)   |
-    /// | NOT_WHITELISTED                   | warning | WV     | component type not in the SDK3 world allowlist (client strips it)    |
+    /// | MISSING_PREFAB                    | warning | EST    | prefab instance whose asset is missing (outermost object reported)   |
+    /// | NOT_WHITELISTED                   | warning | WV     | component type not in the SDK3 world allowlist (client strips it);  |
+    /// |                                   | (info)  |        | info for UnityEngine.ProBuilder.* (ProBuilder strips them at build)  |
     /// | NOT_WHITELISTED_DERIVED           | warning | WV/EST | derives from an allowed type but lives in a project assembly         |
     /// | EDITOR_ONLY_COMPONENTS            | info    | WV     | IEditorOnly components (exempt from the allowlist)                   |
     /// | REFERENCE_SCAN_TRUNCATED          | info    | -      | missing-reference scan stopped at max_reference_scan / time budget   |
     /// | SERIALIZE_FAILED                  | info    | -      | a component could not be read via SerializedObject                   |
+    /// | SDK_FIELD_NOT_FOUND               | info    | -      | an expected SDK serialized field is absent (other SDK version); the  |
+    /// |                                   |         |        | checks that need it are skipped instead of reporting false errors    |
     /// | ISSUES_TRUNCATED                  | info    | -      | more than 20 issues of one code; the rest are counted only           |
-    /// | ANDROID_SHADER_NOT_SUPPORTED      | warning | SDK    | mobile: Renderer shader not in WorldValidation.ShaderWhiteList [WB]  |
+    /// | ANDROID_SHADER_NOT_SUPPORTED      | warning | SDK    | mobile: Renderer shader not in WorldValidation.ShaderWhiteList [WB]; |
+    /// |                                   | (info)  |        | info for docs mobile shaders the SDK list misses (Toon Standard,    |
+    /// |                                   |         |        | VRChat/Mobile/Worlds/Supersampled UI)                                |
     /// | ANDROID_POST_PROCESSING           | warning | DOC/WV | mobile: post processing is disabled/stripped                         |
     /// | ANDROID_REALTIME_LIGHT            | warning | DOC    | mobile: active realtime lights ("bake lighting is essential")        |
     /// | ANDROID_LARGE_TEXTURE             | info    | DOC    | mobile: textures above 1024 px                                       |
@@ -235,7 +265,7 @@ namespace Naoking.ClaudeCreatorTools
         /// <summary>Runs the audit. Read-only; see the class comment for arguments, codes and data keys.</summary>
         public static CctResult Run(CctArgs args)
         {
-            var platform = args.Has("platform") ? args.GetEnum("platform", null, "all", "pc", "android", "ios") : "all";
+            var platform = string.IsNullOrWhiteSpace(args.GetString("platform")) ? "all" : args.GetEnum("platform", null, "all", "pc", "android", "ios");
             if (platform == null)
                 return CctResult.Fail($"platform は 'all' / 'pc' / 'android' / 'ios' のいずれかを指定してください (指定値: '{args.GetString("platform")}')", "INVALID_ARGUMENT");
 
@@ -255,6 +285,11 @@ namespace Naoking.ClaudeCreatorTools
                 MaxReferenceScan = args.GetInt("max_reference_scan", 5000, 0, 1000000),
                 CheckEditorLog = args.GetBool("check_editor_log", true),
             };
+            // Bounded work for the default 30 s MCP call: the missing-reference scan stops once the whole audit has run for
+            // timeout_seconds - 10 s, the UdonSharp program-asset scan after a quarter of that (both report a *_TRUNCATED info).
+            int timeout = args.GetInt("timeout_seconds", 30, 5, 3600);
+            ctx.RefDeadlineMs = Math.Max(3000L, (timeout - 10) * 1000L);
+            ctx.UdonSharpBudgetMs = Math.Max(2000L, (timeout - 10) * 250L);
             ctx.CheckPc = platform == "all" || platform == "pc";
             ctx.CheckMobile = platform == "all" || platform == "android" || platform == "ios";
 
@@ -366,6 +401,7 @@ namespace Naoking.ClaudeCreatorTools
             public string Platform;
             public bool CheckPc, CheckMobile, CheckReferences, CheckEditorLog;
             public int TopN, MaxReferenceScan;
+            public long RefDeadlineMs, UdonSharpBudgetMs;
             public Stopwatch Watch;
 
             public readonly List<Scene> Loaded = new List<Scene>();
@@ -402,19 +438,36 @@ namespace Naoking.ClaudeCreatorTools
             public int RefScanCount, RefScanSkipped, MissingReferenceTotal;
             public Stopwatch RefWatch;
 
+            public readonly HashSet<string> MissingFields = new HashSet<string>(StringComparer.Ordinal); // "Type|field" reported once
+
             readonly Dictionary<string, int> _issueCounts = new Dictionary<string, int>();
 
-            public List<Item> Get(K kind) => _buckets.TryGetValue(kind, out var l) ? l : Empty;
+            /// <summary>Items of one category, or the distinct union when several flags are OR-ed (buckets hold single flags).</summary>
+            public List<Item> Get(K kind)
+            {
+                if (_buckets.TryGetValue(kind, out var l)) return l;
+                ulong bits = (ulong)kind;
+                if (bits == 0 || (bits & (bits - 1)) == 0) return Empty;
+                var result = new List<Item>();
+                var seen = new HashSet<Component>();
+                for (int bit = 0; bit < 64; bit++)
+                {
+                    var k = (K)(1UL << bit);
+                    if ((kind & k) == 0 || !_buckets.TryGetValue(k, out var bucket)) continue;
+                    foreach (var i in bucket)
+                        if (seen.Add(i.C)) result.Add(i);
+                }
+                return result;
+            }
 
             public IEnumerable<Item> Audited(K kind) => Get(kind).Where(i => i.Audited);
 
             public void Add(K kinds, Item item)
             {
-                if (kinds == K.None) return;
-                for (int bit = 0; bit < 64; bit++)
+                // Called once per component of every loaded scene: visit only the set bits (usually 0-2).
+                for (ulong bits = (ulong)kinds; bits != 0; bits &= bits - 1)
                 {
-                    var k = (K)(1UL << bit);
-                    if ((kinds & k) == 0) continue;
+                    var k = (K)(bits & (~bits + 1));
                     if (!_buckets.TryGetValue(k, out var list)) _buckets[k] = list = new List<Item>();
                     list.Add(item);
                 }
@@ -566,6 +619,7 @@ namespace Naoking.ClaudeCreatorTools
                 "UdonSharp のコンパイル結果そのもの (Editor.log の末尾とコンパイル失敗フラグだけを見ています)",
                 "ClientSim・VRChat 実機 (PC / Android / iOS) での動作、同期・オーナー移譲の実挙動",
                 "VRChat サーバー側の設定 (Video Player Allowed Domains、Items、World Debugging、名前・サムネイル・権限・著作権同意)",
+                "アカウント側の条件 (アップロード権限 = Trust Rank New User 以上、iOS ビルドを許可されたアカウントか): SDK が API で確認します",
                 "クライアントが実際に除去するコンポーネント (SDK はビルド時に許可リストを検査しないため、許可リスト判定は推定)",
                 "フレームレート (公開審査の目安: スポーン地点で VR 1 人 45 FPS 以上)",
             });
@@ -647,6 +701,27 @@ namespace Naoking.ClaudeCreatorTools
                     path: CctTargets.GetPath(c.transform), value: c.GetType().FullName);
                 return null;
             }
+        }
+
+        /// <summary>
+        /// True when every serialized property exists. Otherwise (a different SDK version renamed/removed a field) reports
+        /// SDK_FIELD_NOT_FOUND once per type/field and returns false, so the caller skips the check instead of treating the
+        /// missing field as an empty value (which would turn into false errors such as NO_SPAWNS or UDON_NO_PROGRAM).
+        /// </summary>
+        static bool HasProps(Ctx ctx, SerializedObject so, Object target, params string[] names)
+        {
+            bool ok = true;
+            foreach (var n in names)
+            {
+                if (so.FindProperty(n) != null) continue;
+                ok = false;
+                var typeName = target != null ? target.GetType().FullName : "?";
+                if (ctx.MissingFields.Add(typeName + "|" + n))
+                    ctx.Issue(CctSeverity.Info, "SDK_FIELD_NOT_FOUND",
+                        $"{(target != null ? target.GetType().Name : "?")} にプロパティ '{n}' がありません。SDK のバージョンが想定 (3.10.5) と違う可能性があるため、この値を使う判定を省略しました",
+                        value: typeName + "|" + n);
+            }
+            return ok;
         }
 
         static SerializedObject TrySerializeAsset(Object o)
