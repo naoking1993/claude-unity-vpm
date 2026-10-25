@@ -5,12 +5,13 @@ Claude などの AI アシスタントと Unity Editor を MCP で接続する *
 - リスティング URL: `https://naoking1993.github.io/claude-unity-vpm/index.json`
 - 上流: https://github.com/CoplayDev/unity-mcp
 
-同じリスティングで、自作の **Claude Creator Tools**（`io.github.naoking1993.claude-creator-tools`）も配っています。MCP for Unity に `cct_*` ツールを足し、VRChat のアバター改変・ワールド制作を Claude から行いやすくする Editor 拡張です（下の「Claude Creator Tools」）。
+## 収録パッケージ
 
-| パッケージ | 収録 | 説明 |
+| パッケージ | 収録 | 内容 |
 | --- | --- | --- |
-| `com.coplaydev.unity-mcp` | 9.7.101 / 9.7.100 / 9.7.1 | MCP for Unity（下の各節） |
-| `io.github.naoking1993.claude-creator-tools` | 0.1.0 | Claude Creator Tools（Unity 実機では未検証の初版） |
+| `com.coplaydev.unity-mcp`（MCP for Unity） | 9.7.101 / 9.7.100 / 9.7.1 | Claude などと Unity を MCP で接続します。以下の「収録バージョン」以降はこのパッケージの説明です |
+| `io.github.naoking1993.claude-creator-tools`（Claude Creator Tools） | 0.1.0 | MCP for Unity に `cct_*` ツールを足し、VRChat のアバター改変・ワールド制作を Claude から行いやすくする Editor 拡張です。下の「Claude Creator Tools」 |
+| `io.github.naoking1993.avatar-checker`（Avatar Checker） | 1.0.0 | VRChat アバターのパフォーマンスランクの目安と、アップロード前に直したい問題点（Missing スクリプト、ピンクのマテリアル、パラメータ超過など）を一覧にします。アバターは書き換えません。結果は JSON でも出るので、MCP 経由で Claude からも使えます。詳しくは [`packages/io.github.naoking1993.avatar-checker/README.md`](packages/io.github.naoking1993.avatar-checker/README.md) |
 
 ## 収録バージョン
 
@@ -124,6 +125,7 @@ VCC のバージョン選択で **9.7.1** を選びます。9.7.1 の zip とエ
 
 - 上流 9.7.3 以降はサーバー起動の仕組みが変わっているため、このパッチは 9.7.1 系専用です。
 - 上流の新しい版に移るときは、先に FastMCP 4 改修版 wheel との互換性を確認してください。
+- 上流 10.3 への更新の評価（2026-10-23。結論は 9.7.101 据え置き）は [`docs/upgrade-10.3-assessment.md`](docs/upgrade-10.3-assessment.md) にあります。
 - このリスティングでパッチを更新する場合は **9.7.102, 9.7.103 …** と番号を上げます。同じバージョン番号で zip を差し替えることはしません（VCC は同じ番号を再インストールしないため）。
 - バージョンは常に `X.Y.Z` 形式にします。`-jp` などのプレリリース表記は使いません。理由は次の 3 つです。
   - VCC ではプレリリースが既定で表示されません。
@@ -146,7 +148,9 @@ VCC のバージョン選択で **9.7.1** を選びます。9.7.1 の zip とエ
 | `cct_world_gimmicks` | UdonSharp のワールドギミック 8 種の取り込み（UdonSharp がある時だけ） |
 
 - 導入は MCP for Unity と同じく VCC の Manage Project から（`0.1.0`）。追加・更新したら MCP サーバーを再起動してください。
-- **0.1.0 は Unity の中で一度も動かしていません。** 確かめたのはオフラインのコンパイルと静的チェックだけです（`tests/dev/`）。パッケージの README の「初回確認」を実機で行ってください。
+- **0.1.0 の実機確認はアバタープロジェクト 1 件だけです**（2026-10-25、Unity 2022.3.22f1・VRChat SDK 3.10.5・MCP for Unity 9.7.101、日本語名のプロジェクト）。パッケージの README の「初回確認」1〜7 は合格で、ワールドプロジェクト（8）は未確認です。zip 内の README・`package.json` の「未検証」の記述は、公開済みの zip を変えない運用のため 0.1.0 のままです。
+  - 利用者のサーバー（Python 3.14）では `cct_*` は単独ツールとして登録されず（`Failed to register custom tool 'cct_…' globally: '<最初の引数名>'`）、`execute_custom_tool` 経由で呼びます。
+  - Unity を開いたまま `Packages/` にフォルダーを置いて入れると、最初の更新ではパッケージとして認識されるだけで中身が取り込まれないことがありました。手で入れたときは Unity を開き直すか、もう一度更新してください（VCC から入れる場合は関係ありません）。
 - Claude 用のスキル（`claude-skills/`）: `claude-creator-tools`（ツールの使い方）、`vrchat-world-creation`（ワールド制作）、`avatar-world-skill-guide`（改訂版）。登録手順は [`claude-skills/README-CHANGES.md`](claude-skills/README-CHANGES.md)。
 
 ## 開発者向け
@@ -156,11 +160,14 @@ VCC のバージョン選択で **9.7.1** を選びます。9.7.1 の zip とエ
 | `tools/build_patched_zip.py` | 上流 9.7.1 zip（SHA256 照合つき）に `patches/<版>/` を当て、`RELEASES` にある各版の zip を作ります。エントリーの並び・名前（`\` 区切り）は上流 zip のままです。日時は、変更していないエントリーは上流のまま、差し替えた 2 エントリーは版ごとの固定の日時（`stamp`）にします（9.7.100 だけは上流のまま） |
 | `tools/verify_listing.py` | `index.json` と各 zip の整合性チェック、差分がパッチ由来の 2 ファイルだけであることのチェック、日時のチェック（差し替えたエントリーは上流より新しい・未来の日時でない・どの 2 版を比べても「同じ名前で同じ日時なら同じ中身」）、mono で `TerminalLauncher.cs` をコンパイルして日本語パスで生成される `.cmd` のバイト列の検証を行います |
 | `tests/cs/` | 上記検証用の最小スタブとハーネス |
-| `.github/workflows/verify.yml` | push / PR ごとに `verify_listing.py` を実行します |
-| `packages/<name>/` | ソースから作るパッケージ（Claude Creator Tools）。`.meta` は `tools/gen_meta.py` で作ります（GUID はパスから決まり、既存の `.meta` は上書きしません） |
-| `tools/build_vpm_package.py` | `packages/<name>/` から `<name>-<版>.zip` を作ります（並び・日時・属性が固定で、同じ zip を再現できます）。`--update-index` で `index.json` の項目も書きます |
+| `.github/workflows/verify.yml` | push / PR ごとに `verify_listing.py` と `verify_checker.py` を実行します |
+| `packages/io.github.naoking1993.claude-creator-tools/` | Claude Creator Tools のソース。`.meta` は `tools/gen_meta.py` で作ります（GUID はパスから決まり、既存の `.meta` は上書きしません） |
+| `tools/build_vpm_package.py` | `packages/<name>/` から `<name>-<版>.zip` を作ります（並び・日時・属性が固定で、同じ zip を再現できます）。`--update-index` で `index.json` の項目も書きます（Claude Creator Tools 用） |
 | `tools/build_skill_zips.py` | `claude-skills/<name>/` をアップロード用の zip（`claude-skills/dist/`）にします |
 | `tests/vrc-fields/`、`tests/dev/` | Claude Creator Tools のオフライン検証（Roslyn でのコンパイル、MCP 登録規則、VRChat SDK 3.10.5 とのフィールド照合、単体テスト、UdonSharp チェック）。手順は [`tests/dev/README.md`](tests/dev/README.md) |
+| `packages/io.github.naoking1993.avatar-checker/` | Avatar Checker のソース。`Editor/Core/` は Unity に依存しない部分（ランク表と JSON 出力）で、CI が mono でテストします |
+| `tools/build_checker_zip.py` | Avatar Checker の zip をソースから作ります（エントリーは名前順・無圧縮・固定日時で、同じ zip が再現できます）。`--write-meta` で足りない `.meta` を作ります |
+| `tools/verify_checker.py` | Avatar Checker の `index.json` / zip / `.meta` の整合性、zip がソースから再現できること、日時のチェック（版ごとに新しい・未来でない・「同じ名前で同じ日時なら同じ中身」）、`Editor/Core` のテスト（`tests/checker/`）を確認します。`--unity-dlls` を付けると Editor コード全体を Unity の参照アセンブリでコンパイルします |
 
 これらのスクリプトは **Linux・WSL・CI 専用**です。Windows 版 Python の `zipfile` はエントリー名の `\` を `/` に変換するため、Windows で実行すると誤った失敗を報告します。
 
@@ -173,6 +180,8 @@ python3 tools/verify_listing.py      # "OK" で終われば合格（mono-mcs / m
 
 1. `tools/build_patched_zip.py` の `RELEASES` に新しい版を足し、`patches/<新バージョン>/` にパッチを置きます。`stamp` は公開日の**前日の 00:00:00**（秒は偶数）にします。実行時刻にしないのは同じ zip を再現できるようにするため、前日にするのはどのタイムゾーンでも未来の日時にならないようにするためです。
 2. ビルドで表示された SHA256 を、`index.json` の新しいエントリーの `zipSHA256` と、`tools/verify_listing.py` の `PUBLISHED` に記録します。
+
+Avatar Checker の新しい版を出すときは、`package.json` の `version` を上げ、`tools/build_checker_zip.py` の `RELEASES` に新しい版と `stamp`（同じく公開日の前日 00:00:00。同じ日に 2 版出すなどで前の版の `stamp` より新しくならないときは、前の版の `stamp` + 2 秒）を足してから `python3 tools/build_checker_zip.py --write-meta` を実行します。表示された SHA256 を `index.json` の新しいエントリーと `tools/verify_checker.py` の `PUBLISHED` に記録します。公開済みの版の zip は変更しません。
 
 ## ライセンス
 

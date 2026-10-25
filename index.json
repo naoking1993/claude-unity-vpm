@@ -91,6 +91,30 @@
           "zipSHA256": "8bacf727b9a3057f283b85b6d26a96233c0e60a0587b1f45e685dccb27736ea1"
         }
       }
+    },
+    "io.github.naoking1993.avatar-checker": {
+      "versions": {
+        "1.0.0": {
+          "name": "io.github.naoking1993.avatar-checker",
+          "displayName": "Avatar Checker（アバター改変チェッカー）",
+          "version": "1.0.0",
+          "unity": "2022.3",
+          "description": "VRChat アバターのポリゴン・マテリアル・PhysBone・Expression パラメータ量・Missing スクリプトなどを読み取り、パフォーマンスランクの目安と問題点を一覧にするエディタ拡張。アバターは書き換えません。結果は JSON でも出力するので、MCP 経由で Claude などからも使えます。",
+          "author": {
+            "name": "naoking1993",
+            "url": "https://github.com/naoking1993/claude-unity-vpm"
+          },
+          "license": "MIT",
+          "keywords": [
+            "vrchat",
+            "avatar",
+            "performance",
+            "mcp"
+          ],
+          "url": "https://naoking1993.github.io/claude-unity-vpm/io.github.naoking1993.avatar-checker-1.0.0.zip",
+          "zipSHA256": "5dddcf744bfbb393af73e28dcbd1f406747afbc1946079855a8332fd8f3ed283"
+        }
+      }
     }
   }
 }
