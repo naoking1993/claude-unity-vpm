@@ -4,10 +4,12 @@
 **記憶ベースの値をここに書かない。** パッケージのコード、MCP for Unity のソース、ユーザーのスキルの記録、実測だけを書く。確かめられなかったものは「未確認」、推論は「推定」、ユーザーの PC で確かめていないものは「**未実測**」と書く。誤りが分かったら「【訂正】」と書いて直す。
 
 出典の略記：
-- `P/…`：パッケージ `packages/io.github.naoking1993.claude-creator-tools/`（claude-unity-vpm リポジトリ、0.1.0）。
+- `P/…`：パッケージ `packages/io.github.naoking1993.claude-creator-tools/`（claude-unity-vpm リポジトリ、0.1.1。0.1.0 から変わったのは `cct_world_audit` と版の表記だけ：`P/CHANGELOG.md` の 0.1.1 節）。
+- `実機 2026-10-25`：ユーザーの PC（Windows 11、Unity 2022.3.22f1、VRChat SDK 3.10.5）で **0.1.0** を、アバタープロジェクト「ひかるん」（MCP for Unity 9.7.101）とワールドプロジェクト「泡ワールド」（MCP for Unity 9.7.1）に入れ、パッケージの README の「初回確認」1〜8 を行った結果。出典はリポジトリの README（Claude Creator Tools の節）、`P/README.md`「既知の制限」、`P/CHANGELOG.md`、確認したセッションの記録。
+- `実機 2026-10-25（0.1.1）`：同じ日に 0.1.1 を泡ワールドに入れ、`cct_world_audit` を MCP 経由で1回呼んだ結果（確認したセッションの記録。`P/CHANGELOG.md` と `P/README.md` はこれより前に書かれたので「0.1.1 は未実行」のまま）。
 - `MCP調査`：MCP for Unity 9.7.1（Unity 側 `com.coplaydev.unity-mcp` と PyPI の `mcpforunityserver` 9.7.1 の wheel）のソースを読み、FastMCP 3.0.2 / 4.0.10 / 4.1.3 と Python 3.13 / 3.14 で再現試験をした調査ノート（クラウドセッション、2026-10-24）。
 - `S/<スキル名>`：アカウントからセッションに同期されたユーザーのスキル（2026-10-24 時点の写し）。
-- 「コード読解 2026-10-25」は、このスキルを書くためにパッケージのコードを読んだ日。「クラウド検査 2026-10-25」は、同じ日にクラウドセッション（Linux）でコンパイルと静的検査を通した結果。どちらも Unity 実機・ユーザーの PC での確認ではない。
+- 「コード読解 2026-10-25」は、このスキルを書くためにパッケージのコードを読んだ日。「クラウド検査 2026-10-25」は、同じ日にクラウドセッション（Linux）でコンパイルと静的検査を通した結果。「オフライン 2026-10-25」は、ユーザーの PC で Unity を使わずに Unity の DLL に対してコンパイルした結果。この3つは Unity の中での確認ではない。
 
 ---
 
@@ -15,15 +17,20 @@
 
 | 事実 | 出典 | 検証日 |
 | --- | --- | --- |
-| パッケージ名 `io.github.naoking1993.claude-creator-tools`、表示名 Claude Creator Tools、版 0.1.0、`unity` 2022.3、依存なし | `P/package.json` | コード読解 2026-10-25 |
-| `cct_environment` などが返す `tool_version` は `CctRunner.PackageVersion` = "0.1.0" | `P/Editor/Core/CctRunner.cs` | コード読解 2026-10-25 |
+| パッケージ名 `io.github.naoking1993.claude-creator-tools`、表示名 Claude Creator Tools、版 0.1.1（0.1.0 も VPM リスティングに残っている）、`unity` 2022.3、依存なし | `P/package.json`、リポジトリの `index.json` | コード読解 2026-10-25（【訂正】0.1.0 から更新） |
+| `cct_environment` などが返す `tool_version` は `CctRunner.PackageVersion` = "0.1.1" | `P/Editor/Core/CctRunner.cs` | コード読解 2026-10-25（【訂正】0.1.0 では "0.1.0"） |
+| 0.1.1 の変更は `cct_world_audit` の issue の条件・重大度・文面と、レポートのキーの追加だけ。MCP ツールの Description と引数（`Editor/Mcp/*Tool.cs`）は変わっていない | `P/CHANGELOG.md` 0.1.1 節、PR #9 の差分 | コード読解 2026-10-25 |
+| 0.1.1 は Unity 2022.3.22f1 の DLL に対してコンパイルできる | `P/CHANGELOG.md`、`P/README.md`「既知の制限」 | オフライン 2026-10-25 |
 | MCP ツールは8つ：cct_environment、cct_avatar_audit、cct_world_audit、cct_capture_views、cct_snapshot、cct_animator_inspect、cct_dependency_report、cct_world_gimmicks | `P/Editor/Mcp/*Tool.cs`、`compile.sh` の METACHECK 出力「8 tools」 | クラウド検査 2026-10-25 |
 | MCP 用のアセンブリ `Naoking.ClaudeCreatorTools.Mcp` は `com.coplaydev.unity-mcp` 9.7.1 以上のときだけ `CCT_UNITY_MCP` が定義されてコンパイルされる。本体 `Naoking.ClaudeCreatorTools.Editor` は MCP・Newtonsoft・VRChat SDK に依存しない | `P/Editor/Mcp/Naoking.ClaudeCreatorTools.Mcp.asmdef`（versionDefines・defineConstraints） | コード読解 2026-10-25 |
 | 全ツールの引数は必須が先・任意が後（MCP for Unity 9.7.1 のサーバーは逆順だと登録に失敗する）。必須は `cct_snapshot` の `action` だけ | `compile.sh` の METACHECK、`P/Editor/Mcp/CctSnapshotTool.cs` | クラウド検査 2026-10-25 |
 | Roslyn C# 9・Unity 2021.1 の参照 DLL・MCP for Unity のスタブでコンパイルが通る（COMPILE OK） | `compile.sh` | クラウド検査 2026-10-25 |
 | 読み取る VRChat SDK のフィールドが SDK 3.10.5 の実 DLL にある：CctAvatarAudit 114、CctAnimatorInspect 83、CctWorldAudit 83、CctWorldGimmicks 4、CctCaptureViews 3（FIELDCHECK OK） | `tests/vrc-fields/*.txt` と `FieldCheck.exe` | クラウド検査 2026-10-25 |
 | ワールドギミックのサンプル8本が U# の静的検査を通る（USHARP CHECK OK、0 errors） | `check_usharp.py`、`P/Samples~/WorldGimmicks/Scripts` | クラウド検査 2026-10-25 |
-| Unity Editor 上での実行、ユーザーのプロジェクトでの動作 | — | **未実測** |
+| 0.1.0 は2つのプロジェクトで「初回確認」1〜8 に合格した：コンパイルエラー 0（Console と Editor.log の `error CS`）、MCP 用のアセンブリも有効。Window > MCP for Unity > Tools の Custom Tools に8つが On で並んだ | 実機 2026-10-25 | 実機 2026-10-25 |
+| VCC を使わず Unity を開いたまま `Packages/` にフォルダーを置くと、パッケージとしては認識されても中身が取り込まれず、もう一度取り込ませると直った。手で置いたら Unity を開き直す | 実機 2026-10-25（ひかるん）、`P/README.md` | 実機 2026-10-25 |
+| 0.1.1 の `cct_world_audit` は泡ワールドで `success: true`、`tool_version: "0.1.1"`、error 0 / warning 6 / info 16（同じシーンの 0.1.0 は warning 11〜12 / info 15〜16）。0.1.0 の誤検知は出なくなった（次の節の表） | 実機 2026-10-25（0.1.1） | 実機 2026-10-25（項目ごとの突き合わせは**未完了**） |
+| 0.1.1 のほかのツール（変更なし）と、アバタープロジェクトでの 0.1.1 | — | **未実測** |
 
 ## 2. MCP の経路（呼び方・登録・時間・定義）
 
@@ -32,8 +39,9 @@
 | MCP for Unity 9.7.1 のサーバーが作る入力スキーマには `[ToolParameter]` の説明が入らない（名前・型・必須・既定値だけ）。そのため各ツールの Description に全引数を書いてある | MCP調査 §0-2・§3.3、`P/Editor/Mcp/CctMcpBridge.cs`（CommonParamsDoc） | 資料読解 2026-10-24 |
 | 9.7.1 のカスタムツール登録を Python 3.14 で動かすと、引数を持つツールは単独 tool として登録できない（`KeyError: '<引数名>'`）。上流 main では修正済み | MCP調査 §8（再現試験） | 資料読解 2026-10-24 |
 | ユーザーのサーバーは `9.7.1+fastmcp4.2`（ローカル改修版）、FastMCP 4.0.10、MCP SDK 2.2.0、Python 3.14.5、HTTP `127.0.0.1:8080`、起動引数に `--project-scoped-tools` | `S/unity-mcp-operations/references/verified-facts.md`（2026-09-28〜29 の記録） | 記録の写し（現在は未実測） |
-| 改修版が Python 3.14 の登録の修正を含むか、つまり cct が単独 tool として出るか | — | **未実測** |
+| ユーザーのサーバーでは cct は単独 tool として出ない。8つとも登録に失敗し、サーバーログに `Failed to register custom tool 'cct_…' globally: '<最初の引数名>'`。改修版は Python 3.14 の登録の修正を含んでいない | 実機 2026-10-25（ひかるん・泡ワールドの両方） | 実機 2026-10-25（【訂正】それまで未実測） |
 | `execute_custom_tool(tool_name, parameters)` は `--project-scoped-tools` のときだけ登録され、スキーマ検証も既定値の補完もしない | MCP調査 §2.2、サーバーの `services/tools/execute_custom_tool.py` | 資料読解 2026-10-24、コード読解 2026-10-25 |
+| ユーザーの環境では `execute_custom_tool` があり、初回確認で呼んだ `cct_environment`・`cct_capture_views`・`cct_avatar_audit`・`cct_snapshot`・`cct_world_gimmicks` はこの経路で `success: true` を返した（`tool_version` と `project_root` も正しい）。`cct_animator_inspect`・`cct_dependency_report` を MCP から呼んだ記録は無く、`cct_world_audit` はメニューから実行した | 実機 2026-10-25 | 実機 2026-10-25 |
 | HTTP では既定 30 秒で打ち切る。引数の `timeout_seconds`（または `timeoutSeconds`）があれば、Unity 側の上限は max(30, min(値, 3600))、サーバーの待ちはそれに 5 秒足した値 | サーバーの `transport/plugin_hub.py`（send_command_for_instance） | コード読解 2026-10-25 |
 | 打ち切られた呼び出し：まだ始まっていなければ Unity 側で取り消され、始まっていれば最後まで動く（同期ハンドラーは中断できない） | MCP調査 §4 | 資料読解 2026-10-24 |
 | HTTP の打ち切りは、サーバーが例外を受けて `success: false` と `hint: "retry"` を返す形になる | サーバーの `transport/unity_transport.py`（send_with_unity_instance） | コード読解 2026-10-25（改修版では**未実測**） |
@@ -42,7 +50,7 @@
 | ツールの有効・無効は EditorPrefs `MCPForUnity.ToolEnabled.<ツール名>` で、PC の全プロジェクトに共通。無効なツールを呼ぶと `Tool '<name>' is disabled in the Unity Editor.` | MCP調査 §7、Unity 側 `TransportCommandDispatcher.cs` | 資料読解 2026-10-24 |
 | カスタムツールの戻り値は JSON の文字列で、画像は返せない。cct は PNG を保存して絶対パスを返す | MCP調査 §5.4、`P/Editor/Tools/CctCaptureViews.cs` | 資料読解 2026-10-24 |
 | 失敗時、MCP for Unity の `ErrorResponse` は外側の `code` と `error` に同じ理由の文字列を入れる。サーバー 9.7.1 は応答を `MCPResponse{success, message, error, data, hint}` に詰め替えるので、Claude に届く外側には `code` が無く、`message` は null。cct の失敗コードは `data.code`、理由は `error` と `data.message` | MCP調査 §5.1、サーバーの `services/custom_tool_service.py`（_normalize_response）・`models/models.py`（MCPResponse）・`models/unity_response.py`、`P/Editor/Mcp/CctMcpBridge.cs`、`P/Editor/Core/CctResult.cs` | コード読解 2026-10-25（改修版では**未実測**） |
-| Claude Code での tool 名が `mcp__UnityMCP__cct_*` になるか（サーバーの登録名 `UnityMCP` は記録から） | `S/unity-mcp-operations/references/verified-facts.md` | 推定・**未実測** |
+| Claude Code での tool 名が `mcp__UnityMCP__cct_*` になるか（サーバーの登録名 `UnityMCP` は記録から） | `S/unity-mcp-operations/references/verified-facts.md` | 推定・**未実測**（ユーザーのサーバーでは単独 tool が出ないので確かめようがない） |
 | 一覧の変更通知が改修版サーバーから Claude Code に届き、新しいツールが自動で出るか | — | **未実測** |
 
 ## 3. 出力の形と場所
@@ -57,7 +65,7 @@
 | 1コードあたりの issue の上限と残りの出し方：avatar_audit・animator_inspect は25件＋同じコードの「ほかに N 件」、world_audit は20件＋`ISSUES_TRUNCATED`、dependency_report は100件＋`ISSUES_CAPPED` と `issues_capped` | `P/Editor/Tools/CctAvatarAudit.cs`（FlushSuppressed）、`CctAnimatorInspect.cs`（FlushOverflow）、`CctWorldAudit.cs`（FinishIssues）、`CctDependencyReport.cs`（FlushIssueCaps） | コード読解 2026-10-25 |
 | 撮影は `Library/ClaudeCreatorTools/Captures/<id>_<label>/`、スナップショットは `<プロジェクト>/ClaudeCreatorTools/Snapshots/<id>/`（Assets の外、Library の外） | `P/Editor/Core/CctPaths.cs` | コード読解 2026-10-25 |
 | 返すパスは絶対パスで区切りは `/`。撮影フォルダーの label は日本語を残し、使えない文字・空白・`%` を `_` にして40字で切る | `P/Editor/Core/CctPaths.cs`（Normalize・SafeName） | コード読解 2026-10-25 |
-| Claude Code の Read・Grep が、日本語を含む `/` 区切りの Windows パスのレポート・PNG を開けるか | — | **未実測** |
+| 日本語を含むプロジェクトパス（`…/VRChatProjects/ひかるん/…`）で、レポート JSON の `project_root` は文字化けせず、Claude は `contact_sheet.png` を Read で開いて見た目を説明できた | 実機 2026-10-25（初回確認 2・5） | 実機 2026-10-25（【訂正】それまで未実測） |
 | 深い日本語のプロジェクトパスで撮影の比較画像を書けるか（Windows の長いパス） | — | **未実測** |
 
 ## 4. ツールごとの要点
@@ -68,7 +76,10 @@
 | ランクの表は SDK 3.10.5 の StatsLevels（PC・Quest）と同じ。Android と iOS は同じモバイルの表 | `P/Editor/Tools/CctAvatarAudit.Ranks.cs` | コード読解 2026-10-25 |
 | `upload.blocked` は、アクティブなビルドターゲットで SDK 3.10.5 のビルダーが止める error のコード（UploadBlockingCodes）があるか。MISSING_SCRIPT などは止まらない error として別に出す | `P/Editor/Tools/CctAvatarAudit.Output.cs` | コード読解 2026-10-25 |
 | `post_build` は一時クローンをプレビューシーンで NDMF の `AvatarProcessor.ProcessAvatar` に通す（生成アセットは保存しない）。VRCFury と SDK のビルド処理は通らない。Play 中は使えない | `P/Editor/Tools/CctAvatarAudit.PostBuild.cs` 冒頭コメント | コード読解 2026-10-25 |
-| `cct_world_audit` の `build_blockers` に数えるコードは18個（SdkBuildBlockerCodes）、`upload_blockers` は BUNDLE_TOO_LARGE_MOBILE | `P/Editor/Tools/CctWorldAudit.Gimmicks.cs` | コード読解 2026-10-25 |
+| `cct_world_audit` の `build_blockers` に数えるコードは18個（SdkBuildBlockerCodes）、`upload_blockers` は BUNDLE_TOO_LARGE_MOBILE | `P/Editor/Tools/CctWorldAudit.Gimmicks.cs` | コード読解 2026-10-25（0.1.1 でも同じ） |
+| 0.1.1 の `cct_world_audit` の変更：`MULTIPLE_SCENES_LOADED`（出どころ EST、NDMF のプレビューシーンを数えない、空のシーンだけなら info）、`NOT_WHITELISTED`（iwaSync3 の4種とシーン処理を持つパッケージの型は info、`reason`、子に出荷される部品があれば EditorOnly を勧めない）、`VIDEO_PLAYER_NO_AUDIO`（iwaSync3 の Speaker）、`STATION_NO_COLLIDER`（別の Udon からの参照）、`PICKUP_NOT_SYNCED`（Udon が置くもの）、`LIGHTMAP_UV_MISSING`（UV0 で足りるもの）、`ANDROID_LARGE_TEXTURE`（NPOT の丸め）、`UI_NO_EVENT_SYSTEM`（info）、`AVATAR_PACKAGES_IN_WORLD_PROJECT`（必要としている側）、`interactables.dynamics.in_scope_shipped` の追加 | `P/Editor/Tools/CctWorldAudit.cs` 冒頭の issue 表、`CctWorldAudit.Components.cs`・`.Features.cs`・`.Rendering.cs`・`.Project.cs`、`P/CHANGELOG.md` | コード読解 2026-10-25 |
+| iwaSync3 を info にするのは `HoshinoLabs.IwaSync3.IwaSync3BuildProcessor` がコンパイルされているときだけ。iwaSync3 の Speaker のフィールド名（`mask`）は検証記録から取り、iwaSync3 のソースそのものでは確かめていない | `P/Editor/Tools/CctWorldAudit.Components.cs`（KnownBuildStripper）、0.1.1 を作ったセッションの記録 | コード読解 2026-10-25 |
+| `LIGHTMAP_UV_MISSING` の UV0 の判定は、Read/Write が ON か組み込みのメッシュで、2万三角形以下のときだけ。ほかは確かめずに数える | `P/Editor/Tools/CctWorldAudit.Rendering.cs`（Uv0IsLightmapUnwrap、Uv0CheckMaxTriangles） | コード読解 2026-10-25 |
 | `cct_capture_views` の isolated はスクリプトを外したクローンをプレビューシーンで中立の照明で描き、ライトマップの参照を外す。比較の「変化」はどれかのチャンネルが 8 階調を超えて違う画素 | `P/Editor/Tools/CctCaptureViews.Session.cs`・`.Images.cs` | コード読解 2026-10-25 |
 | `cct_capture_views` の isolated で小物だけを対象にすると、クローンは小物の階層だけになり手は写らない | `P/Editor/Tools/CctCaptureViews.Session.cs`（InitIsolated は対象を Instantiate） | コード読解 2026-10-25 |
 | `cct_snapshot` の restore は書く前に今の状態を自動で退避する（pre-restore）。追加されたファイルは消さない | `P/Editor/Tools/CctSnapshot.cs` 冒頭コメント | コード読解 2026-10-25 |
@@ -84,7 +95,13 @@
 | メニューの名前は `Tools/Claude Creator Tools/<機能> (cct_…)/<項目>` の形（例「キャプチャ (cct_capture_views)/選択中を4方向」）。例外はワールドギミックで、`ワールドギミック (UdonSharp)/<項目>` | `P/Editor/Menu/*.cs` | コード読解 2026-10-25（同じ日に名前が変わった後の状態） |
 | `cct_avatar_audit`・`cct_world_audit` は `platform` が all・pc・android・ios 以外なら `INVALID_ARGUMENT` で失敗する（黙って all にしない） | `P/Editor/Tools/CctAvatarAudit.cs`・`CctWorldAudit.cs`（Run） | コード読解 2026-10-25 |
 | `cct_environment` は Editor.log のエラー、MCP サーバーの版、MCP for Unity の DLL を読まない | `P/Editor/Tools/CctEnvironment.cs` | コード読解 2026-10-25 |
-| 各ツールの1回の所要時間（ユーザーのアバター・ワールドで 30 秒に収まるか） | — | **未実測** |
+| 1回の所要時間（`elapsed_ms`）はどれも1秒未満：ひかるんで `cct_environment` 6、`cct_capture_views`（4方向・768・isolated）216、`cct_avatar_audit` 194、`cct_snapshot` の create 443・diff 52、`cct_world_gimmicks` 165。泡ワールドの `cct_world_audit` は 0.1.0 で 340、0.1.1 で 564 | 実機 2026-10-25 | 実機 2026-10-25（`post_build`・比較撮影・大きいプロジェクトの `reverse` は**未実測**） |
+| `cct_avatar_audit` は SDK の計算器を使えた（メッセージに `[推定値]` が付かない）。ひかるんの値（PC・モバイルとも Very Poor、三角形 78,958、テクスチャ 167.55 MB、スキンメッシュ 18、ボーン 402、マテリアル 21）は、SDK の計算処理を別に直接呼んだ値と同じだった。SDK の Control Panel の画面とは見比べていない | 実機 2026-10-25（ひかるん） | 実機 2026-10-25 |
+| `cct_snapshot`：シーンに未保存の変更があると create → diff で「変更1」になり、警告で知らせる（正しい動作）。保存済みのアセットで作ると差分 0、restore のドライランは何も書かない | 実機 2026-10-25（ひかるん・泡ワールド） | 実機 2026-10-25（restore・delete の実行は**未実測**） |
+| `cct_world_gimmicks` の `list`：UdonSharp の無いアバタープロジェクトでは U# なし・8種・取り込み不可、ワールドでは U# あり・8種。import のドライランは何も書かない | 実機 2026-10-25 | 実機 2026-10-25（import の実行は**未実測**） |
+| `cct_capture_views` の `front` は対象の +Z。ワールドの椅子では `front` に背もたれ側が写った（見た目の正面とは限らない） | 実機 2026-10-25（泡ワールド）、`P/README.md` | 実機 2026-10-25 |
+| 0.1.0 の `cct_world_audit`（泡ワールド、error 0 / warning 12 / info 16）を1件ずつシーン・SDK・同梱パッケージのソースと突き合わせると、正しい 16 件、誤検知 5 件（iwaSync3 の `IwaSync3`・`Playlist`・`Screen`・`Speaker` の `NOT_WHITELISTED` と `VIDEO_PLAYER_NO_AUDIO`）、一部だけ正しい 7 件。「SDK のビルドで止まる物は無い」の判定は SDK のビルダーのコードと照らして正しかった。0.1.0 の `NOT_WHITELISTED` が添えた「EditorOnly タグを付ける」に従うと iwaSync3 が壊れる | 実機 2026-10-25、`P/CHANGELOG.md` 0.1.1 節 | 実機 2026-10-25 |
+| 0.1.1 の同じシーンの結果：iwaSync3 の4種は info（「ビルド時に削除されるので対応不要。EditorOnly タグは付けない」）、`VIDEO_PLAYER_NO_AUDIO`・`MULTIPLE_SCENES_LOADED`（NDMF のプレビューシーンは `ndmf_preview: true`）・`STATION_NO_COLLIDER`・`PICKUP_NOT_SYNCED`・`LIGHTMAP_UV_MISSING`（`uv0_fallback_ok` 3件）は出ない、`UI_NO_EVENT_SYSTEM` は info、`ANDROID_LARGE_TEXTURE` は 38 枚、`AVATAR_PACKAGES_IN_WORLD_PROJECT` に `avatar_packages_required_by`（`nadena.dev.ndmf` ← `jp.lilxyzw.ndmfmeshsimplifier`）。0.1.1 を作ったときの見込みどおり | 実機 2026-10-25（0.1.1） | 実機 2026-10-25（項目ごとの突き合わせは**未完了**） |
 | 撮影の色・明るさが、ユーザーの PC（RTX 5080、Windows 11）の Game ビューと一致するか | — | **未実測** |
 
 ## 5. 専門スキルとの組み合わせの根拠
@@ -105,15 +122,13 @@
 
 ## 6. ユーザーの PC で確かめること（未実測の一覧）
 
-初めて cct を使うセッションで、次を確かめて上の表の「未実測」を書き換える。手順と合格の見え方はパッケージの README の「初回確認」にもある。
+パッケージの README の「初回確認」1〜8 は、0.1.0 で 2026-10-25 に合格した（上の表の「実機 2026-10-25」）。残っているのは次のもの。確かめたら上の表の「未実測」「未完了」を書き換える。
 
-1. ツール一覧に `cct_*` が単独 tool として出るか。出なければ `execute_custom_tool` で `cct_environment` が呼べるか。
-2. サーバーログに `Failed to register custom tool 'cct_…'` が出ているか。
-3. Window > MCP for Unity > Tools の Custom Tools 欄に8つが On で並ぶか。
-4. `cct_environment` の `project_root` に日本語が正しく出るか、`report_path` を Read で開けるか。
-5. 小さいアバターで `cct_avatar_audit`（`method.stats` が sdk か）と `cct_capture_views`（`contact_sheet` を開けるか、写っているか）の所要時間。
-6. `cct_snapshot` の create → diff を無害なアセット1つで往復し、Assets に一時フォルダーが残らないか。
-7. パッケージを更新したとき、サーバーの再起動なしで説明が変わらないことと、再起動で変わること。
+1. 0.1.1 の `cct_world_audit` の結果を1件ずつシーン・SDK・同梱パッケージと突き合わせる（0.1.0 のときと同じ方法）。
+2. 初回確認で呼んでいないもの：`cct_animator_inspect`、`cct_dependency_report`、`cct_avatar_audit` の `post_build`、`cct_capture_views` の `compare_with`（深い日本語パスで比較画像を書けるか）、`cct_snapshot` の restore・delete の実行、`cct_world_gimmicks` の import の実行。
+3. 大きいアバター・ワールドでの所要時間（30 秒、`timeout_seconds` 120 で収まるか）。
+4. パッケージの更新で Description や引数が変わったとき、サーバーの再起動なしでは説明が変わらず、再起動で変わること（0.1.0 → 0.1.1 は Description と引数が同じなので確かめられない）。
+5. 撮影の色・明るさと Game ビューの一致。
 
 ## 7. 還流先
 

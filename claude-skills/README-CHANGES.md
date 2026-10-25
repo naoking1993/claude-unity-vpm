@@ -2,6 +2,16 @@
 
 このフォルダーには、アカウントに登録するスキルの作業コピーが入っている。登録は本人が行う（Claude は自分でアップロードできない）。手順は `skill-registration-workflow`（2026-09-29 実測）に従う。
 
+## 改訂（2026-10-25 夜）：claude-creator-tools を Claude Creator Tools 0.1.1 に合わせた
+
+**登録し直しが要る。** アカウントの `claude-creator-tools` を削除してから、新しい zip をアップロードする（手順は下の「登録の手順」の1〜3と5。対象はこの1本だけ）。
+
+- 版の表記を 0.1.1 にした（`tool_version` を含む）。0.1.0 のままのプロジェクトでは、ワールド監査の iwaSync3 の誤検知と EditorOnly の助言に従わないよう案内する。
+- `tool-reference.md` の `cct_world_audit` の issue 表を 0.1.1 のコードに合わせた：`MULTIPLE_SCENES_LOADED`（warning/info・出どころ EST・NDMF のプレビューシーンを数えない）、`UI_NO_EVENT_SYSTEM`（info に。`UI_SHAPE_*` の行から分けた）、`NOT_WHITELISTED`（ビルド時に除去される型は info・`reason`・EditorOnly を勧める条件）、`VIDEO_PLAYER_NO_AUDIO`・`STATION_NO_COLLIDER`・`PICKUP_NOT_SYNCED`・`LIGHTMAP_UV_MISSING`・`ANDROID_LARGE_TEXTURE`・`AVATAR_PACKAGES_IN_WORLD_PROJECT` の条件。新しいレポートのキー（`interactables.dynamics.in_scope_shipped`、`scenes.loaded[].ndmf_preview` など）の表を足した。
+- `cct_capture_views` の `front` は対象の +Z で、家具・小物では見た目の正面とは限らないこと（ワールドの椅子の実例）を書いた。
+- 「Unity 実機で未検証」の記述を、2026-10-25 の実機確認の結果に直した：0.1.0 はアバタープロジェクトとワールドプロジェクトで初回確認に合格、ユーザーのサーバーでは `cct_*` は単独 tool にならず `execute_custom_tool` で呼ぶ、日本語パスの PNG を Read で開けた、所要時間、0.1.1 のワールド監査を1回実行して誤検知が消えたこと（項目ごとの突き合わせは未完了）。台帳の「未実測」の一覧も残りだけにした。
+- frontmatter（name・description）は変えていない。
+
 ## 入っているもの
 
 | スキル | 種類 | 中身 |
@@ -53,16 +63,16 @@
 **2) references/verified-facts.md の「tool一覧（実測）」の表の最後の行の前**
 
 ```markdown
-| cct_environment / cct_avatar_audit / cct_world_audit / cct_capture_views / cct_snapshot / cct_animator_inspect / cct_dependency_report / cct_world_gimmicks | read（write は cct_snapshot の restore・delete と cct_world_gimmicks の import だけ、confirm=true のとき） | Claude Creator Tools 0.1.0 のカスタムツール | **未実測**。Python 3.14 のサーバーでは単独 tool として登録されず execute_custom_tool 経由になる可能性（MCP for Unity 9.7.1 のソース調査 2026-10-24）。使い方は claude-creator-tools |
+| cct_environment / cct_avatar_audit / cct_world_audit / cct_capture_views / cct_snapshot / cct_animator_inspect / cct_dependency_report / cct_world_gimmicks | read（write は cct_snapshot の restore・delete と cct_world_gimmicks の import だけ、confirm=true のとき） | Claude Creator Tools 0.1.1 のカスタムツール | **実測 2026-10-25（ひかるん・泡ワールド、0.1.0）**：単独 tool としては登録されない（サーバーログ `Failed to register custom tool 'cct_…' globally: '<最初の引数名>'`、Python 3.14 の問題）。execute_custom_tool 経由で呼べた。使い方は claude-creator-tools |
 ```
 
 **3) SKILL.md のステータス行の末尾**（行の最後の `…霧島での実機確認）。**` の、閉じ括弧「）」の直前に足す）
 
 ```markdown
- / 2026-10-25 Claude Creator Tools（cct_*）への案内を原則1に、tool一覧に未実測の行を追記
+ / 2026-10-25 Claude Creator Tools（cct_*）への案内を原則1に、tool一覧に実測の行を追記
 ```
 
-実測したら（初めて `cct_*` を呼んだセッションで）、2) の「未実測」を「実測（日付・プロジェクト名）」と、単独 tool として出たか `execute_custom_tool` 経由だったかに書き換える。
+2) は 2026-10-25 の実機確認の結果で書き換え済み（それまでは「未実測」の案だった）。
 
 ## 今回は変えていないもの
 
