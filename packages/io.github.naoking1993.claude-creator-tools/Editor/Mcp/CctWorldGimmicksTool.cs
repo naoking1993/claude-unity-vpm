@@ -21,7 +21,9 @@ namespace Naoking.ClaudeCreatorTools.Mcp
                       "(SAMPLE_EXISTS_ELSEWHERE); never overwrites existing files unless overwrite=true and never replaces existing .meta; " +
                       "then AssetDatabase.Refresh and creates one UdonSharpProgramAsset (<Name>.asset) per script, also for a copy found " +
                       "elsewhere under Assets/ that has none (UdonSharp does not create them for copied scripts). Without confirm=true it " +
-                      "is a dry run returning plan and program_assets_planned. Returns files_written / files_skipped / files_failed / " +
+                      "is a dry run returning plan and program_assets_planned; for the real import pass timeout_seconds=120 (the " +
+                      "Refresh imports scripts and can exceed 30 s in big projects; a timed-out import still finishes, so call list " +
+                      "instead of repeating it). Returns files_written / files_skipped / files_failed / " +
                       "program_assets_created and Japanese next_steps. After import read <dest>/README.md: per gimmick which GameObject " +
                       "gets the script, inspector fields with their serialized names (for setting them over MCP), collider / Is Trigger / " +
                       "layer, UI OnClick / OnValueChanged wiring (UdonBehaviour.SendCustomEvent + exact method name), ClientSim and " +

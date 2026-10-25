@@ -123,8 +123,8 @@ namespace Naoking.ClaudeCreatorTools
     /// | NDMF_APPLY_ON_BUILD_OFF           | warning         | NDMF "Apply on Build" is off: a real upload would skip MA/AAO entirely |
     /// | POST_BUILD_CLEANUP_FAILED         | warning         | the temporary preview scene or clone could not be removed, or an NDMF plugin wrote temporary assets (deleted again) |
     /// | POST_BUILD_STRAY_OBJECTS          | info            | root objects created in the user's scenes during NDMF processing were destroyed so they are not saved |
-    /// | SCENE_DIRTIED                     | warning         | a loaded scene became dirty during the audit and could not be restored to clean |
-    /// | SCENE_DIRTY_CLEARED               | info            | a scene that was clean before became dirty (temporary clone creation) and its dirty flag was cleared again |
+    /// | SCENE_DIRTIED                     | warning         | a loaded scene became dirty during the audit and was not cleared (no post_build clone was made, or clearing failed) |
+    /// | SCENE_DIRTY_CLEARED               | info            | post_build only: a scene that was clean before became dirty (temporary clone creation) and its dirty flag was cleared again |
     /// | AUDIT_SECTION_FAILED              | warning         | one section threw unexpectedly; it is omitted (value = stack excerpt) and the rest of the result stays valid |
     /// Per code at most <see cref="MaxIssuesPerCode"/> issues are listed; the rest are summarised in one extra issue.
     /// Failure codes (success=false, data.candidates lists paths + instance IDs): TARGET_NOT_FOUND (spec does not resolve),
@@ -175,6 +175,7 @@ namespace Naoking.ClaudeCreatorTools
 
             var r = CctResult.Ok("アバターを監査しました");
             GameObject loadedPrefabRoot = null;
+            Ctx ctx = null;
             var dirtyBefore = SnapshotSceneDirtiness();
             try
             {
@@ -187,7 +188,7 @@ namespace Naoking.ClaudeCreatorTools
                     root = MapIntoPrefabContents(found, loadedPrefabRoot);
                 }
 
-                var ctx = new Ctx(args, r, root, platform, clock)
+                ctx = new Ctx(args, r, root, platform, clock)
                 {
                     PrefabAssetPath = found.PrefabAssetPath,
                     AssetObject = found.PrefabAssetPath != null ? found.Root : null,
@@ -205,7 +206,7 @@ namespace Naoking.ClaudeCreatorTools
                     catch (Exception e) { r.AddIssue(CctSeverity.Warning, "POST_BUILD_CLEANUP_FAILED", "プレハブの一時読み込みを解放できませんでした: " + e.Message, asset: found.PrefabAssetPath); }
                 }
                 MeshTriangleCache.Clear(); // static cache: do not keep meshes (or destroyed post_build meshes) referenced after the call
-                RestoreSceneDirtiness(r, dirtyBefore);
+                RestoreSceneDirtiness(r, dirtyBefore, ctx != null && ctx.TempCloneCreated);
             }
             return r;
         }
@@ -337,12 +338,20 @@ namespace Naoking.ClaudeCreatorTools
             return d;
         }
 
-        static void RestoreSceneDirtiness(CctResult r, Dictionary<Scene, bool> before)
+        /// <param name="tempCloneCreated">post_build instantiated its clone (the one known, content-neutral cause of a dirty flag);
+        /// otherwise a dirtied scene is only reported, never cleared, so an unexpected real change stays visible to the user.</param>
+        static void RestoreSceneDirtiness(CctResult r, Dictionary<Scene, bool> before, bool tempCloneCreated)
         {
             foreach (var kv in before)
             {
                 var s = kv.Key;
                 if (kv.Value || !s.IsValid() || !s.isLoaded || !s.isDirty) continue;
+                if (!tempCloneCreated)
+                {
+                    r.AddIssue(CctSeverity.Warning, "SCENE_DIRTIED",
+                        $"監査中にシーン '{s.name}' が未保存状態になりました (この監査はシーンを変更しない設計です)。保存する前に内容を確認し、心当たりの無い変更なら保存せずに閉じてください", value: s.path);
+                    continue;
+                }
                 // Only scenes that were clean before: nothing this read-only audit did is meant to persist, so the dirty flag is
                 // the only trace left. EditorSceneManager.ClearSceneDirtiness is internal -> reflection, fail soft.
                 bool cleared = false;
@@ -399,6 +408,8 @@ namespace Naoking.ClaudeCreatorTools
             public List<ParamDef> ParamDefs;
             /// <summary>Short post_build summary appended to the result message ("ビルド後 PC Good / Android VeryPoor").</summary>
             public string PostBuildSummary;
+            /// <summary>post_build instantiated its temporary clone (it passes through the active scene); see RestoreSceneDirtiness.</summary>
+            public bool TempCloneCreated;
 
             /// <summary>The one pass over the audited hierarchy (Stats.cs).</summary>
             public HierarchyScan Scan;

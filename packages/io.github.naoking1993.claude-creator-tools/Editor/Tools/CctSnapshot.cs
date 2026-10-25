@@ -438,7 +438,8 @@ namespace Naoking.ClaudeCreatorTools
 
         static bool IsValidId(string id)
         {
-            if (string.IsNullOrEmpty(id) || id.Length > 120 || id.Contains("..")) return false;
+            // Trailing '.' is rejected too: Windows strips it, so "X." would silently name snapshot "X".
+            if (string.IsNullOrEmpty(id) || id.Length > 120 || id.Contains("..") || id.EndsWith(".", StringComparison.Ordinal)) return false;
             if (!char.IsLetterOrDigit(id[0]) || id[0] > 127) return false;
             foreach (var ch in id)
                 if (!(ch < 128 && (char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' || ch == '.'))) return false;

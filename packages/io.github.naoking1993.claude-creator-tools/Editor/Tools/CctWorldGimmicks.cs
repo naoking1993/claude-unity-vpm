@@ -561,7 +561,8 @@ namespace Naoking.ClaudeCreatorTools
                 PutEnvironment(fail, env);
                 return fail;
             }
-            if (EditorApplication.isPlaying)
+            // Also while entering Play mode: writing scripts + Refresh during the transition would compile into the play session.
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
                 return CctResult.Fail("Play モード中はインポートできません。Play を終了してから実行してください", "PLAY_MODE").Put("action", "import");
 
             var special = SpecialFolderProblem(dest);

@@ -49,6 +49,10 @@ public static class MetaCheck {
       foreach (var common in new[] { "detail", "max_issues", "save_report", "timeout_seconds" })
         if (pt != null && pt.GetProperty(common) == null) Err($"Parameters lacks common parameter '{common}' (see CctEnvironmentTool)");
       if (desc != null && !desc.Contains("execute_custom_tool")) Err("Description must end with CctMcpBridge.CommonParamsDoc");
+      // Claude Code truncates an upfront-loaded tool description at 4,096 characters (2,048 before v2.1.296), and every
+      // description is a per-session token cost, so keep it short and put the parameter docs first.
+      if (desc != null && desc.Length > 3500) Err($"Description is {desc.Length} chars (max 3500; move detail to the claude-creator-tools skill)");
+      if (desc != null && (desc.IndexOf("Parameters:", StringComparison.Ordinal) < 0 || desc.IndexOf("Parameters:", StringComparison.Ordinal) > 1200)) Err("Description must contain 'Parameters:' within its first 1200 characters");
       Console.WriteLine($"tool {name} [{group}] params: {string.Join(", ", plist)}");
     }
     if (names.Count == 0) { Console.WriteLine("ERROR: no tools found"); errors++; }

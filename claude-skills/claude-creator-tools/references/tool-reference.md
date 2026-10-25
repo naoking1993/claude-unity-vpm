@@ -61,6 +61,7 @@
 ```
 
 - `issues` の `path`・`asset`・`value`・`limit` は、そのコードで意味があるときだけ入る。
+- 要約が推定約 7,000 トークンを超えるときは、`CctMcpBridge` がすべての一覧を40件（それでも大きければ25・15・10・5件）まで短くして `data.response_trimmed` を付ける（`lists` = 切った一覧のパスと元の件数、`kept_per_list` = 残した件数、`keys_omitted` = 丸ごと省いたキー）。issue は `max_issues` を既定の30より増やしていなければ15件、10件まで減る。これが付いていたら、要約の一覧は全件ではないので `report_path` を Grep する。`detail: "full"` は切らない。
 - 要約に残るキーはツールごとに決まっている（各章の「要約に残るキー」）。どのツールでも、それに加えて `tool`・`tool_version`（`0.1.0`）・`elapsed_ms` と、失敗の補足の `details`・`candidates` は要約に残る（`CctMcpBridge` の AlwaysKeptKeys）。`cct_environment` は全キーを要約に残す。
 - 同じコードの issue が多いときは、ツールが1コードあたりの件数を絞る。残りの数の出し方はツールで違う：`cct_avatar_audit`・`cct_animator_inspect` は25件まで載せ、同じコードで「ほかに N 件」の issue を1つ足す（`value` が残りの数）。`cct_world_audit` は20件まで載せ、`ISSUES_TRUNCATED`（info、`value` に `code`・`total`・`omitted`）を足す。`cct_dependency_report` は100件まで載せ、`ISSUES_CAPPED`（info）を足し、コードごとの省いた数を `issues_capped` に入れる。
 
@@ -295,10 +296,10 @@ restore と delete はメニューに無い（id と確認が要るため）。�
 | `POST_BUILD_PARTIAL` | info | NDMF だけで処理した（VRCFury など他のビルド処理は動いていない） |
 | `POST_BUILD_PARAM_BUDGET_EXCEEDED` | error | 処理後の同期パラメーターが 256 bit を超える（SDK はビルド前のアセットしか見ないので止めない） |
 | `NDMF_APPLY_ON_BUILD_OFF` | warning | NDMF の Apply on Build が OFF（本番のアップロードで MA・AAO が動かない） |
-| `POST_BUILD_CLEANUP_FAILED` | warning | 一時シーン・クローンを片付けられなかった、または NDMF が一時アセットを書いた（消した） |
+| `POST_BUILD_CLEANUP_FAILED` | warning | 一時シーン・クローンを片付けられなかった、または NDMF が一時アセットを書いた（この呼び出しで増えた物だけ消す。前からあった物と、中身を確かめられなかったフォルダーは消さない） |
 | `POST_BUILD_STRAY_OBJECTS` | info | 処理中にユーザーのシーンにできたルートを消した |
-| `SCENE_DIRTIED` | warning | 監査中にシーンが変更扱いになり、戻せなかった |
-| `SCENE_DIRTY_CLEARED` | info | 一時的に変更扱いになったシーンの印を戻した |
+| `SCENE_DIRTIED` | warning | 監査中にシーンが変更扱いになり、印を戻さなかった（post_build のクローン以外が原因か、戻せなかった）。保存する前に内容を確かめる |
+| `SCENE_DIRTY_CLEARED` | info | post_build のときだけ：一時クローンを作ったことで変更扱いになったシーンの印を戻した |
 | `AUDIT_SECTION_FAILED` | warning | 1つの節が例外で抜けた。残りは有効 |
 
 失敗コード：`TARGET_NOT_FOUND`、`AMBIGUOUS_TARGET`（アバターや同名の物が複数）、`NO_AVATAR`（何も選んでおらず、シーンにアバターが無い）、`INVALID_ARGUMENT`（platform が all・pc・android・ios のどれでもない）。候補は `data.candidates`（パスと instance ID）。
@@ -614,7 +615,7 @@ restore の動き：まず今の状態（未保存のシーンを含む）を自
 | コード | 重大度 | 意味 |
 | --- | --- | --- |
 | `CONFIRM_REQUIRED` | warning | ドライラン。何も変えていない。confirm=true で呼び直す |
-| `SNAPSHOT_NOT_FOUND` / `INVALID_ID` / `INVALID_ARGUMENT` | 失敗 | id が無い / id に使えない文字 / action などが不正 |
+| `SNAPSHOT_NOT_FOUND` / `INVALID_ID` / `INVALID_ARGUMENT` | 失敗 | id が無い / id に使えない文字（末尾の `.` も不可） / action などが不正 |
 | `MANIFEST_INVALID` | 失敗 / warning | manifest.json が無い・読めない（list では warning） |
 | `NOTHING_TO_SNAPSHOT` / `SIZE_LIMIT` | 失敗 | 退避する物が無い / max_total_mb 超（何もコピーしていない） |
 | `PATH_OUTSIDE_PROJECT` / `NOT_ASSET_PATH` / `INVALID_PATH` | error | 絶対パスや `..` / Assets の外 / 不正な文字。飛ばした |
@@ -643,11 +644,11 @@ restore の動き：まず今の状態（未保存のシーンを含む）を自
 | `RECREATED_FILES_REMAIN` | warning | 取り消しの restore：元の restore が作り直したファイルが残る |
 | `FILE_RESTORED` / `FILE_RECREATED` / `META_RESTORED` | info | 上書きした / 作り直した / .meta だけ戻した |
 | `SCENE_RELOADED` / `SCRIPTS_RESTORED` / `ASSET_REIMPORTED` | info | シーンを読み直した / スクリプトを戻した（コンパイルが続く） / 未保存の変更を捨てるため再インポートした |
-| `RESTORE_FAILED` | error / 失敗 | 書き込み・インポートの失敗 |
+| `RESTORE_FAILED` | error / 失敗 | 書き込み・インポートの失敗（本体と .meta の片方だけ書けたときは、どちらが書き換わったかを message に書く） |
 | `RESTORE_VERIFY_FAILED` | error | 書いた後の SHA-256 が違う |
 | `GUID_MISMATCH_AFTER_RESTORE` | warning | インポート後の GUID が退避と違う |
 | `ASSET_STILL_DIRTY` | warning | 再インポート後も未保存の変更が残る |
-| `SCENE_CLOSE_FAILED` | 失敗 | シーンを閉じられず、何も書いていない |
+| `SCENE_CLOSE_FAILED` | 失敗 | シーンを閉じられず、何も書いていない。途中まで閉じたシーン（`reloaded_scenes`）はディスクから開き直したので、未保存だった変更は `pre_restore_snapshot_id` にだけ残る |
 | `SCENE_REOPEN_FAILED` | error / warning | シーンを開き直せなかった（手で開く） |
 | `DELETE_FAILED` | 失敗 | 退避フォルダーを消せなかった |
 
@@ -894,7 +895,7 @@ reverse で拾えないもの：バイナリのファイル、コードからの
 | `INVALID_DEST` | 失敗 | dest が Assets の下のフォルダーでない（絶対パス、`..`、隠し・`~`、不正な文字） |
 | `NO_UDONSHARP` | 失敗 / info | UdonSharp が無い（アバタープロジェクト）。import を断る |
 | `MISSING_DEPENDENCY` | 失敗 / warning | Worlds SDK か、選んだサンプルが使うパッケージが無い。断る（`only` から外せば残りは取り込める。失敗の結果に `missing` と `importable`） |
-| `PLAY_MODE` | 失敗 | Play 中は import を断る |
+| `PLAY_MODE` | 失敗 | Play 中と Play に入る途中は import を断る |
 | `DEST_HAS_ASMDEF` / `DEST_SPECIAL_FOLDER` | 失敗 / warning | 取り込み先が asmdef の下 / Editor・Plugins の下（U# がコンパイルしない） |
 | `UNKNOWN_SAMPLE` | 失敗 | `only` に知らない名前 |
 | `CONFIRM_REQUIRED` | warning | ドライラン。何も書いていない |
@@ -919,7 +920,7 @@ reverse で拾えないもの：バイナリのファイル、コードからの
 // ドライラン
 {"action": "import", "only": ["CctTeleporter"]}
 {"tool_name": "cct_world_gimmicks", "parameters": {"action": "import", "only": ["CctTeleporter"]}}
-// ユーザーの同意の後
-{"action": "import", "only": ["CctTeleporter"], "confirm": true}
-{"tool_name": "cct_world_gimmicks", "parameters": {"action": "import", "only": ["CctTeleporter"], "confirm": true}}
+// ユーザーの同意の後（Refresh でスクリプトを取り込むので、大きなプロジェクトでは30秒を超えうる。timeout_seconds を上げる）
+{"action": "import", "only": ["CctTeleporter"], "confirm": true, "timeout_seconds": 120}
+{"tool_name": "cct_world_gimmicks", "parameters": {"action": "import", "only": ["CctTeleporter"], "confirm": true, "timeout_seconds": 120}}
 ```

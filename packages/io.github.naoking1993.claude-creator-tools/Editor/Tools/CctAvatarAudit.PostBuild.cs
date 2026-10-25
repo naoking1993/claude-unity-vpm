@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using UnityEditor;
@@ -140,6 +141,7 @@ namespace Naoking.ClaudeCreatorTools
             try
             {
                 preview = EditorSceneManager.NewPreviewScene();
+                ctx.TempCloneCreated = true; // Instantiate puts the clone into the active scene until it is moved below
                 clone = Object.Instantiate(ctx.Root);
                 clone.name = ctx.Root.name + "(Clone)";
                 SceneManager.MoveGameObjectToScene(clone, preview);
@@ -403,7 +405,7 @@ namespace Naoking.ClaudeCreatorTools
         // Cleanup
         // ---------------------------------------------------------------------------------------------------------------------
 
-        static void Cleanup(Ctx ctx, GameObject clone, Scene preview, HashSet<int> originalDeps, Dictionary<string, HashSet<string>> tempBefore,
+        static void Cleanup(Ctx ctx, GameObject clone, Scene preview, HashSet<int> originalDeps, Dictionary<string, TempRootState> tempBefore,
             Dictionary<string, object> report)
         {
             var problems = new List<string>();
@@ -462,19 +464,26 @@ namespace Naoking.ClaudeCreatorTools
                 var after = SnapshotTempAssets();
                 foreach (var kv in after)
                 {
-                    tempBefore.TryGetValue(kv.Key, out var before);
-                    if (before == null)
+                    if (!AssetDatabase.IsValidFolder(kv.Key)) continue; // not imported: nothing the AssetDatabase could delete
+                    if (!tempBefore.TryGetValue(kv.Key, out var before))
                     {
-                        // the whole folder was created by this call
+                        // the whole folder was created by this call (it existed neither on disk nor in the AssetDatabase before)
                         if (AssetDatabase.DeleteAsset(kv.Key)) deleted.Add(kv.Key);
                         else problems.Add("削除できませんでした: " + kv.Key);
                         continue;
                     }
-                    foreach (var guid in kv.Value)
+                    if (before.Guids == null || kv.Value.Guids == null)
                     {
-                        if (before.Contains(guid)) continue;
+                        problems.Add($"{kv.Key} の中身を確認できなかったため、何も削除していません");
+                        continue;
+                    }
+                    foreach (var guid in kv.Value.Guids)
+                    {
+                        if (before.Guids.Contains(guid)) continue;
                         var path = AssetDatabase.GUIDToAssetPath(guid);
-                        if (string.IsNullOrEmpty(path) || deleted.Any(x => path.StartsWith((string)x + "/", StringComparison.Ordinal))) continue;
+                        // A file that was already on disk (just imported now, e.g. by a Refresh during processing) is not ours.
+                        if (string.IsNullOrEmpty(path) || before.Entries.Contains(path) ||
+                            deleted.Any(x => path.StartsWith((string)x + "/", StringComparison.Ordinal))) continue;
                         if (AssetDatabase.DeleteAsset(path)) deleted.Add(path);
                         else problems.Add("削除できませんでした: " + path);
                     }
@@ -531,18 +540,42 @@ namespace Naoking.ClaudeCreatorTools
                     $"NDMF の処理中にシーンへ作られたオブジェクト {removed.Count} 個を削除しました (保存されないように): {string.Join(", ", removed.Take(5))}");
         }
 
-        /// <summary>Folder -> GUIDs of the assets in it (null entry = folder absent). Only NDMF's own temporary roots.</summary>
-        static Dictionary<string, HashSet<string>> SnapshotTempAssets()
+        /// <summary>
+        /// What one NDMF temporary root held. Guids == null: the folder exists but could not be listed, so nothing in it may be
+        /// deleted. Entries: asset paths of every file / folder on disk (also ones the AssetDatabase has not imported yet, e.g.
+        /// with Auto Refresh off), so an import during the call never makes an older file look new.
+        /// </summary>
+        sealed class TempRootState
         {
-            var d = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            public HashSet<string> Guids;
+            public readonly HashSet<string> Entries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>Root -> state, for the NDMF temporary roots that exist on disk or in the AssetDatabase (absent = no key).</summary>
+        static Dictionary<string, TempRootState> SnapshotTempAssets()
+        {
+            var d = new Dictionary<string, TempRootState>(StringComparer.Ordinal);
             foreach (var root in NdmfTempRoots)
             {
+                var abs = CctPaths.AssetToAbsolute(root).TrimEnd('/');
+                bool onDisk = false, valid = false;
+                try { onDisk = Directory.Exists(abs); }
+                catch (Exception) { onDisk = true; } // unknown: treat as existing, so nothing in it is deleted
+                try { valid = AssetDatabase.IsValidFolder(root); }
+                catch (Exception) { valid = false; }
+                if (!onDisk && !valid) continue;
+                var st = new TempRootState();
+                d[root] = st;
                 try
                 {
-                    if (!AssetDatabase.IsValidFolder(root)) continue;
-                    d[root] = new HashSet<string>(AssetDatabase.FindAssets("", new[] { root }), StringComparer.Ordinal);
+                    if (Directory.Exists(abs))
+                        foreach (var e in Directory.GetFileSystemEntries(abs, "*", SearchOption.AllDirectories))
+                            st.Entries.Add(root + CctPaths.Normalize(e).Substring(abs.Length));
+                    st.Guids = valid
+                        ? new HashSet<string>(AssetDatabase.FindAssets("", new[] { root }), StringComparer.Ordinal)
+                        : new HashSet<string>(StringComparer.Ordinal);
                 }
-                catch (Exception) { /* folder not searchable (e.g. immutable package): nothing to compare */ }
+                catch (Exception) { st.Guids = null; /* not listable (e.g. immutable package): never delete in it */ }
             }
             return d;
         }

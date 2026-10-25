@@ -258,7 +258,11 @@ namespace Naoking.ClaudeCreatorTools
             }
             if (aborted)
             {
-                var f = CctResult.Fail("開いているシーンを一時的に閉じられなかったため、復元を中止しました (ファイルは変更していません)", "SCENE_CLOSE_FAILED",
+                // Scenes unloaded before the failure were reopened from disk, so their unsaved changes now exist only in the backup.
+                var f = CctResult.Fail("開いているシーンを一時的に閉じられなかったため、復元を中止しました (ファイルは変更していません)" +
+                                       (reloaded.Count > 0 && preId != null
+                                           ? $"。途中まで閉じたシーン {reloaded.Count} 個はディスクから開き直したため、未保存だった変更は復元前スナップショット '{preId}' にだけ残っています"
+                                           : ""), "SCENE_CLOSE_FAILED",
                     new Dictionary<string, object> { ["pre_restore_snapshot_id"] = preId, ["reloaded_scenes"] = reloaded });
                 return WithContext(f, r, m);
             }
@@ -487,7 +491,9 @@ namespace Naoking.ClaudeCreatorTools
                 }
                 catch (Exception e)
                 {
-                    r.AddIssue(CctSeverity.Error, "RESTORE_FAILED", $"フォルダ '{folder}' を作成できませんでした: {e.Message}", asset: folder);
+                    r.AddIssue(CctSeverity.Error, "RESTORE_FAILED", created.Contains(folder)
+                        ? $"フォルダ '{folder}' は作成しましたが、その .meta (GUID) を復元できませんでした (Unity が新しい GUID を割り当てます): {e.Message}"
+                        : $"フォルダ '{folder}' を作成できませんでした: {e.Message}", asset: folder);
                 }
             }
         }
@@ -495,30 +501,40 @@ namespace Naoking.ClaudeCreatorTools
         static void WriteItem(PlanItem it, CctResult r)
         {
             if (!it.WriteFile && !it.WriteMeta) return; // reload / reimport only
+            // File first, .meta second: when the second write fails (e.g. a sharing lock from a sync client), the asset keeps
+            // its current GUID / import settings instead of silently taking the snapshot's .meta over unchanged content.
+            bool fileDone = false, metaDone = false;
             try
             {
-                if (it.WriteMeta)
-                {
-                    CopyOver(it.StoredMetaAbs, it.TargetAbs + ".meta", it.Entry.MetaSha256);
-                    it.Wrote = true;
-                }
                 if (it.WriteFile)
                 {
                     CopyOver(it.StoredAbs, it.TargetAbs, it.Entry.Sha256);
                     it.Wrote = true;
+                    fileDone = true;
+                }
+                if (it.WriteMeta)
+                {
+                    CopyOver(it.StoredMetaAbs, it.TargetAbs + ".meta", it.Entry.MetaSha256);
+                    it.Wrote = true;
+                    metaDone = true;
                 }
             }
             catch (InvalidDataException e)
             {
                 it.Failed = true;
-                r.AddIssue(CctSeverity.Error, "RESTORE_VERIFY_FAILED", $"'{it.Path}' の書き込み後の内容がスナップショットと一致しません: {e.Message}", asset: it.Path);
+                r.AddIssue(CctSeverity.Error, "RESTORE_VERIFY_FAILED", $"'{it.Path}' の書き込み後の内容がスナップショットと一致しません: {e.Message}{PartialWriteNote(it, fileDone, metaDone)}", asset: it.Path);
             }
             catch (Exception e)
             {
                 it.Failed = true;
-                r.AddIssue(CctSeverity.Error, "RESTORE_FAILED", $"'{it.Path}' を書き込めませんでした: {e.Message}", asset: it.Path);
+                r.AddIssue(CctSeverity.Error, "RESTORE_FAILED", $"'{it.Path}' を書き込めませんでした: {e.Message}{PartialWriteNote(it, fileDone, metaDone)}", asset: it.Path);
             }
         }
+
+        /// <summary>Says which half of a failed file + .meta write did reach the disk, so the report never hides a change.</summary>
+        static string PartialWriteNote(PlanItem it, bool fileDone, bool metaDone) =>
+            fileDone && it.WriteMeta && !metaDone ? " (本体はスナップショットの内容に書き換え済み、.meta は現在のまま)" :
+            metaDone && it.WriteFile && !fileDone ? " (.meta はスナップショットのものに書き換え済み、本体は現在のまま)" : "";
 
         /// <summary>Overwrites dst with src, bumps its timestamp (so VCS and Unity see a fresh change), then verifies the bytes.</summary>
         static void CopyOver(string src, string dst, string expectedSha)
