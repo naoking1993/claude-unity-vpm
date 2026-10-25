@@ -1,8 +1,8 @@
 # Claude Creator Tools
 
-`io.github.naoking1993.claude-creator-tools` 0.1.1 — VRChat のアバター改変・ワールド制作を、Claude が MCP for Unity 経由で手伝うための Unity エディター拡張です。
+`io.github.naoking1993.claude-creator-tools` 0.1.2 — VRChat のアバター改変・ワールド制作を、Claude が MCP for Unity 経由で手伝うための Unity エディター拡張です。
 
-> **状態: 0.1.1。** 0.1.0 は 2026-10-25 に Unity 2022.3.22f1 のアバタープロジェクトとワールドプロジェクトで「初回確認」に合格しました。0.1.1 はそのとき見つかった `cct_world_audit` の誤検知と文面の修正で、**0.1.1 自体はまだ Unity の中で動かしていません**（「既知の制限」を参照）。導入したら「初回確認」を行ってください。
+> **状態: 0.1.2。** 0.1.0 は 2026-10-25 に Unity 2022.3.22f1 のアバタープロジェクトとワールドプロジェクトで「初回確認」に合格しました。0.1.1 はそのとき見つかった `cct_world_audit` の誤検知と文面の修正で、同じワールドで再監査して期待どおりでした。0.1.2 はその再監査で見つかった細かいずれの修正で、**0.1.2 自体はまだ Unity の中で動かしていません**（「既知の制限」を参照）。導入したら「初回確認」を行ってください。
 
 この README は、作者本人と Claude の両方が読む前提で書いています。Claude 向けの決まりごと（呼び出し方・戻り値の読み方）は「Claude からの呼び出し方」と「共通の引数と戻り値」にまとめてあります。
 
@@ -38,7 +38,7 @@ MCP for Unity と同じリスティング（`Claude-Unity 接続キット (MCP f
 
 1. VCC の **Settings → Packages** で、このリスティングが追加されていて、チェックが入っていることを確認します。無ければ **Add Repository** で上の URL を追加します。
 2. プロジェクトの **Manage Project** を開き、「Manage Packages」の右の **Refresh（↻）** を押します（リスティングのキャッシュは最大 1 時間残ります）。
-3. 一覧の **Claude Creator Tools** を追加（＋）します。版は `0.1.1` です。
+3. 一覧の **Claude Creator Tools** を追加（＋）します。版は `0.1.2` です。
 4. Unity を開き、コンパイルが終わってから下の「初回確認」を行います。
 
 MCP for Unity が入っているプロジェクトでは、追加・更新したあとに **MCP サーバーを再起動**してください（理由は次の節）。
@@ -130,7 +130,7 @@ MCP の応答は、成功時は `{success: true, message, data}`、失敗時は 
 - `success`, `message`（日本語の一行要約）, 失敗時は `code`（`EDITOR_BUSY` などの固定名）
 - `issue_counts`（`error` / `warning` / `info` の件数）, `issues`（error が先頭。`max_issues` 件まで）, 入りきらなかった件数 `issues_omitted`
 - 各ツールのデータ（要約に入るキーはツールごとに決まっています。一覧の長いものはレポートだけにあります）
-- `tool`, `tool_version`（このパッケージの版。`0.1.1`）, `elapsed_ms`
+- `tool`, `tool_version`（このパッケージの版。`0.1.2`）, `elapsed_ms`
 - `report_path`: 全文 JSON の絶対パス（`/` 区切り、日本語のまま）。Claude は自分のファイル読み取りで開きます
 - `response_trimmed`（要約が大きすぎたときだけ）: 要約は推定約 7,000 トークンまでに抑えます（Claude Code は 10,000 トークンで警告し、25,000 トークンか 50,000 文字を超える結果をファイルに退避するため）。超えたときはすべての一覧を 40 件まで、それでも大きければ 25 → 15 → 10 → 5 件まで短くし（issue は `max_issues` を既定より増やしていなければ 15 → 10 件まで）、どの一覧を何件から切ったか（`lists`）、残した件数（`kept_per_list`）、丸ごと省いたキー（`keys_omitted`）をここに書きます。全件はレポートにあります（`detail: "full"` では切りません）
 
@@ -218,7 +218,7 @@ issue は `{severity, code, message, path?, asset?, value?, limit?}` です。`c
    - **レポートフォルダを開く** で、その JSON があり、メモ帳で開くと `project_root` の日本語が文字化けしていないこと。
 3. **MCP の登録**: **Window > MCP for Unity** で Stop Server → Start Server を押し、**Tools** の「Custom Tools」に `cct_*` が 8 個あり、オンになっていること。Claude Code では `/mcp` で UnityMCP を再接続します。
 4. **Claude から呼ぶ**: Claude に「cct_environment を実行して」と頼みます。
-   - 合格: `success: true`、`tool_version: "0.1.1"`、`project_root` が開いているプロジェクトと同じであること。
+   - 合格: `success: true`、`tool_version: "0.1.2"`、`project_root` が開いているプロジェクトと同じであること。
    - そのとき Claude が `mcp__UnityMCP__cct_environment` を直接呼べたか、`execute_custom_tool` 経由だったかを記録しておいてください（サーバーの Python 3.14 の問題が起きているかが分かります）。
 5. **撮影（アバタープロジェクト）**: Hierarchy でアバターのルートを選び、Claude に「cct_capture_views で撮って、一覧画像を見て」と頼みます（メニューなら **キャプチャ (cct_capture_views) > 選択中を4方向**）。
    - 合格: `Library/ClaudeCreatorTools/Captures/<日時>-<英数字4文字>_<アバター名>/contact_sheet.png` に、front / back / left / right の 4 枚が名前付きで並び、アバター全身が切れずに中央にあり、背景が灰色（#808080）であること。Claude がその PNG を読んで見た目を説明できること。
@@ -234,7 +234,8 @@ issue は `{severity, code, message, path?, asset?, value?, limit?}` です。`c
 ## 既知の制限
 
 - **0.1.0 の実機確認**（2026-10-25、Unity 2022.3.22f1・VRChat SDK 3.10.5・MCP for Unity 9.7.1 / 9.7.101）: アバタープロジェクトとワールドプロジェクトで「初回確認」1〜8 に合格しました。ワールド監査の結果は、シーン・SDK・同梱パッケージのソースと 1 件ずつ突き合わせ、誤りを 0.1.1 で直しました。
-- **0.1.1 は Unity の中ではまだ実行していません。** 変更したコードは Unity 2022.3.22f1 の DLL に対してコンパイルできることだけを確かめています。オフラインの確認の範囲は次のとおりです。
+- **0.1.1 の実機確認**（2026-10-25、同じワールドプロジェクト）: 0.1.1 で直した 9 項目と PhysBone の数え方はすべて期待どおりでした。0.1.0 で正しかった 16 件のうち 14 件は前後で同じ結果で、`SCENE_UNSAVED` と `UDON_PROGRAM_SOURCE_MISSING` はどちらでも出ない状態だったため確かめられていません。
+- **0.1.2 は Unity の中ではまだ実行していません。** 変更したコードは Unity 2022.3.22f1 の DLL に対してコンパイルできることだけを確かめています。オフラインの確認の範囲は次のとおりです。
   - Roslyn（C# 9）で、**Unity 2021.1 の参照 DLL** と、MCP for Unity 9.7.1 のソースから作ったスタブに対してコンパイルできること（2022.3 にしか無い API は使っていません）。
   - MCP for Unity 9.7.1 の登録規則（明示した名前、引数の順序、Description にすべての引数の説明があること）を満たすこと。
   - ツールが読む VRChat の型とプロパティのパスが、**VRChat SDK 3.10.5 の実際の DLL** にあること（他の版は未確認）。

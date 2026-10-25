@@ -124,6 +124,7 @@ SRC_PUBLISHED = {
     "io.github.naoking1993.claude-creator-tools": {
         "0.1.0": "8bacf727b9a3057f283b85b6d26a96233c0e60a0587b1f45e685dccb27736ea1",
         "0.1.1": "b4370a6d30b5287a9b4763934b7e9b7ea74e34c01bffd9918e0436638b23bd4f",
+        "0.1.2": "976b17d9f6b4823f329331c86206b596b958aef5eb95c439628c5cf1b4bd707a",
     },
 }
 LISTING_KEYS_FROM_PJ = ("name", "displayName", "version", "unity", "description", "author", "license",

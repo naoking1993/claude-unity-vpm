@@ -23,6 +23,7 @@ PACKAGES = {
         # version: stamp (zip date_time for every entry)
         "0.1.0": (2026, 10, 24, 0, 0, 0),
         "0.1.1": (2026, 10, 25, 0, 0, 0),
+        "0.1.2": (2026, 10, 25, 1, 0, 0),  # released the same day as 0.1.1, so 01:00 (still past in UTC-12) to stay newer
     },
 }
 

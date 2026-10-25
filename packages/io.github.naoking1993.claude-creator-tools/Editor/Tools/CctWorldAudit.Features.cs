@@ -5,6 +5,7 @@ using System.Linq;
 using UnityEditor;
 using UnityEditor.Compilation;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using Object = UnityEngine.Object;
 
 namespace Naoking.ClaudeCreatorTools
@@ -896,37 +897,93 @@ namespace Naoking.ClaudeCreatorTools
             return result;
         }
 
-        // iwaSync3 TrackModeMask.Video (IwaSync3Editor.GetSpeakers(TrackModeMask.Video)).
+        // iwaSync3 TrackModeMask.Video (Scripts/TrackModeMask.cs; IwaSync3Editor.GetSpeakers filters on it).
         const int IwaSync3TrackModeVideo = 0x10;
+        const string TIwaSync3VideoCore = "HoshinoLabs.IwaSync3.Udon.VideoCore";
 
         /// <summary>
         /// Speakers iwaSync3 assigns to a Unity player at build time: IwaSync3BuildProcessor (L28) runs
-        /// IwaSync3Editor.ApplyModifiedProperties, which calls SetTargetAudioSources(GetSpeakers(TrackModeMask.Video))
-        /// (IwaSync3Editor.cs L237, L393-402) without saving, so the scene's Target Audio Sources stay empty. These are the
-        /// audited iwaSync3 Speakers that reference the player's iwaSync3 and whose 'mask' (when present) includes Video.
-        /// Null when the player is not under an iwaSync3 or the processor is not compiled.
+        /// IwaSync3Editor.ApplyModifiedProperties on every IwaSync3, which, when the IwaSync3 has a VideoCore child, calls
+        /// SetTargetAudioSources(GetSpeakers(TrackModeMask.Video)) on its first VRC Unity Video Player child (IwaSync3Editor.cs
+        /// L207-237) without saving, so the scene's Target Audio Sources stay empty. GetSpeakers (L393-402) takes the AudioSources
+        /// under every Speaker whose GetMainIwaSync3 is that IwaSync3 and whose 'mask' includes Video. These are the audited such
+        /// Speakers. Null when no IwaSync3 assigns the player or the processor is not compiled.
         /// </summary>
         static List<string> IwaSync3SpeakersFor(Ctx ctx, Component player)
         {
             if (player == null || CctSerialized.FindType(TIwaSync3BuildProcessor) == null) return null;
-            Component core = null;
-            for (var t = player.transform; t != null && core == null; t = t.parent)
-                core = t.GetComponents<Component>().FirstOrDefault(c => c != null && CctSerialized.IsType(c, TIwaSync3));
-            if (core == null) return null;
-            var targets = new HashSet<Object> { core, core.gameObject };
+            var iwaSync3Type = CctSerialized.FindType(TIwaSync3);
+            var coreType = CctSerialized.FindType(TIwaSync3VideoCore);
+            var playerType = CctSerialized.FindType(TUnityVideo) ?? player.GetType();
+            if (iwaSync3Type == null || coreType == null) return null;
+            Component owner = null;
+            for (var t = player.transform; t != null && owner == null; t = t.parent)
+                owner = t.GetComponents(iwaSync3Type).FirstOrDefault(c => c != null &&
+                    c.GetComponentInChildren(coreType, true) != null && c.GetComponentInChildren(playerType, true) == player);
+            if (owner == null) return null;
+            var inScene = new Dictionary<Scene, List<Component>>();
             var speakers = new List<string>();
             foreach (var item in ctx.Components)
             {
                 if (!item.Audited || item.C == null || FindTypeName(item.C.GetType()) != TIwaSync3Speaker) continue;
                 using (var so = TrySerialize(ctx, item.C, "iwaSync3 Speaker"))
                 {
-                    if (so == null || FindReferencesTo(so, targets).Count == 0) continue;
+                    if (so == null) continue;
                     var mask = so.FindProperty("mask");
                     if (mask != null && (CctSerialized.GetInt(mask) & IwaSync3TrackModeVideo) == 0) continue;
+                    if (item.C.GetComponentInChildren<AudioSource>(true) == null) continue;
+                    if (IwaSync3MainOf(ctx, item.C, so, iwaSync3Type, inScene) != owner) continue;
                     speakers.Add(item.O.Path);
                 }
             }
             return speakers;
+        }
+
+        /// <summary>
+        /// iwaSync3's GetMainIwaSync3 for a Speaker (IwaSync3EditorBase.cs L143-181, which GetSpeakers uses; SpeakerEditor's
+        /// SerializedProperty overload L105-141 resolves the same way): the IwaSync3 in the Speaker's parents
+        /// (GetComponentInParent, so not one on an inactive GameObject), followed along each IwaSync3's 'iwaSync3' reference to
+        /// the main one; else the only IwaSync3 of the scene; else the Speaker's own 'iwaSync3' reference, followed the same
+        /// way; else the scene's first IwaSync3 in root order (null when there is none). iwaSync3 lists the scene's IwaSync3s
+        /// with Resources.FindObjectsOfTypeAll (L183-190), so inactive and EditorOnly ones count; only the Speaker's own scene,
+        /// the one being built, is looked at here.
+        /// </summary>
+        static Component IwaSync3MainOf(Ctx ctx, Component speaker, SerializedObject so, Type iwaSync3Type,
+            Dictionary<Scene, List<Component>> inScene)
+        {
+            var parent = speaker.GetComponentInParent(iwaSync3Type);
+            if (parent != null) return FollowIwaSync3(ctx, parent);
+            var scene = speaker.gameObject.scene;
+            if (!inScene.TryGetValue(scene, out var all))
+            {
+                all = new List<Component>();
+                if (scene.IsValid() && scene.isLoaded)
+                    foreach (var root in scene.GetRootGameObjects())
+                        all.AddRange(root.GetComponentsInChildren(iwaSync3Type, true));
+                inScene[scene] = all;
+            }
+            if (all.Count == 1) return all[0];
+            var own = so.FindProperty("iwaSync3");
+            if (own == null) return null;
+            var referenced = CctSerialized.GetObject(own) as Component;
+            if (referenced != null && CctSerialized.IsType(referenced, TIwaSync3)) return FollowIwaSync3(ctx, referenced);
+            return all.FirstOrDefault();
+        }
+
+        /// <summary>Follows an IwaSync3's 'iwaSync3' reference (a sub player's main) until it is empty or points at itself.</summary>
+        static Component FollowIwaSync3(Ctx ctx, Component iwaSync3)
+        {
+            var seen = new HashSet<Component>();
+            while (seen.Add(iwaSync3))
+            {
+                using (var so = TrySerialize(ctx, iwaSync3, "iwaSync3"))
+                {
+                    var next = CctSerialized.GetObject(so?.FindProperty("iwaSync3")) as Component;
+                    if (next == null || next == iwaSync3 || !CctSerialized.IsType(next, TIwaSync3)) return iwaSync3;
+                    iwaSync3 = next;
+                }
+            }
+            return iwaSync3; // a reference loop, which iwaSync3 itself would never leave
         }
 
         /// <summary>An AVPro player on the same GameObject as <paramref name="player"/> has at least one VRC AVPro Video Speaker.</summary>

@@ -12,7 +12,7 @@ namespace Naoking.ClaudeCreatorTools
     /// </summary>
     public static class CctRunner
     {
-        public const string PackageVersion = "0.1.1";
+        public const string PackageVersion = "0.1.2";
 
         public static CctResult Run(string toolName, Func<CctArgs, CctResult> tool, CctArgs args)
         {

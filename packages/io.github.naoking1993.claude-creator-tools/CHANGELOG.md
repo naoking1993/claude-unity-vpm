@@ -2,6 +2,21 @@
 
 このパッケージの変更点を記録します。版の付け方は [Semantic Versioning](https://semver.org/lang/ja/) に従います。0.x のあいだは、issue コード・引数・出力のキーが変わることがあり、変わったときはここに書きます。
 
+## [0.1.2] - 2026-10-25
+
+0.1.1 を同じワールド「泡ワールド」（Unity 2022.3.22f1・VRChat SDK 3.10.5）で再監査しました（2026-10-25 22:39）。0.1.1 で直した 9 項目と PhysBone の数え方はすべて期待どおりで、0.1.0 の結果 warning 11 / info 15 が warning 6 / info 16 になりました（warning のうち 1 件は、シーンに一時的に現れた VizVid の物による `MISSING_REFERENCE` です。シーンを開き直した後は warning 5）。0.1.0 で正しかった 16 件のうち 14 件は前後で同じ結果でした。残りの `SCENE_UNSAVED` と `UDON_PROGRAM_SOURCE_MISSING` は、どちらの版でも出ない状態だったため確かめられていません。0.1.2 は、この再監査の検証で見つかった細かいずれの修正です。機能の追加はありません。**0.1.2 自体はまだ Unity の中で実行していません**（Unity 2022.3.22f1 の DLL に対するコンパイルと、オフラインの確認だけです）。
+
+### 修正
+
+- `NOT_WHITELISTED`: iwaSync3 の `DesktopBar` / `Queuelist` / `ListTab` も、`IwaSync3BuildProcessor` がビルド時に削除する型として扱う（`reason`: `stripped_at_build`）。0.1.1 ではこの 3 つが既知の型に無く、「推定」の文面の info になっていました。
+- `NOT_WHITELISTED`: 削除の前に設定をどこへ写すかを、型ごとに正しく書く。`Speaker` は Udon ではなく、子の AudioSource と VRC Spatial Audio Source に写します（Live 用なら VRC AVPro Video Speaker も付けます）。`IwaSync3` は子の Udon と VRC 動画プレイヤーに写します。
+- `VIDEO_PLAYER_NO_AUDIO`: ビルド時に Unity プレイヤーへ入る Speaker を、iwaSync3 自身の決め方（`GetMainIwaSync3`）で数える。順番は、親にある IwaSync3、シーンに IwaSync3 が 1 つだけならそれ、Speaker の `iwaSync3` 参照です。IwaSync3 の `iwaSync3` 参照はメインまでたどります。0.1.1 はその iwaSync3 を直接参照する Speaker だけを数えていたので、参照が空の Speaker や、サブの iwaSync3 を指す Speaker では、ビルド時に音が入るのにこの項目が出ることがありました。AudioSource の無い Speaker は数えません。
+- `AVATAR_PACKAGES_IN_WORLD_PROJECT`: 入っている他のパッケージから必要とされていないものは「単独で VCC から外せます」と書く。0.1.1 では、どれか 1 つにでも依存元があると、この案内が消えていました。
+
+### 確認したが変えなかったもの
+
+- `ANDROID_LARGE_TEXTURE` の Non-Power of 2 の丸め（`npotScale`）は、Sprite / Editor GUI 型でも同じように当てます。Unity 2022.3.22f1 で試すと、600×300 の Sprite・Editor GUI は、`npotScale` が ToNearest なら 512×256 で取り込まれました。型を Sprite / GUI に変えると `npotScale` が None になり、そのときは 600×300 のままです。どちらの場合も `npotScale` を読めば実際の取り込みと合います。
+
 ## [0.1.1] - 2026-10-25
 
 0.1.0 の初回確認（2026-10-25、Unity 2022.3.22f1・VRChat SDK 3.10.5。アバター「ひかるん」・ワールド「泡ワールド」）で、`cct_world_audit` の 28 件をシーン・SDK・同梱パッケージのソースと突き合わせ、誤検知と不正確な文面を直しました。機能の追加はありません。**0.1.1 自体はまだ Unity の中で実行していません**（Unity 2022.3.22f1 の DLL に対するコンパイルと、オフラインの確認だけです）。
