@@ -1,8 +1,8 @@
 # Claude Creator Tools
 
-`io.github.naoking1993.claude-creator-tools` 0.1.0 — VRChat のアバター改変・ワールド制作を、Claude が MCP for Unity 経由で手伝うための Unity エディター拡張です。
+`io.github.naoking1993.claude-creator-tools` 0.1.1 — VRChat のアバター改変・ワールド制作を、Claude が MCP for Unity 経由で手伝うための Unity エディター拡張です。
 
-> **状態: 初版（0.1.0）。Unity の中で一度も動かしていません。** 確かめたのは、オフラインでのコンパイルと静的なチェックだけです（「既知の制限」を参照）。最初に「初回確認」の手順を実機で行ってください。
+> **状態: 0.1.1。** 0.1.0 は 2026-10-25 に Unity 2022.3.22f1 のアバタープロジェクトとワールドプロジェクトで「初回確認」に合格しました。0.1.1 はそのとき見つかった `cct_world_audit` の誤検知と文面の修正で、**0.1.1 自体はまだ Unity の中で動かしていません**（「既知の制限」を参照）。導入したら「初回確認」を行ってください。
 
 この README は、作者本人と Claude の両方が読む前提で書いています。Claude 向けの決まりごと（呼び出し方・戻り値の読み方）は「Claude からの呼び出し方」と「共通の引数と戻り値」にまとめてあります。
 
@@ -38,7 +38,7 @@ MCP for Unity と同じリスティング（`Claude-Unity 接続キット (MCP f
 
 1. VCC の **Settings → Packages** で、このリスティングが追加されていて、チェックが入っていることを確認します。無ければ **Add Repository** で上の URL を追加します。
 2. プロジェクトの **Manage Project** を開き、「Manage Packages」の右の **Refresh（↻）** を押します（リスティングのキャッシュは最大 1 時間残ります）。
-3. 一覧の **Claude Creator Tools** を追加（＋）します。版は `0.1.0` です。
+3. 一覧の **Claude Creator Tools** を追加（＋）します。版は `0.1.1` です。
 4. Unity を開き、コンパイルが終わってから下の「初回確認」を行います。
 
 MCP for Unity が入っているプロジェクトでは、追加・更新したあとに **MCP サーバーを再起動**してください（理由は次の節）。
@@ -50,7 +50,7 @@ MCP for Unity が入っているプロジェクトでは、追加・更新した
 | `cct_environment` | 接続中のプロジェクトの Unity 版・パス・シーン（未保存か）・Play 中か（コンパイル中は全ツールが `EDITOR_BUSY` で止まります）、VRChat 関連パッケージの版、アバタールートとワールド記述子（Blueprint ID 付き）、選択、出力先。**セッションの最初に呼ぶ** | `all_packages` | なし |
 | `cct_avatar_audit` | アバター 1 体のアップロード前監査。PC とモバイルの性能ランクと、ランクを決めている項目・次のランクに必要な値（SDK の計算器を使える時は SDK と同じ数値）、SDK がアップロードを止めるエラー、Missing Script、Write Defaults の混在、Expression Parameters とメニュー | `target`, `platform`（all / pc / android / ios。Quest は android）, `top_n`, `include_lists`, `post_build`（NDMF で処理した一時クローンも監査。`timeout_seconds` 120 程度） | なし（`post_build` はプレビューシーンの一時クローンを作って消す） |
 | `cct_world_audit` | ワールドシーンのアップロード前点検。`data.verdict` に SDK・UdonSharp が実際に止める項目、その他にライティング・ミラー・Udon 同期・動画プレイヤー・Android/iOS の制限・Editor.log のコンパイルエラー | `scene`（active / all / シーン名）, `platform`, `top_n`, `check_references`, `max_reference_scan`, `check_editor_log` | なし |
-| `cct_capture_views` | 対象の正面を基準にした決まった角度から PNG を撮る。一覧画像 `contact_sheet.png`、前回の撮影との画素比較 | `target`, `views`（例 `front,back,left,right`、`turnaround`、`face`）, `mode`（isolated / scene）, `resolution`, `framing`, `background`, `compare_with`（前回のフォルダか `latest`） | `Library/ClaudeCreatorTools/Captures` にファイルだけ |
+| `cct_capture_views` | 対象の +Z（アバターの一部ならアバターのルートの +Z）を `front` とした決まった角度から PNG を撮る。一覧画像 `contact_sheet.png`、前回の撮影との画素比較。小物は +Z が見た目の正面とは限りません（椅子は背もたれ側が +Z のこともある）。`front` に背面が写ったら `back` を見てください | `target`, `views`（例 `front,back,left,right`、`turnaround`、`face`）, `mode`（isolated / scene）, `resolution`, `framing`, `background`, `compare_with`（前回のフォルダか `latest`） | `Library/ClaudeCreatorTools/Captures` にファイルだけ |
 | `cct_snapshot` | 危ない編集の前のファイル単位のバックアップ（`.meta` 込み）、差分、復元、削除 | `action`（**必須**: create / list / diff / restore / delete）, `assets`, `include_dependencies`, `label`, `id`, `confirm` | create はスナップショットフォルダーにコピー。restore / delete は `confirm: true` のときだけ |
 | `cct_animator_inspect` | AnimatorController のダンプと VRChat 向けの検査（WD 混在、未定義パラメーター、型の不一致、届かない遷移、Binding のパス切れ）。パラメーターの使用箇所や、あるプロパティを書くクリップの検索 | `target`, `controller`, `layer`（fx / gesture / … / all）, `layers`, `find_parameter`, `find_binding`, `check_bindings`, `max_states` | なし |
 | `cct_dependency_report` | 依存関係（同梱すべきもの・外部パッケージ・未解決 GUID）、使用元の逆引き、シーン外への参照（プレハブ化すると切れる参照） | `mode`（dependencies / reverse / scene_references）, `assets`, `export_root`, `declared_packages`, `target`, `search_root` | なし（レポートと TSV だけ） |
@@ -69,7 +69,7 @@ Claude Code では、MCP サーバー名が `UnityMCP` なので、ツール名�
    mcp__UnityMCP__execute_custom_tool(tool_name="cct_avatar_audit", parameters={"target": "/霧島", "platform": "android"})
    ```
 
-   - 利用者のサーバー（9.7.1 + FastMCP 4 改修版、Python 3.14）では、引数を持つカスタムツールが単独ツールとして登録できない可能性があります（上流 9.7.1 のコードを Python 3.14 で動かすと `KeyError` で失敗することを再現済み。改修版に修正が入っているかは未確認）。`cct_*` は 8 個とも引数を持つので、この場合は全部が `execute_custom_tool` 経由になります。
+   - 利用者のサーバー（9.7.1 + FastMCP 4 改修版、Python 3.14）では、引数を持つカスタムツールが単独ツールとして登録できません（上流 9.7.1 のコードを Python 3.14 で動かすと `KeyError` で失敗します）。2026-10-25 の確認でも `cct_*` 8 個とも `Failed to register custom tool 'cct_…' globally: '<最初の引数名>'` となり、全部が `execute_custom_tool` 経由でした。
    - この経路にはスキーマも既定値の補完もありません。引数名は snake_case でそのまま渡します（camelCase も受け付けます）。
    - 引数の説明は、リソース `mcpforunity://custom-tools` の `data.tools[].description` で読めます（引数ごとの説明は `parameters[].description`）。
    - `execute_custom_tool` は、サーバーが `--project-scoped-tools` 付きで起動しているときだけあります（利用者の起動コマンドには付いていると記録されています）。
@@ -130,7 +130,7 @@ MCP の応答は、成功時は `{success: true, message, data}`、失敗時は 
 - `success`, `message`（日本語の一行要約）, 失敗時は `code`（`EDITOR_BUSY` などの固定名）
 - `issue_counts`（`error` / `warning` / `info` の件数）, `issues`（error が先頭。`max_issues` 件まで）, 入りきらなかった件数 `issues_omitted`
 - 各ツールのデータ（要約に入るキーはツールごとに決まっています。一覧の長いものはレポートだけにあります）
-- `tool`, `tool_version`（このパッケージの版。`0.1.0`）, `elapsed_ms`
+- `tool`, `tool_version`（このパッケージの版。`0.1.1`）, `elapsed_ms`
 - `report_path`: 全文 JSON の絶対パス（`/` 区切り、日本語のまま）。Claude は自分のファイル読み取りで開きます
 - `response_trimmed`（要約が大きすぎたときだけ）: 要約は推定約 7,000 トークンまでに抑えます（Claude Code は 10,000 トークンで警告し、25,000 トークンか 50,000 文字を超える結果をファイルに退避するため）。超えたときはすべての一覧を 40 件まで、それでも大きければ 25 → 15 → 10 → 5 件まで短くし（issue は `max_issues` を既定より増やしていなければ 15 → 10 件まで）、どの一覧を何件から切ったか（`lists`）、残した件数（`kept_per_list`）、丸ごと省いたキー（`keys_omitted`）をここに書きます。全件はレポートにあります（`detail: "full"` では切りません）
 
@@ -218,7 +218,7 @@ issue は `{severity, code, message, path?, asset?, value?, limit?}` です。`c
    - **レポートフォルダを開く** で、その JSON があり、メモ帳で開くと `project_root` の日本語が文字化けしていないこと。
 3. **MCP の登録**: **Window > MCP for Unity** で Stop Server → Start Server を押し、**Tools** の「Custom Tools」に `cct_*` が 8 個あり、オンになっていること。Claude Code では `/mcp` で UnityMCP を再接続します。
 4. **Claude から呼ぶ**: Claude に「cct_environment を実行して」と頼みます。
-   - 合格: `success: true`、`tool_version: "0.1.0"`、`project_root` が開いているプロジェクトと同じであること。
+   - 合格: `success: true`、`tool_version: "0.1.1"`、`project_root` が開いているプロジェクトと同じであること。
    - そのとき Claude が `mcp__UnityMCP__cct_environment` を直接呼べたか、`execute_custom_tool` 経由だったかを記録しておいてください（サーバーの Python 3.14 の問題が起きているかが分かります）。
 5. **撮影（アバタープロジェクト）**: Hierarchy でアバターのルートを選び、Claude に「cct_capture_views で撮って、一覧画像を見て」と頼みます（メニューなら **キャプチャ (cct_capture_views) > 選択中を4方向**）。
    - 合格: `Library/ClaudeCreatorTools/Captures/<日時>-<英数字4文字>_<アバター名>/contact_sheet.png` に、front / back / left / right の 4 枚が名前付きで並び、アバター全身が切れずに中央にあり、背景が灰色（#808080）であること。Claude がその PNG を読んで見た目を説明できること。
@@ -233,12 +233,13 @@ issue は `{severity, code, message, path?, asset?, value?, limit?}` です。`c
 
 ## 既知の制限
 
-- **Unity の中で一度も実行していません（0.1.0）。** 確かめたのは次の範囲だけです。
-  - Roslyn（C# 9）で、**Unity 2021.1 の参照 DLL** と、MCP for Unity 9.7.1 のソースから作ったスタブに対してコンパイルできること（Unity 2022.3 で動くかは未確認。2022.3 にしか無い API は使っていません）。
+- **0.1.0 の実機確認**（2026-10-25、Unity 2022.3.22f1・VRChat SDK 3.10.5・MCP for Unity 9.7.1 / 9.7.101）: アバタープロジェクトとワールドプロジェクトで「初回確認」1〜8 に合格しました。ワールド監査の結果は、シーン・SDK・同梱パッケージのソースと 1 件ずつ突き合わせ、誤りを 0.1.1 で直しました。
+- **0.1.1 は Unity の中ではまだ実行していません。** 変更したコードは Unity 2022.3.22f1 の DLL に対してコンパイルできることだけを確かめています。オフラインの確認の範囲は次のとおりです。
+  - Roslyn（C# 9）で、**Unity 2021.1 の参照 DLL** と、MCP for Unity 9.7.1 のソースから作ったスタブに対してコンパイルできること（2022.3 にしか無い API は使っていません）。
   - MCP for Unity 9.7.1 の登録規則（明示した名前、引数の順序、Description にすべての引数の説明があること）を満たすこと。
   - ツールが読む VRChat の型とプロパティのパスが、**VRChat SDK 3.10.5 の実際の DLL** にあること（他の版は未確認）。
   - ワールドギミックが、SDK 3.10.5 の DLL・SDK 同梱の UdonSharp ランタイム・Unity 2021.3 のエンジン DLL に対してコンパイルでき、U# が扱えない構文と Udon に公開されていない API を使っていないこと（U# コンパイラそのもの・ClientSim・VRChat では未確認）。
-- 利用者のサーバー（9.7.1 + FastMCP 4 改修版、Python 3.14）で、`cct_*` が単独ツールとして出るか、`execute_custom_tool` 経由になるかは未確認です。
+- 利用者のサーバー（9.7.1 + FastMCP 4 改修版、Python 3.14）では、`cct_*` は単独ツールとして出ず、`execute_custom_tool` 経由で呼びます（2026-10-25 確認）。
 - 監査は編集時点の静的な点検です。SDK のビルド・NDMF 処理後（`post_build` は NDMF だけを動かし、VRCFury などは含みません）・エミュレーター・VRChat 実機の結果とは別物として扱ってください。
 - 撮影した画像は「その条件でのエディターの見た目」で、VRChat 実機の見た目ではありません。`isolated` モードはシーンの照明・ポストプロセス・NDMF/MA のプレビューを再現しません。
 - 依存関係の GUID 走査は、テキストとして保存されたアセットが対象です。バイナリのファイルと、コードからの名前での参照（`Shader.Find`、`Resources.Load`）は網羅しません。

@@ -2,6 +2,30 @@
 
 このパッケージの変更点を記録します。版の付け方は [Semantic Versioning](https://semver.org/lang/ja/) に従います。0.x のあいだは、issue コード・引数・出力のキーが変わることがあり、変わったときはここに書きます。
 
+## [0.1.1] - 2026-10-25
+
+0.1.0 の初回確認（2026-10-25、Unity 2022.3.22f1・VRChat SDK 3.10.5。アバター「ひかるん」・ワールド「泡ワールド」）で、`cct_world_audit` の 28 件をシーン・SDK・同梱パッケージのソースと突き合わせ、誤検知と不正確な文面を直しました。機能の追加はありません。**0.1.1 自体はまだ Unity の中で実行していません**（Unity 2022.3.22f1 の DLL に対するコンパイルと、オフラインの確認だけです）。
+
+### 修正（誤検知）
+
+- `NOT_WHITELISTED`: ビルド時にシーン処理（`IProcessSceneWithReport`）で消えるコンポーネントを warning にしていた。iwaSync3 の `IwaSync3` / `Playlist` / `Screen` / `Speaker` は、`IwaSync3BuildProcessor` が設定を Udon に写してから削除するので info（対応不要）にした。それ以外でも、同じパッケージのエディタ用アセンブリにシーン処理（`IProcessSceneWithReport` / `[PostProcessScene]`）がある型は、推定として info にした（`reason`: `stripped_at_build` / `scene_processor_may_strip`）。
+- `NOT_WHITELISTED`: 子に VRChat で使われるコンポーネント（UdonBehaviour、AudioSource など）がある GameObject に「EditorOnly タグを付ける」と助言していた（子ごと消えてプレイヤーが壊れる）。その場合は付けないよう案内する（`shipping_component_in_subtree`）。
+- `VIDEO_PLAYER_NO_AUDIO`: iwaSync3 はビルド時に Unity プレイヤーの Target Audio Sources へ Speaker を入れる（保存値は空のまま）ため、iwaSync3 の下のプレイヤーで、その iwaSync3 を指す Speaker があれば出さない（`video_players.items[].audio_sources_at_build`）。同じ GameObject の AVPro プレイヤーに Speaker がある場合は、文面を「Unity プレイヤーのモードのときだけ音が出ない可能性」に弱めた。
+
+### 修正（文面・重さ）
+
+- `MULTIPLE_SCENES_LOADED`: NDMF が自動で開くプレビューシーン（閉じられない）を数えない。追加のシーンに GameObject があるときだけ warning、空なら info。出どころを SDK から EST に直した（SDK 3.10.5 に複数シーンの検査は無い）。`scenes.loaded[].ndmf_preview` を追加。
+- `STATION_NO_COLLIDER`: 別の GameObject の UdonBehaviour / U# がその VRC Station を参照していれば（例: 椅子の Interact から UseStation）出さない（`interactables.stations.no_collider_but_used_from_other_udon`）。文面を「このオブジェクト自体を Interact しても座れません」に直した。
+- `PICKUP_NOT_SYNCED`: Udon が置き場所を決めているピックアップ（自分に UdonBehaviour があり開始時は掴めない、または祖先に Manual / Continuous の UdonBehaviour がある）を数えず、別枠にした（`interactables.pickups.not_synced_udon_controlled`）。助言に「Udon の位置制御と競合することがある」を足した。
+- `LIGHTMAP_UV_MISSING`: UV2 が無くても、UV0 が 0〜1 に収まった重なりの無い展開（Unity 組み込みの Quad など）なら出さない（`lighting.lightmaps.uv0_fallback_ok`）。文面の「UV1 で代用」を「UV0 (1 番目の UV)」に直し、組み込みメッシュには Generate Lightmap UVs が無いことを書いた。
+- `ANDROID_LARGE_TEXTURE`: Non-Power of 2（`npotScale`）の丸めを反映してから 1024 px と比べる（2 の累乗でない 1300〜1440 px 程度の画像は 1024 で取り込まれるため数えすぎていた）。
+- `UI_NO_EVENT_SYSTEM`: warning → info。ClientSim は自前の EventSystem を使い、VRChat クライアントでも EventSystem の無いワールドで UI が動いた例があるため、「クライアントで UI が反応しないときだけ確認」と書いた。
+- `AVATAR_PACKAGES_IN_WORLD_PROJECT`: どのパッケージがそれを必要としているか（`package.json` の `dependencies` / `vpmDependencies`）を示し（`project.avatar_packages_required_by`）、理由を「それを使うアバター用プラグインが API と合わずにコンパイルできないと Assembly-CSharp が作られない。Editor.log の error CS を確認」に直した。
+
+### 変更（出力）
+
+- `interactables.dynamics.in_scope_shipped` を追加。`counts.physbones` などと同じ数え方（scene の範囲、EditorOnly を除く）の PhysBone / コライダー / Contact の数です。`dynamics.physbones` などは従来どおり SDK と同じく読み込み中の全シーン（EditorOnly を含む）を数えます（0.1.0 では両者が食い違って見えた）。
+
 ## [0.1.0] - 2026-10-25
 
 最初の版です。**Unity の中では一度も実行していません。** オフラインでのコンパイル（Unity 2021.1 の参照 DLL、MCP for Unity 9.7.1 のソースから作ったスタブ）と、VRChat SDK 3.10.5 の DLL に対するフィールド名の照合、ワールドギミックの U# 静的チェックだけを行っています。導入したら README の「初回確認」を行ってください。

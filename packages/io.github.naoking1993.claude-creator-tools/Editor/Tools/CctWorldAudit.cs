@@ -56,7 +56,10 @@ namespace Naoking.ClaudeCreatorTools
     /// | WORLDS_SDK_MISSING                | fail    | -      | VRC.SDK3.Components.VRCSceneDescriptor type not loaded               |
     /// | INVALID_ARGUMENT / SCENE_NOT_LOADED / NO_LOADED_SCENE | fail | - | bad platform/scene argument, or nothing loaded             |
     /// | PLAY_MODE                         | warning | -      | Play mode: runtime objects (ClientSim etc.) are included             |
-    /// | MULTIPLE_SCENES_LOADED            | warning | SDK    | >1 loaded scene: SDK counts all of them, uploads only the active one |
+    /// | MULTIPLE_SCENES_LOADED            | warning | EST    | another loaded scene has GameObjects: the SDK counts descriptors /   |
+    /// |                                   | (info)  |        | PipelineManagers over all loaded scenes but builds only the active   |
+    /// |                                   |         |        | one (info when the extra scenes are empty; NDMF's preview scene is   |
+    /// |                                   |         |        | never counted). The SDK itself has no multi-scene check              |
     /// | SCENE_UNSAVED                     | info    | SDK    | audited scene dirty (the SDK saves open scenes before building)      |
     /// | SCENE_DIRTIED                     | warning | -      | a scene became dirty during this read-only audit (should not happen) |
     /// | SECTION_FAILED                    | warning | -      | one audit section threw; its data is incomplete                      |
@@ -69,7 +72,8 @@ namespace Naoking.ClaudeCreatorTools
     /// | COLOR_SPACE_GAMMA                 | info    | SDK    | Gamma: EnvConfig switches to Linear when building                    |
     /// | BUNDLE_TOO_LARGE_MOBILE           | error   | SDK    | last Android/iOS build > 104,857,600 B: Upload() refuses it [WB E6]  |
     /// | BUNDLE_LARGE_PC                   | info    | DOC    | last PC build > 200 MB (Labs/Public recommendation)                  |
-    /// | AVATAR_PACKAGES_IN_WORLD_PROJECT  | info    | COM    | avatar-only packages registered in a world project                   |
+    /// | AVATAR_PACKAGES_IN_WORLD_PROJECT  | info    | COM    | avatar-only packages registered in a world project (and the installed|
+    /// |                                   |         |        | packages whose package.json requires them)                           |
     /// | SDK2_EVENT_HANDLER                | error   | SDK    | VRC_EventHandler present [WB C6]                                     |
     /// | SDK2_COMPONENT                    | error   | SDK    | a VRCSDK2.* component present [PB C1]                                |
     /// | EDITOR_LOG_CS_ERRORS              | info    | EST    | "error CS####" lines in the Editor.log tail (may be already fixed)   |
@@ -104,7 +108,8 @@ namespace Naoking.ClaudeCreatorTools
     /// | MIRROR_REFLECTION_LAYER_RENDERER  | info    | DOC    | renderers on MirrorReflection only appear in mirrors                 |
     /// | LIGHTMAP_NOT_BAKED                | warning | DOC    | ContributeGI renderers exist but no lightmaps                        |
     /// | LIGHTMAP_OUTDATED                 | info    | EST    | lightmaps exist but some ContributeGI renderers have none            |
-    /// | LIGHTMAP_UV_MISSING               | info    | COM    | ContributeGI mesh without UV2 and no "Generate Lightmap UVs"         |
+    /// | LIGHTMAP_UV_MISSING               | info    | COM    | ContributeGI mesh without UV2 and no "Generate Lightmap UVs", whose  |
+    /// |                                   |         |        | UV0 is not a clean 0..1 unwrap (built-in Quad etc. are not reported) |
     /// | REALTIME_SHADOW_LIGHTS            | warning | DOC/EST| > 1 active realtime light with shadows                               |
     /// | BAKED_LIGHT_NOT_BAKED             | warning | COM    | Baked/Mixed light without bake output (acts realtime in game)        |
     /// | NO_LIGHT_PROBES                   | info    | COM    | baked lighting without light probes (players/pickups unlit)          |
@@ -154,9 +159,12 @@ namespace Naoking.ClaudeCreatorTools
     /// | USHARP_SCAN_TRUNCATED             | info    | -      | program-asset scan stopped at the time budget                        |
     /// | PICKUP_NO_RIGIDBODY               | error   | SDK    | VRCPickup without Rigidbody (RequireComponent)                       |
     /// | PICKUP_NO_COLLIDER                | warning | SDK    | VRCPickup without Collider on the same object (inspector warning)    |
-    /// | PICKUP_NOT_SYNCED                 | info    | DOC    | pickup without VRCObjectSync (or obsolete Udon SynchronizePosition)  |
+    /// | PICKUP_NOT_SYNCED                 | info    | DOC    | pickup without VRCObjectSync (or obsolete Udon SynchronizePosition); |
+    /// |                                   |         |        | not for Udon-placed ones (own Udon + not pickupable at start, or a   |
+    /// |                                   |         |        | Manual/Continuous UdonBehaviour on an ancestor)                      |
     /// | PICKUP_COLLIDES_WITH_PLAYER       | info    | DOC    | non-kinematic pickup on a layer that collides with players           |
-    /// | STATION_NO_COLLIDER               | info    | DOC    | VRCStation without Collider (cannot be interacted with)              |
+    /// | STATION_NO_COLLIDER               | info    | DOC    | VRCStation without Collider (cannot be interacted with itself); not  |
+    /// |                                   |         |        | when an Udon on another object references it (seats via UseStation)  |
     /// | STATION_NO_INTERACT_UDON          | info    | DOC    | VRCStation without an UdonBehaviour on the same object               |
     /// | MESH_COLLIDER_NONCONVEX_RIGIDBODY | warning | EST    | non-convex MeshCollider under a non-kinematic Rigidbody (unsupported)|
     /// | OBJECT_POOL_EMPTY_ENTRY           | warning | EST    | VRCObjectPool.Pool has null entries                                  |
@@ -166,7 +174,8 @@ namespace Naoking.ClaudeCreatorTools
     /// | VIDEO_PLAYER_TOO_MANY             | warning | DOC    | > 2 VRChat video players                                             |
     /// | VIDEO_PLAYER_AUTOPLAY_MULTIPLE    | warning | DOC    | >= 2 players auto-play a URL (5 s per-user URL rate limit)           |
     /// | VIDEO_PLAYER_NO_OUTPUT            | warning | EST    | Unity player without target texture/renderer; AVPro without screen   |
-    /// | VIDEO_PLAYER_NO_AUDIO             | info    | EST    | Unity player without audio sources; AVPro without speaker            |
+    /// | VIDEO_PLAYER_NO_AUDIO             | info    | EST    | Unity player without audio sources; AVPro without speaker. Not for a |
+    /// |                                   |         |        | Unity player under iwaSync3 whose Speakers it assigns at build        |
     /// | VIDEO_PLAYER_URL_NOT_ALLOWLISTED  | info    | DOC    | default URL host not in the docs' allowlist                          |
     /// | VIDEO_PLAYER_HTTP_MOBILE          | warning | DOC    | http:// URL (platform all/android): Android plays only HTTPS video   |
     /// | AUDIO_NO_SPATIAL                  | warning | SDK    | AudioSource without VRC_SpatialAudioSource [WB]                      |
@@ -175,7 +184,8 @@ namespace Naoking.ClaudeCreatorTools
     /// | PHYSBONE_SHAPES_OVER_LIMIT        | warning | SDK    | PhysBones + colliders > 1024 [WB]                                    |
     /// | CONTACTS_OVER_LIMIT               | warning | SDK    | contacts > 1024 [WB]                                                 |
     /// | UI_SHAPE_NO_CANVAS / UI_SHAPE_ON_UI_LAYER / UI_SHAPE_NOT_WORLD_SPACE / UI_SHAPE_NO_RAYCASTER | warning | DOC | VRCUiShape setup |
-    /// | UI_NO_EVENT_SYSTEM                | warning | DOC    | VRCUiShape present but no EventSystem in the scope                   |
+    /// | UI_NO_EVENT_SYSTEM                | info    | DOC    | VRCUiShape present but no EventSystem in the scope (ClientSim and,   |
+    /// |                                   |         |        | apparently, the client supply their own)                             |
     /// | UI_CANVAS_NO_UI_SHAPE             | info    | DOC    | interactive world-space canvas without VRCUiShape                    |
     /// | UI_NAVIGATION_NOT_NONE            | info    | DOC    | Selectable navigation not None                                       |
     /// | UI_SCROLL_SENSITIVITY             | info    | DOC    | ScrollRect scroll sensitivity != 0                                   |
@@ -183,7 +193,10 @@ namespace Naoking.ClaudeCreatorTools
     /// | MISSING_REFERENCE                 | warning | EST    | object reference to a deleted asset/object (SerializedObject scan)   |
     /// | MISSING_PREFAB                    | warning | EST    | prefab instance whose asset is missing (outermost object reported)   |
     /// | NOT_WHITELISTED                   | warning | WV     | component type not in the SDK3 world allowlist (client strips it);  |
-    /// |                                   | (info)  |        | info for UnityEngine.ProBuilder.* (ProBuilder strips them at build)  |
+    /// |                                   | (info)  |        | info for UnityEngine.ProBuilder.* (ProBuilder strips them at build), |
+    /// |                                   |         |        | for types a known scene build processor destroys (iwaSync3), and for |
+    /// |                                   |         |        | types whose package has a scene build processor (estimate). Never    |
+    /// |                                   |         |        | suggests the EditorOnly tag over shipping children (Udon, audio, ...)|
     /// | NOT_WHITELISTED_DERIVED           | warning | WV/EST | derives from an allowed type but lives in a project assembly         |
     /// | EDITOR_ONLY_COMPONENTS            | info    | WV     | IEditorOnly components (exempt from the allowlist)                   |
     /// | REFERENCE_SCAN_TRUNCATED          | info    | -      | missing-reference scan stopped at max_reference_scan / time budget   |
@@ -196,7 +209,7 @@ namespace Naoking.ClaudeCreatorTools
     /// |                                   |         |        | mobile shaders the SDK list misses (Toon Standard, Worlds/Supersampled UI)|
     /// | ANDROID_POST_PROCESSING           | warning | DOC/WV | mobile: post processing is disabled/stripped                         |
     /// | ANDROID_REALTIME_LIGHT            | warning | DOC    | mobile: active realtime lights ("bake lighting is essential")        |
-    /// | ANDROID_LARGE_TEXTURE             | info    | DOC    | mobile: textures above 1024 px                                       |
+    /// | ANDROID_LARGE_TEXTURE             | info    | DOC    | mobile: textures above 1024 px (after Non-Power of 2 scaling)        |
     /// | ANDROID_TRIANGLE_BUDGET           | warning | DOC    | mobile: > 250,000 triangles in the scope                             |
     /// | ANDROID_UNSUPPORTED_COMPONENT     | warning | DOC    | mobile: Cloth / Dynamic Bone are disabled                            |
     /// | ANDROID_TRANSPARENT_MATERIALS     | info    | DOC    | mobile: cutout/transparent materials (render queue >= 2450)          |
@@ -269,6 +282,13 @@ namespace Naoking.ClaudeCreatorTools
         const string TCloth = "UnityEngine.Cloth";
         const string TTerrain = "UnityEngine.Terrain";
         const string TLegacyAnimation = "UnityEngine.Animation";
+        // Third-party packages, by name (read from their source: iwaSync3 Assets/HoshinoLabs/iwaSync3/Editor/IwaSync3BuildProcessor.cs).
+        const string TIwaSync3 = "HoshinoLabs.IwaSync3.IwaSync3";
+        const string TIwaSync3Speaker = "HoshinoLabs.IwaSync3.Speaker";
+        const string TIwaSync3BuildProcessor = "HoshinoLabs.IwaSync3.IwaSync3BuildProcessor";
+        // NDMF's hidden preview scene (nadena.dev.ndmf.preview.NDMFPreviewSceneManager, NDMF 1.14.3).
+        const string TNdmfPreviewSceneManager = "nadena.dev.ndmf.preview.NDMFPreviewSceneManager";
+        const string NdmfPreviewSceneName = "___NDMF Preview___";
 
         /// <summary>Runs the audit. Read-only; see the class comment for arguments, codes and data keys.</summary>
         public static CctResult Run(CctArgs args)
@@ -568,9 +588,12 @@ namespace Naoking.ClaudeCreatorTools
         static void PutScenes(Ctx ctx)
         {
             var list = new List<object>();
+            var extraWithContent = new List<string>();
+            var extraEmpty = new List<string>();
             for (int i = 0; i < ctx.Loaded.Count; i++)
             {
                 var s = ctx.Loaded[i];
+                bool ndmfPreview = IsNdmfPreviewScene(s);
                 list.Add(new Dictionary<string, object>
                 {
                     ["name"] = s.name,
@@ -581,9 +604,13 @@ namespace Naoking.ClaudeCreatorTools
                     ["root_count"] = s.rootCount,
                     ["gameobjects"] = ctx.Objects.Count(o => o.Scene == i),
                     ["editor_only_gameobjects"] = ctx.Objects.Count(o => o.Scene == i && o.EditorOnly),
+                    ["ndmf_preview"] = ndmfPreview,
                 });
                 if (ctx.ScopeIndices.Contains(i) && s.isDirty)
                     ctx.Issue(CctSeverity.Info, "SCENE_UNSAVED", $"シーン '{s.name}' に未保存の変更があります。SDK はビルド前に開いているシーンを保存します", value: s.path);
+                if (i == ctx.ActiveIndex || ndmfPreview) continue;
+                var content = SceneContent(ctx, i);
+                (content != null ? extraWithContent : extraEmpty).Add(content != null ? $"{s.path} ({content})" : s.path);
             }
             ctx.R.Put("scenes", new Dictionary<string, object>
             {
@@ -592,10 +619,17 @@ namespace Naoking.ClaudeCreatorTools
                 ["loaded"] = list,
                 ["hidden_objects_skipped"] = ctx.HiddenSkipped,
             });
-            if (ctx.Loaded.Count > 1)
+            // NDMF's preview scene is reopened by NDMF itself (NDMFPreviewSceneManager.cs L99-100, 144) and holds no world content,
+            // so it is never counted. The SDK has no multi-scene check of its own; it only counts descriptors / PipelineManagers
+            // over every loaded scene (VRC.Tools.FindSceneObjectsOfTypeAll) and exports the active scene.
+            if (extraWithContent.Count > 0)
                 ctx.Issue(CctSeverity.Warning, "MULTIPLE_SCENES_LOADED",
-                    $"シーンが {ctx.Loaded.Count} 個読み込まれています。SDK は記述子・PipelineManager などを読み込み中の全シーンで数えますが、アップロードされるのはアクティブシーン '{ctx.Active.name}' だけです。アップロード時は対象シーンだけを開いてください",
-                    value: ctx.Loaded.Select(s => (object)s.path).ToList());
+                    $"アクティブシーン '{ctx.Active.name}' のほかに、中身のあるシーンが {extraWithContent.Count} 個読み込まれています: {string.Join(", ", extraWithContent.Take(5))}。SDK は記述子・PipelineManager などを読み込み中の全シーンで数えますが、ビルドされるのはアクティブシーンだけです。アップロード時は対象シーンだけを開いてください",
+                    value: extraWithContent.Cast<object>().ToList());
+            else if (extraEmpty.Count > 0)
+                ctx.Issue(CctSeverity.Info, "MULTIPLE_SCENES_LOADED",
+                    $"アクティブシーンのほかに、空のシーン (オブジェクト 0 個) が {extraEmpty.Count} 個読み込まれています。ビルドされるのはアクティブシーンだけなので影響はありません",
+                    value: extraEmpty.Cast<object>().ToList());
 
             ctx.R.Put("platforms", new Dictionary<string, object>
             {
@@ -652,6 +686,43 @@ namespace Naoking.ClaudeCreatorTools
                 "EditorOnly タグ (自身か親) の付いたオブジェクトは Unity がビルド時に除去するため、内容の集計から除いています",
                 "三角形数はメッシュのインデックス数からの概算です (Terrain・パーティクル・UI は含みません)",
             });
+        }
+
+        /// <summary>What a non-active loaded scene holds ("記述子 1 / オブジェクト 12 個"), or null when it has no GameObjects.</summary>
+        static string SceneContent(Ctx ctx, int sceneIndex)
+        {
+            int objects = ctx.Objects.Count(o => o.Scene == sceneIndex);
+            if (objects == 0) return null;
+            int descriptors = ctx.Get(K.SceneDescriptor).Count(i => i.O != null && i.O.Scene == sceneIndex);
+            int pipelines = ctx.Get(K.PipelineManager).Count(i => i.O != null && i.O.Scene == sceneIndex);
+            var parts = new List<string>();
+            if (descriptors > 0) parts.Add($"記述子 {descriptors}");
+            if (pipelines > 0) parts.Add($"PipelineManager {pipelines}");
+            parts.Add($"オブジェクト {objects} 個");
+            return string.Join(" / ", parts);
+        }
+
+        static System.Reflection.MethodInfo _ndmfIsPreviewScene;
+        static bool _ndmfLooked;
+
+        /// <summary>NDMF's hidden preview scene: its name, or NDMFPreviewSceneManager.IsPreviewScene(Scene) when NDMF has it.</summary>
+        static bool IsNdmfPreviewScene(Scene s)
+        {
+            if (s.name == NdmfPreviewSceneName) return true;
+            if (!_ndmfLooked)
+            {
+                _ndmfLooked = true;
+                try
+                {
+                    _ndmfIsPreviewScene = CctSerialized.FindType(TNdmfPreviewSceneManager)?.GetMethod("IsPreviewScene",
+                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static,
+                        null, new[] { typeof(Scene) }, null);
+                }
+                catch (Exception) { _ndmfIsPreviewScene = null; }
+            }
+            if (_ndmfIsPreviewScene == null || _ndmfIsPreviewScene.ReturnType != typeof(bool)) return false;
+            try { return (bool)_ndmfIsPreviewScene.Invoke(null, new object[] { s }); }
+            catch (Exception) { return false; }
         }
 
         // ------------------------------------------------------------------ small helpers

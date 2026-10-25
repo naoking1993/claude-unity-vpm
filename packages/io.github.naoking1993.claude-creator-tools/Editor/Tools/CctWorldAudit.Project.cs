@@ -116,12 +116,14 @@ namespace Naoking.ClaudeCreatorTools
         static void ReadPackages(Ctx ctx, Dictionary<string, object> p)
         {
             var versions = new Dictionary<string, string>(StringComparer.Ordinal);
+            var folders = new Dictionary<string, string>(StringComparer.Ordinal);
             try
             {
                 foreach (var info in UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackages())
                 {
                     if (info == null || string.IsNullOrEmpty(info.name)) continue;
                     versions[info.name] = info.version;
+                    folders[info.name] = info.resolvedPath;
                     ctx.Packages.Add(new PackageEntry { Name = info.name, DisplayName = info.displayName, Version = info.version });
                 }
             }
@@ -141,12 +143,53 @@ namespace Naoking.ClaudeCreatorTools
                 ["bundled_with_worlds_sdk"] = worlds != null,
                 ["legacy_package_version"] = legacyUSharp,
             };
-            var avatarPackages = AvatarOnlyPackages.Where(versions.ContainsKey).Select(n => (object)(n + "@" + versions[n])).ToList();
+            var avatarNames = AvatarOnlyPackages.Where(versions.ContainsKey).ToList();
+            var avatarPackages = avatarNames.Select(n => (object)(n + "@" + versions[n])).ToList();
             p["avatar_packages"] = avatarPackages;
             if (avatarPackages.Count > 0)
+            {
+                // Installed packages whose package.json requires a flagged one (VCC cannot remove it while they stay).
+                var requiredBy = PackageDependents(folders, avatarNames);
+                p["avatar_packages_required_by"] = requiredBy.ToDictionary(kv => kv.Key, kv => (object)kv.Value.Cast<object>().ToList());
+                var needed = requiredBy.Select(kv => $"{kv.Key} は {string.Join(", ", kv.Value)} が必要としています").ToList();
                 ctx.Issue(CctSeverity.Info, "AVATAR_PACKAGES_IN_WORLD_PROJECT",
-                    "ワールドプロジェクトにアバター用パッケージが入っています。API の不整合で Assembly-CSharp が生成されなくなった実例があるため、不要なら VCC から外してください",
+                    $"ワールドプロジェクトにアバター用パッケージが入っています ({string.Join(", ", avatarNames)})。これを使うアバター用プラグインのエディタ拡張が、入っている版の API と合わずにコンパイルできないと、Assembly-CSharp が作られなくなります (実例あり)。Editor.log に error CS が無ければ今は問題ありません。" +
+                    (needed.Count > 0 ? $"外すときは依存する側も一緒に外してください ({string.Join("。", needed)})" : "不要なら VCC から外せます"),
                     value: avatarPackages);
+            }
+        }
+
+        /// <summary>
+        /// For each of <paramref name="names"/>, the registered packages whose package.json lists it in "dependencies" or
+        /// "vpmDependencies" (VPM packages declare each other there). Unreadable manifests are skipped.
+        /// </summary>
+        static Dictionary<string, List<string>> PackageDependents(Dictionary<string, string> folders, ICollection<string> names)
+        {
+            var result = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (var kv in folders.OrderBy(k => k.Key, StringComparer.Ordinal))
+            {
+                if (string.IsNullOrEmpty(kv.Value)) continue;
+                Dictionary<string, object> manifest;
+                try
+                {
+                    var path = Path.Combine(kv.Value, "package.json");
+                    if (!File.Exists(path)) continue;
+                    manifest = CctJson.Parse(File.ReadAllText(path, Encoding.UTF8)) as Dictionary<string, object>;
+                }
+                catch (Exception) { continue; }
+                if (manifest == null) continue;
+                foreach (var key in new[] { "dependencies", "vpmDependencies" })
+                {
+                    if (!(manifest.TryGetValue(key, out var deps) && deps is Dictionary<string, object> map)) continue;
+                    foreach (var name in names)
+                    {
+                        if (name == kv.Key || !map.ContainsKey(name)) continue;
+                        if (!result.TryGetValue(name, out var list)) result[name] = list = new List<string>();
+                        if (!list.Contains(kv.Key)) list.Add(kv.Key);
+                    }
+                }
+            }
+            return result;
         }
 
         /// <summary>

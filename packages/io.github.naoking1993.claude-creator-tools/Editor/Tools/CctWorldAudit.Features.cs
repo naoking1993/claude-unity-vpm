@@ -530,6 +530,7 @@ namespace Naoking.ClaudeCreatorTools
             var orientation = new Dictionary<string, object>();
             var version = new Dictionary<string, object>();
             var unsynced = new List<string>();
+            var udonControlled = new List<string>();
             var collidesWithPlayer = new List<string>();
             var items = new List<object>();
             foreach (var item in ctx.Audited(K.Pickup))
@@ -544,11 +545,6 @@ namespace Naoking.ClaudeCreatorTools
                 var udons = ComponentsOfKind(go, K.Udon);
                 bool legacyPositionSync = udons.Any(u => UdonSynchronizesPosition(ctx, u));
                 if (hasSync || legacyPositionSync) synced++;
-                else
-                {
-                    unsynced.Add(item.O.Path);
-                    if (udons.Count > 0) unsyncedWithUdon++;
-                }
 
                 // VRC_Pickup has [RequireComponent(Rigidbody)]; VRCPickupEditor3 L84-90 warns when there is no Collider.
                 if (!hasRb)
@@ -562,10 +558,22 @@ namespace Naoking.ClaudeCreatorTools
                 // docs/worlds/layers.md L32: the Pickup layer "Does not collide with players".
                 if (hasRb && !rb.isKinematic && LayerCollidesWithPlayer(ctx, go.layer)) collidesWithPlayer.Add(item.O.Path);
 
+                bool pickupable = true;
                 using (var so = TrySerialize(ctx, item.C, "VRC Pickup"))
                 {
+                    if (so != null) pickupable = CctSerialized.GetBool(so.FindProperty("pickupable"), true);
+                    if (!hasSync && !legacyPositionSync)
+                    {
+                        // Udon most likely places / syncs it itself: an UdonBehaviour on the pickup while it starts not
+                        // pickupable (the script turns it on), or a synced (Manual / Continuous) UdonBehaviour on an ancestor.
+                        if ((udons.Count > 0 && !pickupable) || AncestorHasSyncedUdon(ctx, go.transform.parent)) udonControlled.Add(item.O.Path);
+                        else
+                        {
+                            unsynced.Add(item.O.Path);
+                            if (udons.Count > 0) unsyncedWithUdon++;
+                        }
+                    }
                     if (so == null) continue;
-                    bool pickupable = CctSerialized.GetBool(so.FindProperty("pickupable"), true);
                     if (!pickupable) notPickupable++;
                     var ah = EnumName(AutoHoldNames, CctSerialized.GetInt(so.FindProperty("AutoHold")));
                     var or = EnumName(OrientationNames, CctSerialized.GetInt(so.FindProperty("orientation")));
@@ -591,10 +599,11 @@ namespace Naoking.ClaudeCreatorTools
             }
             if (unsynced.Count > 0)
                 ctx.Issue(CctSeverity.Info, "PICKUP_NOT_SYNCED",
-                    $"VRC Object Sync の無いピックアップが {unsynced.Count} 個あります (うち UdonBehaviour 付き {unsyncedWithUdon} 個)。持って動かしても他のプレイヤーには位置が同期されません。同期したい物には VRC Object Sync を追加してください (Udon で位置を独自に同期しているなら不要)",
+                    $"VRC Object Sync の無いピックアップが {unsynced.Count} 個あります (うち UdonBehaviour 付き {unsyncedWithUdon} 個)。持って動かしても他のプレイヤーには位置が同期されません。同期したい物には VRC Object Sync を追加してください (Udon で位置を独自に同期しているなら不要です。Udon が位置を動かしている物に足すと、Udon の位置制御と競合することがあります)",
                     path: unsynced[0], value: new Dictionary<string, object>
                     {
                         ["count"] = unsynced.Count, ["with_udon"] = unsyncedWithUdon, ["examples"] = Examples(unsynced),
+                        ["udon_controlled_not_counted"] = udonControlled.Count,
                     });
             if (collidesWithPlayer.Count > 0)
                 ctx.Issue(CctSeverity.Info, "PICKUP_COLLIDES_WITH_PLAYER",
@@ -605,6 +614,8 @@ namespace Naoking.ClaudeCreatorTools
                 ["count"] = count,
                 ["synced"] = synced,
                 ["not_synced"] = unsynced.Count,
+                // No VRC Object Sync, but Udon most likely handles them (see AncestorHasSyncedUdon); not in PICKUP_NOT_SYNCED.
+                ["not_synced_udon_controlled"] = Grouped(udonControlled.Count, udonControlled),
                 ["not_pickupable"] = notPickupable,
                 ["auto_hold"] = autoHold,
                 ["orientation"] = orientation,
@@ -615,6 +626,18 @@ namespace Naoking.ClaudeCreatorTools
 
         /// <summary>Obsolete UdonBehaviour.SynchronizePosition (read in AuditUdon, which runs before the interactables).</summary>
         static bool UdonSynchronizesPosition(Ctx ctx, Component udon) => udon != null && ctx.UdonPositionSync.Contains(udon);
+
+        /// <summary>
+        /// An ancestor (from <paramref name="t"/> up) has a Manual / Continuous UdonBehaviour (sync type read in AuditUdon), e.g. a
+        /// synced door hinge whose knob pickup the hinge's script snaps back every frame.
+        /// </summary>
+        static bool AncestorHasSyncedUdon(Ctx ctx, Transform t)
+        {
+            for (var cur = t; cur != null; cur = cur.parent)
+                if (ComponentsOfKind(cur.gameObject, K.Udon).Any(u => ctx.UdonSyncType.TryGetValue(u, out var s) && (s == SyncManual || s == SyncContinuous)))
+                    return true;
+            return false;
+        }
 
         static bool LayerCollidesWithPlayer(Ctx ctx, int layer)
         {
@@ -630,13 +653,19 @@ namespace Naoking.ClaudeCreatorTools
             int stations = 0;
             var mobility = new Dictionary<string, object>();
             var noUdon = new List<string>();
+            var noCollider = new HashSet<Component>(ctx.Audited(K.Station).Select(i => i.C).Where(c => !c.gameObject.TryGetComponent<Collider>(out _)));
+            var usedFromOtherUdon = StationsReferencedByOtherUdon(ctx, noCollider);
+            var seatedViaOtherUdon = new List<object>();
             foreach (var item in ctx.Audited(K.Station))
             {
                 stations++;
                 var go = item.C.gameObject;
-                if (!go.TryGetComponent<Collider>(out _))
+                if (usedFromOtherUdon.TryGetValue(item.C, out var referrer))
+                    // Another object's Udon holds this station (it calls UseStation from its own Interact): sitting works.
+                    seatedViaOtherUdon.Add(new Dictionary<string, object> { ["station"] = item.O.Path, ["referenced_by"] = referrer });
+                else if (noCollider.Contains(item.C))
                     ctx.Issue(CctSeverity.Info, "STATION_NO_COLLIDER",
-                        "VRC Station と同じ GameObject に Collider がありません。Interact で座れません (docs: 通常は Is Trigger の Collider を付ける)",
+                        "VRC Station と同じ GameObject に Collider がありません。このオブジェクト自体を Interact しても座れません (他の Udon から UseStation で座らせる設計なら問題ありません。Interact で座らせるなら、docs は通常 Is Trigger の Collider を付けるとしています)",
                         path: item.O.Path);
                 if (!HasComponentOfKind(ctx, go, K.Udon)) noUdon.Add(item.O.Path);
                 using (var so = TrySerialize(ctx, item.C, "VRC Station"))
@@ -646,7 +675,11 @@ namespace Naoking.ClaudeCreatorTools
                 ctx.Issue(CctSeverity.Info, "STATION_NO_INTERACT_UDON",
                     $"同じ GameObject に UdonBehaviour が無い VRC Station が {noUdon.Count} 個あります。別の Udon から UseStation しない限り座れません (docs: Interact で UseAttachedStation を呼ぶ)",
                     path: noUdon[0], value: Grouped(noUdon.Count, noUdon));
-            d["stations"] = new Dictionary<string, object> { ["count"] = stations, ["player_mobility"] = mobility };
+            d["stations"] = new Dictionary<string, object>
+            {
+                ["count"] = stations, ["player_mobility"] = mobility,
+                ["no_collider_but_used_from_other_udon"] = seatedViaOtherUdon.Take(ctx.TopN).ToList(),
+            };
 
             d["object_syncs"] = ctx.Audited(K.ObjectSync).Count();
             int pools = 0, pooled = 0;
@@ -779,6 +812,18 @@ namespace Naoking.ClaudeCreatorTools
                         int audio = CctSerialized.Elements(so.FindProperty("targetAudioSources")).Count(e => CctSerialized.GetObject(e) != null);
                         entry["audio_sources"] = audio;
                         noAudio = audio == 0;
+                        if (noAudio)
+                        {
+                            var atBuild = IwaSync3SpeakersFor(ctx, item.C);
+                            if (atBuild != null && atBuild.Count > 0)
+                            {
+                                entry["audio_sources_at_build"] = new Dictionary<string, object>
+                                {
+                                    ["assigned_by"] = TIwaSync3BuildProcessor, ["speakers"] = Examples(atBuild),
+                                };
+                                noAudio = false;
+                            }
+                        }
                     }
                     if (noOutput)
                         ctx.Issue(CctSeverity.Warning, "VIDEO_PLAYER_NO_OUTPUT",
@@ -790,7 +835,9 @@ namespace Naoking.ClaudeCreatorTools
                         ctx.Issue(CctSeverity.Info, "VIDEO_PLAYER_NO_AUDIO",
                             avpro
                                 ? "AVPro Video Player を参照する VRC AVPro Video Speaker がありません。音が出ません"
-                                : "VRC Unity Video Player の Target Audio Sources が空です。音が出ません",
+                                : AvProSpeakersBeside(item.C, speakersFor)
+                                    ? "VRC Unity Video Player の Target Audio Sources が空です。同じ GameObject の AVPro プレイヤーには Speaker があるので、Unity プレイヤーで再生するモードのときだけ音が出ない可能性があります (プレイヤーのエディタ拡張がビルド時に割り当てる製品なら問題ありません)"
+                                    : "VRC Unity Video Player の Target Audio Sources が空です。音が出ません (プレイヤーのエディタ拡張がビルド時に割り当てる製品なら問題ありません)",
                             path: item.O.Path);
 
                     if (url.Length > 0)
@@ -818,6 +865,77 @@ namespace Naoking.ClaudeCreatorTools
                     $"既定 URL を自動再生するビデオプレイヤーが {autoPlayUrls.Count} 台あります。新しい URL の読み込みは 1 ユーザー 5 秒に 1 回までなので、同時に読み込むと失敗します",
                     path: autoPlayUrls[0], value: Grouped(autoPlayUrls.Count, autoPlayUrls));
             d["video_players"] = new Dictionary<string, object> { ["count"] = count, ["items"] = items };
+        }
+
+        /// <summary>
+        /// Stations an UdonBehaviour / U# proxy on another GameObject holds in a public variable or serialized field, i.e.
+        /// seated through that object's UseStation (for example a chair whose Interact calls station.UseStation) -> its path.
+        /// </summary>
+        static Dictionary<Component, string> StationsReferencedByOtherUdon(Ctx ctx, ICollection<Component> stations)
+        {
+            var result = new Dictionary<Component, string>();
+            if (stations.Count == 0) return result;
+            var byTarget = new Dictionary<Object, Component>();
+            foreach (var s in stations)
+            {
+                byTarget[s] = s;
+                byTarget[s.gameObject] = s;
+            }
+            var targets = new HashSet<Object>(byTarget.Keys);
+            foreach (var item in ctx.Audited(K.Udon | K.USharpProxy))
+            {
+                using (var so = TrySerialize(ctx, item.C, "UdonBehaviour"))
+                {
+                    foreach (var hit in FindReferencesTo(so, targets))
+                    {
+                        var station = byTarget[hit];
+                        if (station.gameObject != item.C.gameObject && !result.ContainsKey(station)) result[station] = item.O.Path;
+                    }
+                }
+            }
+            return result;
+        }
+
+        // iwaSync3 TrackModeMask.Video (IwaSync3Editor.GetSpeakers(TrackModeMask.Video)).
+        const int IwaSync3TrackModeVideo = 0x10;
+
+        /// <summary>
+        /// Speakers iwaSync3 assigns to a Unity player at build time: IwaSync3BuildProcessor (L28) runs
+        /// IwaSync3Editor.ApplyModifiedProperties, which calls SetTargetAudioSources(GetSpeakers(TrackModeMask.Video))
+        /// (IwaSync3Editor.cs L237, L393-402) without saving, so the scene's Target Audio Sources stay empty. These are the
+        /// audited iwaSync3 Speakers that reference the player's iwaSync3 and whose 'mask' (when present) includes Video.
+        /// Null when the player is not under an iwaSync3 or the processor is not compiled.
+        /// </summary>
+        static List<string> IwaSync3SpeakersFor(Ctx ctx, Component player)
+        {
+            if (player == null || CctSerialized.FindType(TIwaSync3BuildProcessor) == null) return null;
+            Component core = null;
+            for (var t = player.transform; t != null && core == null; t = t.parent)
+                core = t.GetComponents<Component>().FirstOrDefault(c => c != null && CctSerialized.IsType(c, TIwaSync3));
+            if (core == null) return null;
+            var targets = new HashSet<Object> { core, core.gameObject };
+            var speakers = new List<string>();
+            foreach (var item in ctx.Components)
+            {
+                if (!item.Audited || item.C == null || FindTypeName(item.C.GetType()) != TIwaSync3Speaker) continue;
+                using (var so = TrySerialize(ctx, item.C, "iwaSync3 Speaker"))
+                {
+                    if (so == null || FindReferencesTo(so, targets).Count == 0) continue;
+                    var mask = so.FindProperty("mask");
+                    if (mask != null && (CctSerialized.GetInt(mask) & IwaSync3TrackModeVideo) == 0) continue;
+                    speakers.Add(item.O.Path);
+                }
+            }
+            return speakers;
+        }
+
+        /// <summary>An AVPro player on the same GameObject as <paramref name="player"/> has at least one VRC AVPro Video Speaker.</summary>
+        static bool AvProSpeakersBeside(Component player, Dictionary<Object, int> speakersFor)
+        {
+            foreach (var c in player.GetComponents<Component>())
+                if (c != null && c != player && (Classify(c.GetType()).Kinds & K.AvProVideo) != 0 &&
+                    speakersFor.TryGetValue(c, out var n) && n > 0) return true;
+            return false;
         }
 
         static string UrlHost(string url)
@@ -939,6 +1057,13 @@ namespace Naoking.ClaudeCreatorTools
                 ["contacts"] = contacts.Count,
                 ["limit_each"] = MaxWorldShapes,
                 ["scope"] = "all_loaded_scenes",
+                // Counted like counts.* (scene scope, EditorOnly stripped); the totals above also hold EditorOnly / other scenes.
+                ["in_scope_shipped"] = new Dictionary<string, object>
+                {
+                    ["physbones"] = physBones.Count(i => i.Audited),
+                    ["physbone_colliders"] = colliders.Count(i => i.Audited),
+                    ["contacts"] = contacts.Count(i => i.Audited),
+                },
             };
         }
 
@@ -1013,9 +1138,11 @@ namespace Naoking.ClaudeCreatorTools
                         path: item.O.Path);
             }
             int eventSystems = ctx.Audited(K.EventSystem).Count();
+            // Info: ClientSim adds its own EventSystem and disables the scene's (ClientSimInputModule.cs L22-33, 43), and a shipped
+            // world without one logged slider events in the VRChat client (2026-10-25 check), so the client apparently does too.
             if (shapes > 0 && eventSystems == 0)
-                ctx.Issue(CctSeverity.Warning, "UI_NO_EVENT_SYSTEM",
-                    "VRC Ui Shape がありますが EventSystem がシーンにありません。docs は EventSystem が必要としています (Canvas を作ると自動で追加されます)");
+                ctx.Issue(CctSeverity.Info, "UI_NO_EVENT_SYSTEM",
+                    "VRC Ui Shape がありますが EventSystem がシーンにありません。docs は EventSystem が必要としています (Canvas を作ると自動で追加されます)。ただし ClientSim は自前の EventSystem を使い、VRChat クライアントでも EventSystem の無いワールドで UI が動いた例があります。クライアントで UI が反応しないときだけ確認してください");
 
             // World-space root canvases with interactive elements but no VRC Ui Shape.
             var selectableType = CctSerialized.FindType(TUiSelectable);

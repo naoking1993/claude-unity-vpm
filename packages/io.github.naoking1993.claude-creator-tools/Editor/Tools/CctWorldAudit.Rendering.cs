@@ -444,7 +444,9 @@ namespace Naoking.ClaudeCreatorTools
             int giReceivers = 0, lightmapped = 0;
             var notLightmapped = new List<string>();
             var noUv2 = new List<string>();
-            var uvChecked = new Dictionary<Mesh, bool>();
+            var uv0Fallback = new List<string>();
+            var noUv2Builtin = 0;
+            var uvChecked = new Dictionary<Mesh, LightmapUv>();
             foreach (var ri in ctx.Renderers)
             {
                 if (!(ri.Renderer is MeshRenderer mr) || (ri.Flags & StaticEditorFlags.ContributeGI) == 0) continue;
@@ -458,9 +460,14 @@ namespace Naoking.ClaudeCreatorTools
                 else notLightmapped.Add(ri.Item.O.Path);
                 if (ri.Mesh != null)
                 {
-                    if (!uvChecked.TryGetValue(ri.Mesh, out var missing))
-                        uvChecked[ri.Mesh] = missing = MissingLightmapUv(ri.Mesh);
-                    if (missing) noUv2.Add(ri.Item.O.Path);
+                    if (!uvChecked.TryGetValue(ri.Mesh, out var uv))
+                        uvChecked[ri.Mesh] = uv = LightmapUvState(ri.Mesh);
+                    if (uv == LightmapUv.Uv0Usable) uv0Fallback.Add(ri.Item.O.Path);
+                    else if (uv == LightmapUv.Missing)
+                    {
+                        noUv2.Add(ri.Item.O.Path);
+                        if (IsBuiltinAsset(ri.Mesh)) noUv2Builtin++;
+                    }
                 }
             }
 
@@ -476,6 +483,9 @@ namespace Naoking.ClaudeCreatorTools
                 ["lightmapped"] = lightmapped,
                 ["not_lightmapped"] = notLightmapped.Count,
                 ["gi_workflow"] = Lightmapping.giWorkflowMode.ToString(),
+                ["without_uv2"] = noUv2.Count,
+                // No UV2, but UV0 is a clean 0..1 unwrap Unity falls back to (e.g. the built-in Quad): not reported.
+                ["uv0_fallback_ok"] = Grouped(uv0Fallback.Count, uv0Fallback),
             };
             if (settings != null)
             {
@@ -506,7 +516,8 @@ namespace Naoking.ClaudeCreatorTools
                     path: notLightmapped[0], value: Grouped(notLightmapped.Count, notLightmapped));
             if (noUv2.Count > 0)
                 ctx.Issue(CctSeverity.Info, "LIGHTMAP_UV_MISSING",
-                    $"ライトマップ UV (UV2) が無く Generate Lightmap UVs も OFF のメッシュを使う Contribute GI の Renderer が {noUv2.Count} 個あります。UV1 で代用されるため影がにじむことがあります",
+                    $"ライトマップ UV (UV2) が無く Generate Lightmap UVs も OFF のメッシュを使う Contribute GI の Renderer が {noUv2.Count} 個あります。Unity は代わりに UV0 (1 番目の UV) を使いますが、UV0 が 0〜1 に収まった重なりの無い展開でなければ影がにじむ・ずれます (Read/Write が OFF のメッシュと大きいメッシュの UV0 は確かめていません)" +
+                    (noUv2Builtin > 0 ? $"。うち {noUv2Builtin} 個は Unity 組み込みのメッシュで、Generate Lightmap UVs を設定できません" : ""),
                     path: noUv2[0], value: Grouped(noUv2.Count, noUv2));
             if (notBaked.Count > 0 && (mapCount > 0 || giReceivers > 0))
                 ctx.Issue(CctSeverity.Warning, "BAKED_LIGHT_NOT_BAKED",
@@ -602,18 +613,93 @@ namespace Naoking.ClaudeCreatorTools
             catch (Exception) { return null; }
         }
 
-        /// <summary>No UV2 in the mesh and its ModelImporter (if any) does not generate one.</summary>
-        static bool MissingLightmapUv(Mesh m)
+        enum LightmapUv { Present, Missing, Uv0Usable }
+
+        /// <summary>
+        /// Lightmap UV of a mesh: UV2, or its ModelImporter generates one (Present); else Unity falls back to UV0, which is fine
+        /// when UV0 is a clean 0..1 unwrap (Uv0Usable: e.g. the built-in Quad, one non-overlapping 0..1 island) and otherwise
+        /// bleeds (Missing).
+        /// </summary>
+        static LightmapUv LightmapUvState(Mesh m)
         {
             try
             {
-                if (m.HasVertexAttribute(VertexAttribute.TexCoord1)) return false;
+                if (m.HasVertexAttribute(VertexAttribute.TexCoord1)) return LightmapUv.Present;
                 var path = AssetPathOf(m);
-                if (path != null && AssetImporter.GetAtPath(path) is ModelImporter mi && mi.generateSecondaryUV) return false;
+                if (path != null && AssetImporter.GetAtPath(path) is ModelImporter mi && mi.generateSecondaryUV) return LightmapUv.Present;
+            }
+            catch (Exception) { return LightmapUv.Present; }
+            return Uv0IsLightmapUnwrap(m) ? LightmapUv.Uv0Usable : LightmapUv.Missing;
+        }
+
+        static bool IsBuiltinAsset(Object o) => AssetPathOf(o) == "Library/unity default resources";
+
+        const int Uv0CheckGrid = 256;
+        const int Uv0CheckMaxTriangles = 20000;
+        const long Uv0CheckMaxCellVisits = 4000000;
+
+        /// <summary>
+        /// UV0 lies inside 0..1 and its triangles do not overlap: the triangles are rasterised on a 256 x 256 grid whose sample
+        /// points sit off the grid lines and off the diagonal, so triangles that only share an edge never claim the same sample
+        /// (up to 2 doubly covered samples are tolerated). Not tested (false): meshes without Read/Write (other than Unity's
+        /// built-in ones; the read could log an error), over 20,000 triangles or over the visit budget.
+        /// </summary>
+        static bool Uv0IsLightmapUnwrap(Mesh m)
+        {
+            try
+            {
+                if (!m.HasVertexAttribute(VertexAttribute.TexCoord0) || !(m.isReadable || IsBuiltinAsset(m))) return false;
+                var uv = new List<Vector2>();
+                m.GetUVs(0, uv);
+                if (uv.Count == 0) return false;
+                const float eps = 1e-4f;
+                foreach (var p in uv)
+                    if (p.x < -eps || p.y < -eps || p.x > 1 + eps || p.y > 1 + eps) return false;
+                long triangles = 0;
+                for (int s = 0; s < m.subMeshCount; s++)
+                    if (m.GetTopology(s) == MeshTopology.Triangles) triangles += m.GetIndexCount(s) / 3;
+                if (triangles == 0 || triangles > Uv0CheckMaxTriangles) return false;
+
+                const int g = Uv0CheckGrid;
+                const float ox = 0.5137f, oy = 0.5291f; // sample point inside each cell
+                var covered = new bool[g * g];
+                var idx = new List<int>();
+                long visits = 0;
+                int doubled = 0;
+                for (int s = 0; s < m.subMeshCount; s++)
+                {
+                    if (m.GetTopology(s) != MeshTopology.Triangles) continue;
+                    m.GetTriangles(idx, s);
+                    for (int t = 0; t + 2 < idx.Count; t += 3)
+                    {
+                        Vector2 a = uv[idx[t]] * g, b = uv[idx[t + 1]] * g, c = uv[idx[t + 2]] * g;
+                        float area = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+                        if (Mathf.Abs(area) < 1e-9f) continue;
+                        int x0 = Mathf.Clamp(Mathf.FloorToInt(Mathf.Min(a.x, Mathf.Min(b.x, c.x)) - ox), 0, g - 1);
+                        int x1 = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(a.x, Mathf.Max(b.x, c.x)) - ox), 0, g - 1);
+                        int y0 = Mathf.Clamp(Mathf.FloorToInt(Mathf.Min(a.y, Mathf.Min(b.y, c.y)) - oy), 0, g - 1);
+                        int y1 = Mathf.Clamp(Mathf.CeilToInt(Mathf.Max(a.y, Mathf.Max(b.y, c.y)) - oy), 0, g - 1);
+                        visits += (long)(x1 - x0 + 1) * (y1 - y0 + 1);
+                        if (visits > Uv0CheckMaxCellVisits) return false;
+                        for (int y = y0; y <= y1; y++)
+                            for (int x = x0; x <= x1; x++)
+                            {
+                                var p = new Vector2(x + ox, y + oy);
+                                float w0 = Edge(b, c, p), w1 = Edge(c, a, p), w2 = Edge(a, b, p);
+                                bool inside = area > 0 ? w0 >= 0 && w1 >= 0 && w2 >= 0 : w0 <= 0 && w1 <= 0 && w2 <= 0;
+                                if (!inside) continue;
+                                int i = y * g + x;
+                                if (covered[i] && ++doubled > 2) return false;
+                                covered[i] = true;
+                            }
+                    }
+                }
                 return true;
             }
             catch (Exception) { return false; }
         }
+
+        static float Edge(Vector2 a, Vector2 b, Vector2 p) => (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
 
         static void Inc(Dictionary<string, object> d, string key)
         {
