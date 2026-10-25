@@ -78,7 +78,8 @@ namespace Naoking.ClaudeCreatorTools
                 var go = kv.Key;
                 var hint = guids.Where(g => g.ObjectNames.Contains(go.name)).Select(g => $"m_Script GUID {g.Guid} ({g.StatusText})").Distinct().Take(3).ToList();
                 ctx.Issue(CctSeverity.Error, "MISSING_SCRIPT",
-                    $"Missing Script が {kv.Value} 個あります{(hint.Count > 0 ? ": " + string.Join(", ", hint) : "")}。必要なパッケージ/スクリプトを導入するか、不要なら削除してください (NDMF はビルド時に黙って削除するため、ビルド後の 0 個は依存がそろった証明になりません)",
+                    $"Missing Script が {kv.Value} 個あります{(hint.Count > 0 ? ": " + string.Join(", ", hint) : "")}。このコンポーネントの機能 (ギミック・導入処理など) は動きません。必要なパッケージ/スクリプトを導入するか、不要なら削除してください " +
+                    "(SDK のアップロード検査はこれを止めず、NDMF はビルド時に黙って削除するため、ビルド後の 0 個は依存がそろった証明になりません)",
                     ctx.PathOf(go.transform), kv.Value);
             }
             foreach (var g in guids)
@@ -370,8 +371,10 @@ namespace Naoking.ClaudeCreatorTools
                             visits++;
                             enter = it.propertyType == SerializedPropertyType.Generic || it.propertyType == SerializedPropertyType.ManagedReference;
                             if (enter && it.isArray && PrimitiveArrayElements.Contains(it.arrayElementType)) enter = false;
-                            if (it.propertyType == SerializedPropertyType.ObjectReference && !SkipReferencePaths.Contains(it.propertyPath) &&
-                                it.objectReferenceValue == null && it.objectReferenceInstanceIDValue != 0)
+                            // Cheap checks first: an unset reference has instance ID 0 and never needs objectReferenceValue
+                            // (which resolves / loads the target object).
+                            if (it.propertyType == SerializedPropertyType.ObjectReference && it.objectReferenceInstanceIDValue != 0 &&
+                                !SkipReferencePaths.Contains(it.propertyPath) && it.objectReferenceValue == null)
                                 (missing ??= new List<string>()).Add(it.propertyPath);
                             if (visits >= MaxMissingRefVisits) { truncated = true; break; }
                         }
@@ -442,8 +445,8 @@ namespace Naoking.ClaudeCreatorTools
                     ["examples"] = paths.Take(5).Cast<object>().ToList(),
                 });
                 if (mobileOnly)
-                    ctx.Issue(ctx.ActiveMobile ? CctSeverity.Error : CctSeverity.Warning, code,
-                        $"{kv.Key} ({paths.Count} 個) は PC では使えますが Android/iOS では許可されていません。モバイル版をアップロードするとクライアントで削除され、SDK もモバイルのビルドターゲットではエラーにします: {Examples(paths, paths.Count)}",
+                    ctx.Issue(ctx.ForPlatform(CctSeverity.Warning, true), code,
+                        $"{kv.Key} ({paths.Count} 個) は PC では使えますが Android/iOS のアバターでは許可されていません。モバイル用にビルドすると SDK のエラー (\"will be removed by the client\") でアップロードできないため、モバイル版では削除するか EditorOnly にしてください: {Examples(paths, paths.Count)}",
                         paths[0], paths.Count);
                 else
                     ctx.Issue(CctSeverity.Error, code,
@@ -695,7 +698,7 @@ namespace Naoking.ClaudeCreatorTools
                 }
             }
             foreach (var kv in byShader.OrderByDescending(k => k.Value.Count))
-                ctx.Issue(ctx.ActiveMobile ? CctSeverity.Error : CctSeverity.Warning, "ANDROID_INCOMPATIBLE_SHADER",
+                ctx.Issue(ctx.ActiveMobile ? CctSeverity.Error : ctx.ForPlatform(CctSeverity.Warning, true), "ANDROID_INCOMPATIBLE_SHADER",
                     $"シェーダー '{kv.Key}' (マテリアル {kv.Value.Count} 個) は Android/iOS のアバターで使えません。VRChat/Mobile のシェーダーにしてください (モバイルのビルドターゲットでは SDK エラー): {Examples(kv.Value, kv.Value.Count)}",
                     value: kv.Key, asset: kv.Value[0]);
             if (outline)
@@ -743,7 +746,9 @@ namespace Naoking.ClaudeCreatorTools
             bool active = ctx.FromPrefabContents ? ctx.Root.activeSelf : ctx.Root.activeInHierarchy;
             if (!active)
                 ctx.Issue(ctx.PrefabAssetPath != null ? CctSeverity.Warning : CctSeverity.Error, "AVATAR_INACTIVE",
-                    "アバターが非アクティブです。SDK はヒエラルキーで無効なアバターをアップロードできません (エラー)", rootPath);
+                    ctx.PrefabAssetPath != null
+                        ? "プレハブのルートが非アクティブです。シーンに置いても無効のままだと SDK のエラーでアップロードできません"
+                        : "アバターがヒエラルキーで非アクティブです。SDK のエラーでアップロードできないため、アクティブにしてください", rootPath);
 
             var missing = SdkRequiredBones.Where(b => human.Get(b) == null).Select(b => b.ToString()).ToList();
             if (missing.Count > 0)
@@ -810,10 +815,12 @@ namespace Naoking.ClaudeCreatorTools
             {
                 float h = lArm.position.y - ctx.RootT.position.y;
                 string msg = null, sev = CctSeverity.Warning;
+                // SDK builder: < 0.2 m error, > 5 m warning ("The maximum is 5m"); < 1 m / > 2.5 m are only "shorter / taller than
+                // average" notices (SDK warning text, nothing to fix), so they are info here.
                 if (h < 0.2f) { msg = "肩の高さが 20cm 未満で低すぎます (SDK エラー)"; sev = CctSeverity.Error; }
-                else if (h < 1.0f) msg = "肩の高さが 1m 未満で平均より低いアバターです (SDK 警告)";
-                else if (h > 5.0f) msg = "肩の高さが 5m を超えて高すぎます (SDK 警告)";
-                else if (h > 2.5f) msg = "肩の高さが 2.5m を超えて平均より高いアバターです (SDK 警告)";
+                else if (h < 1.0f) { msg = "肩の高さが 1m 未満の、平均より小さいアバターです (SDK の注意表示。問題ではありません)"; sev = CctSeverity.Info; }
+                else if (h > 5.0f) msg = "肩の高さが上限の 5m を超えています (SDK 警告)";
+                else if (h > 2.5f) { msg = "肩の高さが 2.5m を超える、平均より大きいアバターです (SDK の注意表示。問題ではありません)"; sev = CctSeverity.Info; }
                 if (msg != null) ctx.Issue(sev, "AVATAR_HEIGHT", $"{msg}: {Round(h, 2)} m", ctx.PathOf(lArm), Round(h, 3));
             }
         }
@@ -883,16 +890,21 @@ namespace Naoking.ClaudeCreatorTools
             using (var so = new SerializedObject(ctx.Descriptor))
                 customize = CctSerialized.GetBool(so.FindProperty("customizeAnimationLayers"));
             var descPath = ctx.PathOf(ctx.Descriptor);
+            ctx.Scan.TypeCounts.TryGetValue(TMaMergeAnimator, out var mergeAnimators);
             if (customize)
             {
                 foreach (var l in ctx.Layers)
                 {
                     if (l.ControllerMissing)
                         ctx.Issue(CctSeverity.Warning, "LAYER_CONTROLLER_MISSING",
-                            $"{l.TypeName} レイヤーの Animator Controller の参照先が削除されています (Missing)", descPath, l.TypeName);
+                            $"{l.TypeName} レイヤーの Animator Controller の参照先が削除されています (Missing)。Controller を設定し直してください", descPath, l.TypeName);
                     else if (!l.IsDefault && l.Controller == null && l.Type != 1)
-                        ctx.Issue(CctSeverity.Warning, "LAYER_CONTROLLER_MISSING",
-                            $"{l.TypeName} レイヤーがカスタム (Default ではない) なのに Animator Controller が未設定です。このレイヤーは空になります", descPath, l.TypeName);
+                        ctx.Issue(mergeAnimators > 0 ? CctSeverity.Info : CctSeverity.Warning, "LAYER_CONTROLLER_MISSING",
+                            $"{l.TypeName} レイヤーがカスタム (Default ではない) なのに Animator Controller が未設定です。" +
+                            (mergeAnimators > 0
+                                ? "MA Merge Animator がビルド時にこのレイヤーへ統合する場合は問題ありません (post_build=true で確認できます)"
+                                : "意図したものでなければ Default に戻すか Controller を設定してください"),
+                            descPath, l.TypeName);
                 }
                 // SDK: Gesture slot (baseAnimationLayers[2]) of a humanoid, custom controller, its first layer needs an AvatarMask.
                 var gesture = ctx.Layers.FirstOrDefault(l => l.Slot == "base" && l.Index == 2);

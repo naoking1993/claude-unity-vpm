@@ -637,8 +637,11 @@ namespace Naoking.ClaudeCreatorTools
                 var cam = item.C as Camera;
                 if (cam == null) continue;
                 total++;
-                bool on = item.O.Active && cam.enabled;
                 bool isReference = ctx.ReferenceCamera != null && cam.gameObject == ctx.ReferenceCamera;
+                // Cameras below the Reference Camera are switched off with it (REFERENCE_CAMERA_OBJECT_DISABLED).
+                bool underReference = !isReference && ctx.ReferenceCamera != null && !EditorUtility.IsPersistent(ctx.ReferenceCamera) &&
+                                      cam.transform.IsChildOf(ctx.ReferenceCamera.transform);
+                bool on = item.O.Active && cam.enabled && !underReference;
                 var rt = cam.targetTexture;
                 if (on) active++;
                 if (rt != null)
@@ -654,6 +657,7 @@ namespace Naoking.ClaudeCreatorTools
                         ["path"] = item.O.Path,
                         ["active"] = on,
                         ["is_reference_camera"] = isReference,
+                        ["under_reference_camera"] = underReference,
                         ["tag"] = SafeTag(cam.gameObject),
                         ["target_texture"] = rt != null ? (AssetPathOf(rt) ?? rt.name) : null,
                         ["depth"] = Round(cam.depth, 2),
@@ -686,7 +690,52 @@ namespace Naoking.ClaudeCreatorTools
                 ["name"] = kv.Key.name, ["asset"] = AssetPathOf(kv.Key), ["width"] = kv.Key.width, ["height"] = kv.Key.height, ["cameras"] = kv.Value,
             }).ToList();
 
-            AuditPostProcessing(ctx, rendering);
+            var mainCameraWithVolume = AuditPostProcessing(ctx, rendering);
+            AuditReferenceCameraObject(ctx, rendering, mainCameraWithVolume);
+        }
+
+        /// <summary>
+        /// The Reference Camera's GameObject is switched off when the world starts: ClientSim copies its settings and then calls
+        /// refCamera.gameObject.SetActive(false) (Integrations/ClientSim/Runtime/System/ClientSimSceneManager.cs L150-188), and
+        /// the SDK's own text says "This Camera is disabled at runtime" ([WB] L211-221). Everything else on that GameObject and
+        /// under it (UdonBehaviours, renderers, audio, volumes, child objects) therefore never runs or renders in VRChat.
+        /// Camera / PostProcessLayer / FlareLayer / AudioListener / Skybox on the object itself are expected there.
+        /// </summary>
+        static void AuditReferenceCameraObject(Ctx ctx, Dictionary<string, object> rendering, GameObject mainCameraWithVolume)
+        {
+            var go = ctx.ReferenceCamera;
+            // ClientSim copies/deactivates only when the object has a Camera (else REFERENCE_CAMERA_NO_CAMERA is reported).
+            if (go == null || EditorUtility.IsPersistent(go) || !go.TryGetComponent<Camera>(out _)) return;
+            var objects = new List<string>();
+            var types = new HashSet<string>(StringComparer.Ordinal);
+            int components = 0;
+            bool descriptorInside = false;
+            foreach (var c in go.GetComponentsInChildren<Component>(true))
+            {
+                if (c == null || c is Transform) continue;
+                var o = ObjOf(ctx, c);
+                if (o != null && o.EditorOnly) continue; // stripped from the build anyway
+                if (c.gameObject == go && (c is Camera || c is FlareLayer || c is AudioListener || c is Skybox ||
+                                           CctSerialized.IsType(c, TPpLayer) || CctSerialized.IsType(c, TPpDebug))) continue;
+                var kinds = Classify(c.GetType()).Kinds;
+                if (mainCameraWithVolume == go && (kinds & K.PpVolume) != 0) continue; // reported as PP_VOLUME_ON_MAIN_CAMERA
+                if ((kinds & K.SceneDescriptor) != 0) descriptorInside = true;
+                components++;
+                types.Add(c.GetType().Name);
+                var path = CctTargets.GetPath(c.transform);
+                if (objects.Count == 0 || objects[objects.Count - 1] != path) objects.Add(path);
+            }
+            if (rendering.TryGetValue("cameras", out var co) && co is Dictionary<string, object> cams)
+                cams["reference_camera_extra_components"] = components;
+            if (components == 0) return;
+            ctx.Issue(CctSeverity.Warning, "REFERENCE_CAMERA_OBJECT_DISABLED",
+                $"Reference Camera の GameObject とその子に、カメラ以外のコンポーネントが {components} 個あります ({string.Join(", ", types.Take(8))})。" +
+                "このオブジェクトはワールド開始時に無効化されるため (SDK の警告文と ClientSim の実装)、これらは VRChat では動作・表示しません。別の GameObject に移してください" +
+                (descriptorInside ? "。VRC Scene Descriptor まで含まれています" : ""),
+                path: objects[0], value: new Dictionary<string, object>
+                {
+                    ["components"] = components, ["types"] = types.Cast<object>().ToList(), ["objects"] = Examples(objects),
+                });
         }
 
         static string SafeTag(GameObject go)
@@ -695,12 +744,13 @@ namespace Naoking.ClaudeCreatorTools
             catch (Exception) { return null; }
         }
 
-        static void AuditPostProcessing(Ctx ctx, Dictionary<string, object> rendering)
+        /// <summary>Returns Camera.main's GameObject when it holds a PostProcessVolume (PP_VOLUME_ON_MAIN_CAMERA), else null.</summary>
+        static GameObject AuditPostProcessing(Ctx ctx, Dictionary<string, object> rendering)
         {
             var volumeType = CctSerialized.FindType(TPpVolume);
             var pp = new Dictionary<string, object> { ["package_present"] = CctSerialized.FindType(TPpLayer) != null };
             rendering["post_processing"] = pp;
-            if (volumeType == null) return;
+            if (volumeType == null) return null;
 
             // Reference Camera's PostProcessLayer: TAA ([PB] ReferenceCameraHasTAAEnabled) and volume layer.
             Component refLayer = null;
@@ -736,6 +786,7 @@ namespace Naoking.ClaudeCreatorTools
             int volumeCount = 0, globalCount = 0;
             var heavy = new Dictionary<string, List<string>>(StringComparer.Ordinal);
             var profilesSeen = new Dictionary<Object, List<string>>();
+            var outsideLayer = new List<string>();
             foreach (var item in ctx.Audited(K.PpVolume))
             {
                 volumeCount++;
@@ -747,6 +798,9 @@ namespace Naoking.ClaudeCreatorTools
                     var profile = CctSerialized.GetObject(so.FindProperty("sharedProfile"));
                     var effects = profile != null ? ProfileEffects(profile, profilesSeen) : new List<string>();
                     bool on = item.O.Active && Enabled(item.C);
+                    bool inLayer = volumeLayerMask == -1 || (volumeLayerMask & (1 << item.C.gameObject.layer)) != 0;
+                    // PPv2 picks volumes by PostProcessLayer.volumeLayer (layer mask); others never affect the camera.
+                    if (on && refLayer != null && volumeLayerMask != 0 && !inLayer) outsideLayer.Add(item.O.Path);
                     if (on)
                         foreach (var e in effects)
                             if (PpHeavyEffects.Contains(e))
@@ -761,7 +815,7 @@ namespace Naoking.ClaudeCreatorTools
                             ["active"] = on,
                             ["is_global"] = global,
                             ["layer"] = LayerName(item.C.gameObject.layer),
-                            ["in_volume_layer"] = volumeLayerMask == -1 || (volumeLayerMask & (1 << item.C.gameObject.layer)) != 0,
+                            ["in_volume_layer"] = inLayer,
                             ["priority"] = Round(CctSerialized.GetFloat(so.FindProperty("priority")), 2),
                             ["weight"] = Round(CctSerialized.GetFloat(so.FindProperty("weight"), 1f), 2),
                             ["profile"] = profile != null ? (AssetPathOf(profile) ?? profile.name) : null,
@@ -782,13 +836,17 @@ namespace Naoking.ClaudeCreatorTools
             if (volumeCount > 0 && refLayer == null)
                 ctx.Issue(CctSeverity.Info, "PP_LAYER_MISSING",
                     ctx.ReferenceCamera == null
-                        ? "Post-process Volume がありますが Reference Camera が未設定です。プレイヤーのカメラにポストプロセスが掛かりません (コミュニティ知見)"
-                        : "Post-process Volume がありますが Reference Camera に Post-process Layer がありません。プレイヤーのカメラにポストプロセスが掛かりません (コミュニティ知見)",
+                        ? "Post-process Volume がありますが Reference Camera が未設定です。プレイヤーのカメラにポストプロセスが掛かりません (ClientSim も Reference Camera の Post-process Layer だけを複製します)"
+                        : "Post-process Volume がありますが Reference Camera に Post-process Layer がありません。プレイヤーのカメラにポストプロセスが掛かりません (ClientSim も Reference Camera の Post-process Layer だけを複製します)",
                     path: ctx.ReferenceCamera != null ? CctTargets.GetPath(ctx.ReferenceCamera) : null);
             else if (refLayer != null && volumeLayerMask == 0)
                 ctx.Issue(CctSeverity.Info, "PP_VOLUME_LAYER_EMPTY",
                     "Reference Camera の Post-process Layer の Volume Blending Layer が Nothing です。どの Volume も適用されません (Water など専用レイヤーを推奨: コミュニティ知見)",
                     path: CctTargets.GetPath(ctx.ReferenceCamera));
+            else if (outsideLayer.Count > 0)
+                ctx.Issue(CctSeverity.Info, "PP_VOLUME_NOT_IN_LAYER",
+                    $"有効な Post-process Volume {outsideLayer.Count} 個のレイヤーが、Reference Camera の Post-process Layer の Volume Blending Layer ({string.Join(", ", (MaskToNames(volumeLayerMask) as List<object> ?? new List<object>()).Take(6))}) に含まれていません。これらの Volume は適用されません (Volume の GameObject のレイヤーを合わせてください)",
+                    path: outsideLayer[0], value: Grouped(outsideLayer.Count, outsideLayer));
 
             // [WB] L211-221: Camera.main.GetComponentInChildren(PostProcessVolume). The SDK adds this warning before
             // ResetIssues(), so the panel normally does not show it (research 2.4), but the problem is real.
@@ -796,11 +854,15 @@ namespace Naoking.ClaudeCreatorTools
             {
                 var main = Camera.main;
                 if (main != null && main.GetComponentInChildren(volumeType) != null)
+                {
                     ctx.Issue(CctSeverity.Warning, "PP_VOLUME_ON_MAIN_CAMERA",
                         "Main Camera (MainCamera タグ) の配下に Post-process Volume があります。このカメラは実行時に無効化されるため、Volume は別の GameObject に移してください (SDK のコードにある警告。パネルには通常表示されません)",
                         path: CctTargets.GetPath(main.gameObject));
+                    return main.gameObject;
+                }
             }
             catch (Exception) { /* Camera.main unavailable */ }
+            return null;
         }
 
         /// <summary>Full type names of the active+enabled effects in a PPv2 profile (settings[], each with active and enabled.value).</summary>

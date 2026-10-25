@@ -1,0 +1,122 @@
+# CctAnimatorInspect (cct_animator_inspect): every VRChat SDK type / serialized path the tool reads (SDK 3.10.5).
+# All read through SerializedObject (CctSerialized). State machine behaviours are matched with CctSerialized.IsType
+# against both the SDK3 class and its VRC.SDKBase base class (IsType walks base types).
+
+# --- VRCAvatarDescriptor (Targets.cs ReadDescriptor / FindDescriptorOwner)
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|customizeAnimationLayers
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|baseAnimationLayers[].type
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|baseAnimationLayers[].isDefault
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|baseAnimationLayers[].isEnabled
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|baseAnimationLayers[].animatorController
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|baseAnimationLayers[].mask
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|specialAnimationLayers[].type
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|specialAnimationLayers[].isDefault
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|specialAnimationLayers[].isEnabled
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|specialAnimationLayers[].animatorController
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|specialAnimationLayers[].mask
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|expressionParameters
+# AnimLayerType (enum dump): Base=0,Deprecated0=1,Additive=2,Gesture=3,Action=4,FX=5,Sitting=6,TPose=7,IKPose=8
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor+AnimLayerType
+
+# --- VRCExpressionParameters (Targets.cs ReadExpressionParameters)
+# ValueType (enum dump): Int=0,Float=1,Bool=2
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters|parameters[].name
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters|parameters[].valueType
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters|parameters[].saved
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters|parameters[].defaultValue
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters|parameters[].networkSynced
+VRC.SDK3.Avatars.ScriptableObjects.VRCExpressionParameters+ValueType
+
+# --- VRCAvatarParameterDriver (Graph.cs ReadDriver)
+# ChangeType (enum dump): Set=0,Add=1,Random=2,Copy=3
+VRC.SDKBase.VRC_AvatarParameterDriver
+VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver|localOnly
+VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver|debugString
+VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver|parameters[].type
+VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver|parameters[].name
+VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver|parameters[].source
+VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver|parameters[].value
+VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver|parameters[].valueMin
+VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver|parameters[].valueMax
+VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver|parameters[].chance
+VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver|parameters[].preventRepeats
+VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver|parameters[].convertRange
+VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver|parameters[].sourceMin
+VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver|parameters[].sourceMax
+VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver|parameters[].destMin
+VRC.SDK3.Avatars.Components.VRCAvatarParameterDriver|parameters[].destMax
+VRC.SDKBase.VRC_AvatarParameterDriver+ChangeType
+
+# --- VRCAnimatorTrackingControl (Graph.cs DescribeBehaviour)
+# TrackingType (enum dump): NoChange=0,Tracking=1,Animation=2
+VRC.SDKBase.VRC_AnimatorTrackingControl
+VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl|trackingHead
+VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl|trackingLeftHand
+VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl|trackingRightHand
+VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl|trackingHip
+VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl|trackingLeftFoot
+VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl|trackingRightFoot
+VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl|trackingLeftFingers
+VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl|trackingRightFingers
+VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl|trackingEyes
+VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl|trackingMouth
+VRC.SDK3.Avatars.Components.VRCAnimatorTrackingControl|debugString
+VRC.SDKBase.VRC_AnimatorTrackingControl+TrackingType
+
+# --- VRCAnimatorLayerControl (Graph.cs ReadLayerControl)
+# BlendableLayer (enum dump): Action=0,FX=1,Gesture=2,Additive=3
+VRC.SDKBase.VRC_AnimatorLayerControl
+VRC.SDK3.Avatars.Components.VRCAnimatorLayerControl|playable
+VRC.SDK3.Avatars.Components.VRCAnimatorLayerControl|layer
+VRC.SDK3.Avatars.Components.VRCAnimatorLayerControl|goalWeight
+VRC.SDK3.Avatars.Components.VRCAnimatorLayerControl|blendDuration
+VRC.SDK3.Avatars.Components.VRCAnimatorLayerControl|debugString
+VRC.SDKBase.VRC_AnimatorLayerControl+BlendableLayer
+
+# --- VRCPlayableLayerControl (Graph.cs DescribeBehaviour)
+# BlendableLayer (enum dump): Action=0,FX=1,Gesture=2,Additive=3
+VRC.SDKBase.VRC_PlayableLayerControl
+VRC.SDK3.Avatars.Components.VRCPlayableLayerControl|layer
+VRC.SDK3.Avatars.Components.VRCPlayableLayerControl|goalWeight
+VRC.SDK3.Avatars.Components.VRCPlayableLayerControl|blendDuration
+VRC.SDK3.Avatars.Components.VRCPlayableLayerControl|debugString
+VRC.SDKBase.VRC_PlayableLayerControl+BlendableLayer
+
+# --- VRCAnimatorLocomotionControl
+VRC.SDKBase.VRC_AnimatorLocomotionControl
+VRC.SDK3.Avatars.Components.VRCAnimatorLocomotionControl|disableLocomotion
+VRC.SDK3.Avatars.Components.VRCAnimatorLocomotionControl|debugString
+
+# --- VRCAnimatorTemporaryPoseSpace
+VRC.SDKBase.VRC_AnimatorTemporaryPoseSpace
+VRC.SDK3.Avatars.Components.VRCAnimatorTemporaryPoseSpace|enterPoseSpace
+VRC.SDK3.Avatars.Components.VRCAnimatorTemporaryPoseSpace|fixedDelay
+VRC.SDK3.Avatars.Components.VRCAnimatorTemporaryPoseSpace|delayTime
+VRC.SDK3.Avatars.Components.VRCAnimatorTemporaryPoseSpace|debugString
+
+# --- VRCAnimatorPlayAudio (Graph.cs ReadPlayAudio)
+# Order (enum dump): Random=0,UniqueRandom=1,Roundabout=2,Parameter=3
+VRC.SDKBase.VRC_AnimatorPlayAudio
+VRC.SDK3.Avatars.Components.VRCAnimatorPlayAudio|SourcePath
+VRC.SDK3.Avatars.Components.VRCAnimatorPlayAudio|PlaybackOrder
+VRC.SDK3.Avatars.Components.VRCAnimatorPlayAudio|ParameterName
+VRC.SDK3.Avatars.Components.VRCAnimatorPlayAudio|Clips
+VRC.SDK3.Avatars.Components.VRCAnimatorPlayAudio|Loop
+VRC.SDK3.Avatars.Components.VRCAnimatorPlayAudio|PlayOnEnter
+VRC.SDK3.Avatars.Components.VRCAnimatorPlayAudio|StopOnEnter
+VRC.SDK3.Avatars.Components.VRCAnimatorPlayAudio|PlayOnExit
+VRC.SDK3.Avatars.Components.VRCAnimatorPlayAudio|StopOnExit
+VRC.SDK3.Avatars.Components.VRCAnimatorPlayAudio|DelayInSeconds
+VRC.SDKBase.VRC_AnimatorPlayAudio+Order
+
+# Non-VRChat types (not checkable by FieldCheck), verified against sources:
+#   nadena.dev.modular_avatar.core.ModularAvatarMergeAnimator (MA Runtime/ModularAvatarMergeAnimator.cs L53-60):
+#     animator, layerType (AnimLayerType int), deleteAttachedAnimator, pathMode (MergeAnimatorPathMode Relative=0, Absolute=1),
+#     matchAvatarWriteDefaults, relativePathRoot.referencePath / relativePathRoot.targetObject (AvatarObjectReference.cs L16-19),
+#     layerPriority, mergeAnimatorMode (MergeAnimatorMode Append=0, Replace=1)
+#   nadena.dev.modular_avatar.core.ModularAvatarMergeBlendTree (MA Runtime/ModularAvatarMergeBlendTree.cs): BlendTree, PathMode
+#   Unity serialized names (UnityCsReference / YAML): AnimatorState.m_Motion, AnimatorState/AnimatorStateMachine.m_StateMachineBehaviours,
+#     BlendTree.m_Childs[].m_Motion, AnimatorController.m_AnimatorLayers[].m_Behaviours[].m_State / .m_StateMachineBehaviours[]
+#     (synced-layer behaviour fallback; layout seen in MA UnitTests~/VRChatTests/SyncedLayerHandling/AC1.controller and
+#     NDMF UnitTests~/AnimationServices/TestAssets/SyncedLayers.controller)

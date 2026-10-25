@@ -75,7 +75,10 @@ namespace Naoking.ClaudeCreatorTools
             if (path != null)
             {
                 var rac = AssetDatabase.LoadAssetAtPath<RuntimeAnimatorController>(path);
-                if (rac == null)
+                // Sub-asset fallback only for real asset files: LoadAllAssetsAtPath on a .unity scene logs a Unity error
+                // and a folder has no sub-assets.
+                if (rac == null && !string.IsNullOrEmpty(path) && !AssetDatabase.IsValidFolder(path) &&
+                    !path.EndsWith(".unity", StringComparison.OrdinalIgnoreCase))
                     rac = AssetDatabase.LoadAllAssetsAtPath(path).OfType<RuntimeAnimatorController>().FirstOrDefault();
                 if (rac == null)
                     error = string.IsNullOrEmpty(path)
@@ -143,8 +146,8 @@ namespace Naoking.ClaudeCreatorTools
             if (owner == null)
             {
                 var below = new List<GameObject>();
-                foreach (var c in go.GetComponentsInChildren<Component>(true))
-                    if (c != null && CctSerialized.IsType(c, CctVrcTypes.AvatarDescriptor)) below.Add(c.gameObject);
+                foreach (var c in FindTyped(go, CctVrcTypes.AvatarDescriptor))
+                    if (c != null && !below.Contains(c.gameObject)) below.Add(c.gameObject);
                 if (below.Count == 1)
                 {
                     owner = below[0].transform;
@@ -178,7 +181,7 @@ namespace Naoking.ClaudeCreatorTools
                 ctx.Mode = "animator";
                 return null;
             }
-            bool hasMa = go.GetComponentsInChildren<Component>(true).Any(c => c != null && CctSerialized.IsType(c, TMaMergeAnimator));
+            bool hasMa = FindTyped(go, TMaMergeAnimator).Any(c => c != null);
             if (hasMa)
             {
                 ctx.Mode = "part";
@@ -187,20 +190,36 @@ namespace Naoking.ClaudeCreatorTools
             return CctResult.Fail($"'{go.name}' には VRCAvatarDescriptor も Animator のコントローラも MA Merge Animator もありません (controller にアセットパスを指定できます)", "NO_CONTROLLER");
         }
 
+        /// <summary>
+        /// Components whose type (or a subtype) has the given full name under root, inactive included, through Unity's
+        /// native typed lookup: on a large world scene this is far cheaper than enumerating every Component and walking
+        /// its base types by name. Empty when the package defining the type is not installed (then no such component
+        /// can be read anyway). Order is hierarchy order, like GetComponentsInChildren&lt;Component&gt;.
+        /// </summary>
+        static Component[] FindTyped(GameObject root, string fullName)
+        {
+            var t = CctSerialized.FindType(fullName);
+            if (root == null || t == null || !typeof(Component).IsAssignableFrom(t)) return new Component[0];
+            return root.GetComponentsInChildren(t, true);
+        }
+
         static List<GameObject> AvatarsInLoadedScenes()
         {
             var list = new List<GameObject>();
-            foreach (var go in CctTargets.AllGameObjectsInLoadedScenes())
-                foreach (var c in go.GetComponents<Component>())
-                    if (c != null && CctSerialized.IsType(c, CctVrcTypes.AvatarDescriptor)) { list.Add(go); break; }
+            if (CctSerialized.FindType(CctVrcTypes.AvatarDescriptor) == null) return list; // no Avatars SDK (world project)
+            foreach (var scene in CctTargets.LoadedScenes())
+                foreach (var root in scene.GetRootGameObjects())
+                    foreach (var c in FindTyped(root, CctVrcTypes.AvatarDescriptor))
+                        if (c != null && !list.Contains(c.gameObject)) list.Add(c.gameObject);
             return list;
         }
 
         static Transform FindDescriptorOwner(Transform t)
         {
+            var type = CctSerialized.FindType(CctVrcTypes.AvatarDescriptor);
+            if (type == null || !typeof(Component).IsAssignableFrom(type)) return null;
             for (var cur = t; cur != null; cur = cur.parent)
-                foreach (var c in cur.GetComponents<Component>())
-                    if (c != null && CctSerialized.IsType(c, CctVrcTypes.AvatarDescriptor)) return cur;
+                if (cur.GetComponent(type) != null) return cur;
             return null;
         }
 
@@ -322,6 +341,8 @@ namespace Naoking.ClaudeCreatorTools
                 {
                     var def = LoadSdkDefault(dl.Type, out var defPath);
                     dl.SdkDefaultAsset = defPath;
+                    // layer=all: the default Sitting / TPose / IKPose stand-ins are listed in playable_layers but not inspected.
+                    if (all && dl.Special) continue;
                     if (def == null)
                     {
                         ctx.Issue(CctSeverity.Warning, "SDK_DEFAULT_CONTROLLER_NOT_FOUND",
@@ -417,13 +438,7 @@ namespace Naoking.ClaudeCreatorTools
                 cur = aoc.runtimeAnimatorController;
             }
             u.Controller = cur as AnimatorController;
-            if (maps.Count > 0)
-            {
-                u.Overrides = new Dictionary<AnimationClip, AnimationClip>();
-                foreach (var map in maps)                      // maps[0] is the outermost override controller
-                    foreach (var kv in map)
-                        if (!u.Overrides.ContainsKey(kv.Key)) u.Overrides[kv.Key] = kv.Value;
-            }
+            if (maps.Count > 0) u.Overrides = FlattenOverrideChain(maps);
             if (u.Controller == null)
             {
                 u.Failed = true;
@@ -433,6 +448,27 @@ namespace Naoking.ClaudeCreatorTools
                         : $"'{u.Label}' は AnimatorController ではありません ({u.Source?.GetType().Name ?? "null"})",
                     asset: u.Asset);
             }
+        }
+
+        /// <summary>
+        /// Flattens AnimatorOverrideController maps (index 0 = outermost) into base clip -> effective clip. An outer
+        /// controller's keys are the clips its inner controller exposes (already overridden by the inner one), so chains
+        /// resolve transitively: base X -(inner)-> Y -(outer)-> Z gives X -> Z. A key present at several levels keeps the
+        /// outermost value (covers outer keys that are base clips the inner one left alone).
+        /// </summary>
+        static Dictionary<T, T> FlattenOverrideChain<T>(IList<Dictionary<T, T>> maps)
+        {
+            var result = new Dictionary<T, T>();
+            foreach (var map in maps)
+            {
+                var outer = new Dictionary<T, T>(result);
+                foreach (var kv in map)
+                {
+                    if (kv.Value != null && outer.TryGetValue(kv.Value, out var further)) result[kv.Key] = further;
+                    else if (!result.ContainsKey(kv.Key)) result[kv.Key] = kv.Value;
+                }
+            }
+            return result;
         }
 
         // =====================================================================================================================
@@ -449,18 +485,38 @@ namespace Naoking.ClaudeCreatorTools
                     foreach (var el in CctSerialized.Elements(so.FindProperty(arrayName)))
                     {
                         var ctrlProp = CctSerialized.Child(el, "animatorController");
+                        var controller = CctSerialized.GetObject(ctrlProp) as RuntimeAnimatorController;
+                        // If a future SDK renamed isDefault, "default iff no controller" keeps custom controllers inspected
+                        // instead of silently replacing every layer with the SDK sample.
+                        var defaultProp = CctSerialized.Child(el, "isDefault");
                         ctx.DescriptorLayers.Add(new DescriptorLayer
                         {
                             Type = CctSerialized.GetInt(CctSerialized.Child(el, "type"), -1),
                             Special = arrayName == "specialAnimationLayers",
-                            IsDefault = CctSerialized.GetBool(CctSerialized.Child(el, "isDefault"), true),
+                            IsDefault = defaultProp != null ? CctSerialized.GetBool(defaultProp, true) : controller == null,
                             IsEnabled = CctSerialized.GetBool(CctSerialized.Child(el, "isEnabled"), true),
-                            Controller = CctSerialized.GetObject(ctrlProp) as RuntimeAnimatorController,
+                            Controller = controller,
                             ControllerMissing = CctSerialized.IsMissingReference(ctrlProp),
                             Mask = CctSerialized.GetObject(CctSerialized.Child(el, "mask")),
                         });
                     }
                 }
+                if (ctx.DescriptorLayers.Count == 0)
+                {
+                    // Never initialised by the descriptor inspector (e.g. added by script): VRChat uses the default layers.
+                    // Humanoid: Base, Additive, Gesture, Action, FX; generic: Base, Action, FX (docs playable-layers.md);
+                    // Sitting / TPose / IKPose for both (SDK AvatarDescriptorEditor3 IsHumanOnlyAnimLayer: Additive, Gesture).
+                    var animator = ctx.AvatarRoot.GetComponent<Animator>();
+                    // Avatar.isHuman (asset property) instead of Animator.isHuman, which needs an initialised animator.
+                    bool human = animator == null || animator.avatar == null || animator.avatar.isHuman;
+                    var types = human ? new[] { LtBase, LtAdditive, LtGesture, LtAction, LtFx } : new[] { LtBase, LtAction, LtFx };
+                    foreach (var t in types) ctx.DescriptorLayers.Add(new DescriptorLayer { Type = t, IsDefault = true, IsEnabled = true });
+                    foreach (var t in new[] { LtSitting, LtTPose, LtIKPose })
+                        ctx.DescriptorLayers.Add(new DescriptorLayer { Type = t, IsDefault = true, IsEnabled = true, Special = true });
+                    ctx.Notes.Add("VRCAvatarDescriptor の Playable Layers が未初期化 (配列が空) のため、すべて既定レイヤーとして扱いました" +
+                                  (human ? "" : " (Generic: Base / Action / FX)"));
+                }
+
                 var exprProp = so.FindProperty("expressionParameters");
                 var expr = CctSerialized.GetObject(exprProp);
                 if (expr != null)
@@ -479,10 +535,13 @@ namespace Naoking.ClaudeCreatorTools
                     ctx.Issue(CctSeverity.Warning, "CONTROLLER_REUSED",
                         $"コントローラ '{g.Key.name}' が複数のプレイアブルレイヤー ({string.Join(", ", g.Select(d => LayerTypeName(d.Type)))}) で使われています。docs: 同じコントローラを複数レイヤーに使わないこと (playable-layers.md)",
                         asset: AssetLabel(g.Key));
+            // With MA installed, NDMF virtualizes every playable layer (MA "Clone animators" pass, unconditional) and commits
+            // plain AnimatorControllers, applying the override mappings (ndmf VirtualAnimatorController / CloneContext).
             foreach (var d in custom)
                 if (d.Controller is AnimatorOverrideController)
-                    ctx.Issue(CctSeverity.Warning, "OVERRIDE_CONTROLLER_IN_PLAYABLE_LAYER",
-                        $"{LayerTypeName(d.Type)} に AnimatorOverrideController が設定されています。docs: プレイアブルレイヤーには Animation Controller のみ対応 (playable-layers.md、他の種類はエラーやアップロード不可の原因)",
+                    ctx.Issue(ctx.MaInstalled ? CctSeverity.Info : CctSeverity.Warning, "OVERRIDE_CONTROLLER_IN_PLAYABLE_LAYER",
+                        $"{LayerTypeName(d.Type)} に AnimatorOverrideController が設定されています。docs: プレイアブルレイヤーには Animation Controller のみ対応 (playable-layers.md、他の種類はエラーやアップロード不可の原因)" +
+                        (ctx.MaInstalled ? "。Modular Avatar 導入済みのため、ビルド時に NDMF が通常の AnimatorController に変換します (推定)。MA を外すと問題になります" : ""),
                         asset: AssetLabel(d.Controller));
         }
 
@@ -514,26 +573,26 @@ namespace Naoking.ClaudeCreatorTools
         static void ReadMaComponents(Ctx ctx, GameObject root)
         {
             var avatarRoot = ctx.AvatarRoot != null ? ctx.AvatarRoot.transform : null;
-            int n = 0;
-            foreach (var c in root.GetComponentsInChildren<Component>(true))
+            foreach (var c in FindTyped(root, TMaMergeBlendTree))
             {
                 if (c == null) continue;
-                if (CctSerialized.IsType(c, TMaMergeBlendTree))
+                using (var so = new SerializedObject(c))
                 {
-                    using (var so = new SerializedObject(c))
+                    var motion = CctSerialized.GetObject(so.FindProperty("BlendTree"));
+                    ctx.MaBlendTrees.Add(new Dictionary<string, object>
                     {
-                        var motion = CctSerialized.GetObject(so.FindProperty("BlendTree"));
-                        ctx.MaBlendTrees.Add(new Dictionary<string, object>
-                        {
-                            ["path"] = CctTargets.GetPath(c.transform),
-                            ["motion"] = motion != null ? AssetLabel(motion) : null,
-                            ["path_mode"] = CctSerialized.GetInt(so.FindProperty("PathMode"), 0) == 1 ? "Absolute" : "Relative",
-                            ["note"] = "MA Merge Motion: ビルド時に FX へ Direct BlendTree レイヤーとして統合されます (このツールでは未解析)",
-                        });
-                    }
-                    continue;
+                        ["path"] = CctTargets.GetPath(c.transform),
+                        ["motion"] = motion != null ? AssetLabel(motion) : null,
+                        ["path_mode"] = CctSerialized.GetInt(so.FindProperty("PathMode"), 0) == 1 ? "Absolute" : "Relative",
+                        ["note"] = "MA Merge Motion: ビルド時に FX へ Direct BlendTree レイヤーとして統合されます (このツールでは未解析)",
+                    });
                 }
-                if (!CctSerialized.IsType(c, TMaMergeAnimator)) continue;
+            }
+
+            int n = 0;
+            foreach (var c in FindTyped(root, TMaMergeAnimator)) // hierarchy order = MA's GetComponentsInChildren order
+            {
+                if (c == null) continue;
                 var m = new MaMerge { Id = "ma" + (++n), Comp = c, Order = n };
                 using (var so = new SerializedObject(c))
                 {
@@ -556,11 +615,17 @@ namespace Naoking.ClaudeCreatorTools
                 ctx.MaMerges.Add(m);
             }
 
-            // Build order within a layer type (NDMF/MA): Replace first, then layerPriority ascending, then hierarchy order.
+            // Final layer order within a layer type: NDMF VirtualAnimatorController keeps layers in a SortedDictionary by
+            // layerPriority (insertion order inside one priority; the descriptor's own layers sit at priority 0), and MA
+            // MergeAnimatorProcessor.ProcessLayerType inserts the Replace component first, then the rest in hierarchy order.
+            // So: layerPriority ascending, then Replace, then hierarchy. Components that merge nothing (no controller,
+            // EditorOnly) get merge_order 0.
             foreach (var g in ctx.MaMerges.GroupBy(x => x.LayerType))
             {
                 int i = 0;
-                foreach (var m in g.OrderBy(x => x.MergeMode == 1 ? 0 : 1).ThenBy(x => x.Priority).ThenBy(x => x.Order)) m.Order = ++i;
+                var merging = g.Where(x => x.Animator != null && !x.EditorOnly).ToList();
+                foreach (var m in g.Except(merging)) m.Order = 0;
+                foreach (var m in merging.OrderBy(x => x.Priority).ThenBy(x => x.MergeMode == 1 ? 0 : 1).ThenBy(x => x.Order).ToList()) m.Order = ++i;
             }
         }
 
@@ -572,8 +637,18 @@ namespace Naoking.ClaudeCreatorTools
                 m.PathRoot = avatarRoot;
                 m.PathRootRule = "ma_absolute: avatar_root";
                 if (avatarRoot == null) m.PathRootRule = "ma_absolute: avatar root unknown (not under an avatar)";
+                // Root the Relative mode would use (for MA_PATH_MODE_MISMATCH): relativePathRoot, else the component object.
+                Transform rel = null;
+                if (!string.IsNullOrEmpty(m.RefPath) && avatarRoot != null)
+                {
+                    if (m.RefTarget != null && CctTargets.IsDescendantOf(m.RefTarget.transform, avatarRoot)) rel = m.RefTarget.transform;
+                    else if (m.RefPath == MaAvatarRootToken) rel = avatarRoot;
+                    else rel = avatarRoot.Find(m.RefPath);
+                }
+                m.AltRoot = rel != null ? rel : m.Comp.transform;
                 return;
             }
+            m.AltRoot = avatarRoot;
             Transform resolved = null;
             if (!string.IsNullOrEmpty(m.RefPath))
             {

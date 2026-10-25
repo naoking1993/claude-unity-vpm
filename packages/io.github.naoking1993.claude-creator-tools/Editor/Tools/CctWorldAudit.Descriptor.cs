@@ -19,9 +19,11 @@ namespace Naoking.ClaudeCreatorTools
         // [WB] WORLD_MAX_SPAWN_OFFSET = 1000f (VRCSdkControlPanelWorldBuilder.cs L57).
         const float WorldMaxSpawnOffset = 1000f;
 
-        // docs/worlds/udon/vrc-graphics/vrc-camera-settings.md L61-65: NearClipPlane clamped to 0.001..0.05, "similar
-        // restrictions to setting them via the Reference Camera" (so applying it to the Reference Camera is an estimate).
-        const float ReferenceNearMin = 0.001f, ReferenceNearMax = 0.05f;
+        // Reference Camera near clip: ClientSim copies it to the player camera as Mathf.Clamp(near, 0.01f, 0.05f)
+        // (Integrations/ClientSim/Runtime/System/ClientSimSceneManager.cs L158). docs/worlds/udon/vrc-graphics/
+        // vrc-camera-settings.md L61-65 gives 0.001..0.05 for Udon's VRCCameraSettings.NearClipPlane, "similar restrictions to
+        // setting them via the Reference Camera". The client's own clamp is not public: the ClientSim range is used (estimate).
+        const float ReferenceNearMin = 0.01f, ReferenceNearMax = 0.05f, UdonNearMin = 0.001f;
 
         // VRChat layer indices (docs/worlds/layers.md L17-44; VRCProjectSettings.prefab layers[]).
         const int LayerItem = 3, LayerUi = 5, LayerReserved6 = 6, LayerReserved7 = 7, LayerPlayerLocal = 10, LayerUiMenu = 12,
@@ -56,7 +58,7 @@ namespace Naoking.ClaudeCreatorTools
 
             if (descs.Count == 0)
                 ctx.Issue(CctSeverity.Error, "NO_SCENE_DESCRIPTOR",
-                    "VRC Scene Descriptor がありません。SDK はビルドできません。Packages/com.vrchat.worlds/Samples/UdonExampleScene/Prefabs/VRCWorld.prefab をシーンに置くか、Control Panel の「Add a VRCSceneDescriptor」を使ってください");
+                    "VRC Scene Descriptor がありません。この状態では SDK がビルドできません。Packages/com.vrchat.worlds/Samples/UdonExampleScene/Prefabs/VRCWorld.prefab をシーンに置くか、Control Panel の「Add a VRCSceneDescriptor」を使ってください");
             else if (descs.Count > 1)
                 ctx.Issue(CctSeverity.Error, "MULTIPLE_SCENE_DESCRIPTORS",
                     $"VRC Scene Descriptor が読み込み中のシーン全体で {descs.Count} 個あります。SDK はちょうど 1 個でないとビルドしません (エクスポーターも \"Scene needs exactly one VRC_SceneDescriptor\" で中止)",
@@ -127,7 +129,8 @@ namespace Naoking.ClaudeCreatorTools
             }
             catch (Exception) { return; }
             int stageDescriptors = 0, stagePipelineManagers = 0;
-            var examples = new List<string>();
+            var examples = new List<string>();     // hierarchy paths inside the stage
+            var described = new List<string>();    // "path (Type)" for the data
             foreach (var b in behaviours)
             {
                 if (b == null || IsSdkExcluded(b.gameObject.hideFlags)) continue;
@@ -136,18 +139,22 @@ namespace Naoking.ClaudeCreatorTools
                 if (!isDescriptor && !isPipeline) continue;
                 if (isDescriptor) stageDescriptors++;
                 else stagePipelineManagers++;
-                if (examples.Count < ExampleCap) examples.Add(CctTargets.GetPath(b.transform) + " (" + b.GetType().Name + ")");
+                if (examples.Count < ExampleCap)
+                {
+                    examples.Add(CctTargets.GetPath(b.transform));
+                    described.Add(CctTargets.GetPath(b.transform) + " (" + b.GetType().Name + ")");
+                }
             }
             d["prefab_stage"] = new Dictionary<string, object>
             {
-                ["open"] = true, ["scene_descriptors"] = stageDescriptors, ["pipeline_managers"] = stagePipelineManagers, ["examples"] = Examples(examples),
+                ["open"] = true, ["scene_descriptors"] = stageDescriptors, ["pipeline_managers"] = stagePipelineManagers, ["examples"] = Examples(described),
             };
             if (stageDescriptors + stagePipelineManagers == 0) return;
             bool blocks = sceneDescriptors + stageDescriptors > 1 || scenePipelineManagers + stagePipelineManagers > 1;
             ctx.Issue(blocks ? CctSeverity.Error : CctSeverity.Warning, "PREFAB_STAGE_SDK_COMPONENTS",
                 $"Prefab Mode で開いているプレハブに VRC Scene Descriptor が {stageDescriptors} 個、PipelineManager が {stagePipelineManagers} 個あります。SDK はこれらもシーンの分と合わせて数えるため" +
                 (blocks ? "、「複数ある」エラーでビルドできません" : "、ビルド結果が変わるおそれがあります") + "。Prefab Mode を閉じてからビルドしてください",
-                path: examples.FirstOrDefault(), value: Examples(examples));
+                path: examples.FirstOrDefault(), value: Examples(described));
         }
 
         static string EnumName(string[] names, int value) =>
@@ -382,9 +389,14 @@ namespace Naoking.ClaudeCreatorTools
             rc["allow_hdr"] = cam.allowHDR;
             rc["allow_msaa"] = cam.allowMSAA;
             if (cam.nearClipPlane < ReferenceNearMin || cam.nearClipPlane > ReferenceNearMax)
+            {
+                float applied = Mathf.Clamp(cam.nearClipPlane, ReferenceNearMin, ReferenceNearMax);
                 ctx.Issue(CctSeverity.Info, "REFERENCE_CAMERA_NEAR_CLAMPED",
-                    $"Reference Camera の Near Clip ({Round(cam.nearClipPlane, 4)}) は VRChat で 0.001〜0.05 にクランプされると推定されます (docs は Udon の VRCCameraSettings について「Reference Camera と同様の制約」と記載)",
+                    $"Reference Camera の Near Clip ({Round(cam.nearClipPlane, 4)}) は範囲外のため、プレイヤーのカメラでは {Round(applied, 3)} になると推定されます (ClientSim は 0.01〜0.05 に制限。docs では Udon の VRCCameraSettings が 0.001〜0.05)。手元が切れる・遠くがちらつく場合はこの値を前提に調整してください",
                     path: CctTargets.GetPath(go), value: Round(cam.nearClipPlane, 4), limit: new object[] { ReferenceNearMin, ReferenceNearMax });
+            }
+            rc["near_clip_in_vrchat_estimate"] = Round(Mathf.Clamp(cam.nearClipPlane, ReferenceNearMin, ReferenceNearMax), 4);
+            rc["udon_near_clip_range"] = new object[] { UdonNearMin, ReferenceNearMax };
         }
 
         // ------------------------------------------------------------------ layers

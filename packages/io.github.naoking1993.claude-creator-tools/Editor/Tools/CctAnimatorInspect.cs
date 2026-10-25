@@ -46,29 +46,38 @@ namespace Naoking.ClaudeCreatorTools
     /// changes of MergeAnimatorProcessor (forced on for additive / single-state direct-blend-tree layers; others set to
     /// the avatar's uniform value when matchAvatarWriteDefaults) are forecast per layer (ma_wd) and soften the issues.
     ///
-    /// Parameter type conversion (PARAM_TYPE_CONVERTED / BUILTIN_PARAM_TYPE_CONVERTED): docs
+    /// Parameter type conversion (PARAM_TYPE_MISMATCH with value.source = expression | builtin): docs
     /// avatars/animator-parameters/index.md:205-220 "Mismatched Parameter Type Conversion": int->float direct,
     /// int->bool 0=false else true, float->int Mathf.Round, float->bool 0.0=false else true, bool->int/float 1/0.
-    /// Lossless conversions (bool->int/float, int->float) are info, lossy ones warning. Driver Copy uses different rules
-    /// (state-behaviors.md:158-163: to int rounds down).
+    /// Lossless conversions (bool->int/float, int->float) are one info per controller, lossy ones a warning each. Driver Copy
+    /// uses different rules (state-behaviors.md:158-163: to int rounds down).
+    ///
+    /// Modular Avatar build forecast (verified in MA 1.19.0-alpha.2 / NDMF 1.15.0-beta.2 sources; the user's MA 1.18.7 /
+    /// NDMF 1.14.8 are assumed to match, hence "推定" in messages): MA's plugin runs on every avatar build when installed
+    /// (PluginDefinition.cs has no component guard) and calls NDMF GlobalTransformations.HarmonizeParameterTypes, which makes
+    /// a parameter Float in every controller when its types conflict or (NDMF >= 1.14.5, #827) a blend tree uses it, and
+    /// rewrites conditions that do not fit the final type (If -> Greater 0.5, Greater on Bool -> If, Equals -> +-0.1 window;
+    /// Trigger-typed parameters untouched; Equals on a Bool stays invalid); parameter drivers are adjusted (NDMF 1.9.0 #693).
+    /// So with MA installed, such PARAM_TYPE_MISMATCH (usage) and MA_PARAM_TYPE_COERCED findings are info. RemoveEmptyLayers
+    /// drops empty non-first layers, and NDMF commits plain AnimatorControllers for override controllers. source.build_tools
+    /// shows the installed MA / NDMF versions.
     ///
     /// Issue codes (stable):
     /// | code                              | severity      | rule |
     /// |-----------------------------------|---------------|------|
     /// | TARGET_ADJUSTED                   | info          | selection/target moved to the avatar root, or the Project-selected controller was used |
+    /// | ARG_ADJUSTED                      | info          | unknown layer value: fx used instead |
     /// | PLAY_MODE                         | info          | Play mode: the scene avatar may already be NDMF-processed (merged controllers, MA components gone) |
     /// | SDK_DEFAULT_LAYER                 | info          | playable layer uses VRChat's default; the SDK sample controller of that type is inspected (estimate) |
     /// | SDK_DEFAULT_CONTROLLER_NOT_FOUND  | warning       | the SDK sample controller for a default layer is not in the project (com.vrchat.avatars missing?) |
     /// | LAYER_CONTROLLER_MISSING          | warning       | customised playable layer (not default) without controller, or the reference is missing |
-    /// | OVERRIDE_CONTROLLER_IN_PLAYABLE_LAYER | warning   | descriptor layer uses an AnimatorOverrideController (docs playable-layers.md:40-43: only Animation Controllers) |
+    /// | OVERRIDE_CONTROLLER_IN_PLAYABLE_LAYER | warning/info | descriptor layer uses an AnimatorOverrideController (docs playable-layers.md:40-43: only Animation Controllers; info when MA is installed: NDMF converts it at build) |
     /// | CONTROLLER_REUSED                 | warning       | the same controller in several playable layers (docs playable-layers.md:39) |
     /// | CONTROLLER_UNREADABLE             | warning       | override controller without base AnimatorController, or not an AnimatorController |
     /// | LAYER_NO_STATE_MACHINE            | warning       | layer without state machine (MA skips such layers: MA-0013) |
     /// | PARAM_DUPLICATE                   | warning       | the same parameter name twice in one controller |
-    /// | PARAM_UNDEFINED                   | warning/info  | condition / blend tree / speed / time / mirror / cycle / driver / play-audio parameter not in the controller (info when only a driver destination defined in Expression Parameters, or defined by another controller merged into the same playable layer) |
-    /// | PARAM_TYPE_MISMATCH               | warning       | condition mode not valid for the parameter type (Float: Greater/Less; Int: Greater/Less/Equals/NotEqual; Bool: If/IfNot; Trigger: If), blend tree / speed / time / cycle parameter not Float, mirror parameter not Bool |
-    /// | PARAM_TYPE_CONVERTED              | warning/info  | Expression Parameter type differs from the animator parameter type (docs conversion table, see above) |
-    /// | BUILTIN_PARAM_TYPE_CONVERTED      | warning/info  | animator parameter named like a VRChat built-in with a different type (same table) |
+    /// | PARAM_UNDEFINED                   | warning/info  | condition / blend tree / speed / time / mirror / cycle / driver parameter not in the controller (info when only a driver destination defined in Expression Parameters, or defined by another controller merged into the same playable layer). A Play Audio parameter is not reported when an avatar is known (docs: it must be an Expression Parameter; see PLAY_AUDIO_PARAM_NOT_IN_EXPRESSIONS), info in pure controller mode |
+    /// | PARAM_TYPE_MISMATCH               | warning/info  | value.source = "usage": condition mode not valid for the parameter type (Float: Greater/Less; Int: Greater/Less/Equals/NotEqual; Bool: If/IfNot; Trigger: If), blend tree / speed / time / cycle parameter not Float, mirror not Bool (warning; info when MA is installed and NDMF harmonizes it: conditions except on Trigger / Equals-on-Bool, blend trees from NDMF 1.14.5), Play Audio Expression Parameter not Int (warning, docs state-behaviors.md:203); "expression" / "builtin": the animator type differs from the Expression Parameter / VRChat built-in type (built-ins only for avatar playable layer controllers, not scene Animators), explained with the docs conversion table (warning per parameter when lossy: int/float->bool, float->int); "conversion_lossless": one info per controller listing the lossless ones (bool->int/float, int->float) |
     /// | PARAM_TRIGGER                     | info          | Trigger parameters (docs animator-parameters/index.md:222-224: not recommended, can desync) |
     /// | EXPRESSION_PARAM_NOT_IN_ANIMATOR  | info          | layer=all: Expression Parameter not declared in any inspected controller (MA may still add it) |
     /// | WD_MIXED                          | warning/info  | a layer, or a whole controller (SDK rule), mixes Write Defaults on/off (info when MA will normalise it) |
@@ -80,21 +89,29 @@ namespace Naoking.ClaudeCreatorTools
     /// | MISSING_BEHAVIOUR                 | warning       | state machine behaviour with a missing script |
     /// | TRANSITION_NEVER_FIRES            | warning       | non-muted state/AnyState transition with no conditions and no exit time (Unity ignores it) |
     /// | TRANSITION_NO_DESTINATION         | warning       | transition with no destination state / state machine and not an exit |
-    /// | ANYSTATE_SELF_LOOP                | warning       | AnyState transition with Can Transition To Self and no Trigger condition: re-enters every frame while true |
+    /// | ANYSTATE_SELF_LOOP                | warning/info  | AnyState transition with Can Transition To Self and no Trigger condition: re-enters repeatedly while true (info when the destination state's Parameter Driver writes a condition parameter: the usual self-resetting pattern) |
     /// | UNREACHABLE_STATE                 | info          | state not reachable from Entry / default state / AnyState / other states (muted/never-firing transitions ignored) |
     /// | LAYER_WEIGHT_ZERO                 | info          | layer index > 0 with weight 0 and no VRCAnimatorLayerControl raising it |
-    /// | LAYER_EMPTY                       | info          | layer whose state machine has no states |
+    /// | LAYER_EMPTY                       | info          | layer whose state machine has no states (notes that MA removes non-first empty layers at build) |
     /// | ACTION_WEIGHT_NEVER_RAISED        | info          | layer=all: Action controller has states but no VRCPlayableLayerControl raises Action (docs playable-layers.md:91) |
+    /// | ACTION_WEIGHT_NOT_LOWERED         | warning/info  | a Playable Layer Control raises Action but none sets it back to 0 (docs playable-layers.md:91, state-behaviors.md:176) |
+    /// | TRACKING_NOT_RESTORED             | warning/info  | a Tracking Control sets a part to Animation and no state sets it back to Tracking (docs state-behaviors.md:101: kept until another state changes it) |
+    /// | LOCOMOTION_NOT_RESTORED           | warning/info  | a Locomotion Control disables locomotion and none enables it again (docs state-behaviors.md:46) |
+    /// | POSE_SPACE_NOT_RESTORED           | warning/info  | a Temporary Pose Space enters and none exits (docs state-behaviors.md:61) |
+    ///   (the four *_NOT_RESTORED / NOT_LOWERED rules: info for eyes / mouth / fingers, which custom systems keep on Animation
+    ///   on purpose; otherwise warning only for an avatar with layer=all, no layers filter, include_ma and
+    ///   no time truncation, else info; SDK default controllers are ignored on both sides, since their restoring states only
+    ///   run with their own animations)
     /// | DRIVER_BUILTIN_DESTINATION        | warning       | parameter driver writes a VRChat built-in parameter (docs state-behaviors.md:122: cannot be driven) |
     /// | DRIVER_COPY_BUILTIN_SOURCE        | warning       | driver Copy from a built-in parameter (docs state-behaviors.md:153: does not work as a source) |
     /// | DRIVER_ADD_ON_BOOL                | warning       | driver Add on a Bool parameter (docs state-behaviors.md:124: Add works for float/int only) |
-    /// | DRIVER_NON_LOCAL                  | info          | Add / Random without Local Only (docs state-behaviors.md:134,141: may differ on remote; use a synced destination + local only) |
-    /// | DRIVER_VALUE_OUT_OF_RANGE         | info          | Set value outside the synced range of the destination Expression Parameter (docs state-behaviors.md:118: clamped) |
+    /// | DRIVER_IN_NON_LOCAL               | info          | Add / Random without Local Only (docs state-behaviors.md:134,141: may differ on remote; use a synced destination + local only) |
+    /// | DRIVER_VALUE_OUT_OF_RANGE         | info          | Set value or Random min/max outside Int 0..255 / Float -1..1 for a destination defined in Expression Parameters (docs state-behaviors.md:118-120: clamped; controller-only parameters are not) |
     /// | DRIVER_COPY_TYPE_CONVERSION       | info          | Copy between different types (docs state-behaviors.md:158-163 rules) |
     /// | LAYER_CONTROL_BASE_LAYER          | warning       | VRCAnimatorLayerControl targets layer 0 (docs state-behaviors.md:36: base layer weight is always 1) |
     /// | LAYER_CONTROL_INDEX_OUT_OF_RANGE  | warning       | VRCAnimatorLayerControl layer index beyond the controller's layers (same playable layer) |
     /// | PLAY_AUDIO_SOURCE_MISSING         | warning       | VRCAnimatorPlayAudio Source Path does not resolve to an AudioSource (docs: the behaviour is disabled) |
-    /// | PLAY_AUDIO_PARAM_NOT_IN_EXPRESSIONS | warning     | Playback Order = Parameter but the parameter is not an Expression Parameter (docs state-behaviors.md:203) |
+    /// | PLAY_AUDIO_PARAM_NOT_IN_EXPRESSIONS | warning     | avatar known: Playback Order = Parameter but the parameter is not an Expression Parameter, or the avatar has none (docs state-behaviors.md:203) |
     /// | PLAY_AUDIO_ON_STATE_MACHINE       | info          | VRCAnimatorPlayAudio on a sub-state machine (docs state-behaviors.md:198: not recommended) |
     /// | BINDING_PATH_MISSING              | warning/info  | clip curve path does not exist under the binding root (info for SDK defaults / estimated roots) |
     /// | BINDING_COMPONENT_MISSING         | warning/info  | path exists but the animated component type is not on it |
@@ -107,7 +124,7 @@ namespace Naoking.ClaudeCreatorTools
     /// | MA_RELATIVE_ROOT_UNRESOLVED       | warning       | relativePathRoot set but unresolvable: MA falls back to the component's GameObject |
     /// | MA_EDITOR_ONLY                    | info          | MA Merge Animator under an EditorOnly object: removed before merging |
     /// | MA_PATH_MODE_MISMATCH             | warning       | Relative/Absolute path mode looks wrong: missing paths resolve with the other mode's root |
-    /// | MA_PARAM_TYPE_COERCED             | warning       | same parameter name with different types in controllers merged into one layer: MA makes it Float |
+    /// | MA_PARAM_TYPE_COERCED             | info/warning  | same parameter name with different types in controllers merged into one layer: MA makes it Float and NDMF rewrites conditions / drivers (info); warning when one of them is a Trigger (a Float does not reset itself) |
     /// | MA_WD_FORCED_ON                   | info          | MA forces WD on in this layer at build (additive / single-state direct blend tree layer) |
     /// | MA_WD_NOT_MATCHED                 | warning/info  | matchAvatarWriteDefaults off and the controller's WD differs from the avatar's, or on but the avatar is mixed |
     /// | MA_LAYER_CONTROL_UNSUPPORTED      | warning       | VRCAnimatorLayerControl in an MA controller targeting another playable (MA docs merge-animator.md:73-77) |
@@ -115,6 +132,10 @@ namespace Naoking.ClaudeCreatorTools
     /// | TRUNCATED                         | info          | graph output truncated at max_states, or the time budget stopped the scan early |
     /// | SCENE_DIRTIED                     | warning       | a loaded scene became dirty during the call (should not happen; reported, not reverted) |
     /// | INSPECT_SECTION_FAILED            | warning       | one controller / section threw; it is omitted and the rest stays valid |
+    /// Issue "path" is an animator location "&lt;controller id&gt;:&lt;layer&gt;/&lt;state path&gt;" (with " -> &lt;destination&gt;" for
+    /// transitions, "[AnyState]" / "[Entry]" / "[Exit]" for machine transitions), or a hierarchy path for MA components;
+    /// "asset" is the controller asset (the clip asset for binding issues). Controller ids: fx / gesture / action / base /
+    /// additive / sitting / tpose / ikpose (descriptor layers), ma1.. (MA Merge Animators), controller, animator.
     /// Per code at most <see cref="MaxIssuesPerCode"/> issues are listed; one extra issue with the same code counts the rest.
     /// Failure codes (success=false): CONTROLLER_NOT_FOUND, AMBIGUOUS_CONTROLLER, TARGET_NOT_FOUND, AMBIGUOUS_TARGET,
     /// NO_TARGET (nothing given/selected and not exactly one avatar loaded), NO_CONTROLLER (target has no descriptor,
@@ -127,7 +148,9 @@ namespace Naoking.ClaudeCreatorTools
         const int MaxIssuesPerCode = 25;
         const int SummaryParamCap = 120;
         const int SummaryLayerCap = 80;
-        const int PreviewFullStates = 30;
+        const int SummaryControllerCap = 40;
+        const int PreviewFullStates = 20;
+        const int PreviewFullTransitions = 60;
         const int PreviewLayerCap = 40;
         const int PreviewStatesPerLayer = 12;
         const int MaxBlendTreeDepth = 10;
@@ -179,7 +202,7 @@ namespace Naoking.ClaudeCreatorTools
                 case 6: return "Sitting";
                 case 7: return "TPose";
                 case 8: return "IKPose";
-                default: return t < 0 ? null : t.ToString(CultureInfo.InvariantCulture);
+                default: return t < 0 ? "Unknown" : "Type" + t.ToString(CultureInfo.InvariantCulture);
             }
         }
 
@@ -254,9 +277,16 @@ namespace Naoking.ClaudeCreatorTools
             public readonly List<object> MaBlendTrees = new List<object>();
             public readonly List<Unit> Units = new List<Unit>();
 
+            /// <summary>Modular Avatar is installed: its passes (and NDMF's parameter type harmonization) run on every avatar build.</summary>
+            public bool MaInstalled;
+            public string MaVersion, NdmfVersion;
+            /// <summary>NDMF >= 1.14.5 (#827) also turns blend tree parameters into Float (true when the version is unknown).</summary>
+            public bool NdmfBlendTreeFloat;
+
             public readonly List<ParamUse> Uses = new List<ParamUse>();
             public readonly List<LayerControlRef> LayerControls = new List<LayerControlRef>();
             public readonly List<PlayableControlRef> PlayableControls = new List<PlayableControlRef>();
+            public readonly List<PersistRef> Persistent = new List<PersistRef>();
             public readonly Dictionary<AnimationClip, ClipUse> Clips = new Dictionary<AnimationClip, ClipUse>();
             public readonly List<string> Notes = new List<string>();
             public int GraphStates, TotalStates, TotalTransitions;
@@ -287,6 +317,7 @@ namespace Naoking.ClaudeCreatorTools
                 R.AddIssue(severity, code, message, path, value, limit, string.IsNullOrEmpty(asset) ? null : asset);
             }
 
+            /// <summary>Adds one summary issue per capped code (idempotent: later calls only add codes capped since).</summary>
             public void FlushOverflow()
             {
                 foreach (var kv in _overflowSeverity)
@@ -295,6 +326,7 @@ namespace Naoking.ClaudeCreatorTools
                     R.AddIssue(kv.Value, kv.Key, $"{kv.Key} は他に {omitted} 件あります (先頭 {MaxIssuesPerCode} 件のみ表示。layers / find_parameter / find_binding で絞り込めます)",
                         value: omitted);
                 }
+                _overflowSeverity.Clear();
             }
         }
 
@@ -333,6 +365,7 @@ namespace Naoking.ClaudeCreatorTools
             public string RefPath;
             public GameObject RefTarget;
             public Transform PathRoot;
+            public Transform AltRoot;   // root the other path mode would use (MA_PATH_MODE_MISMATCH)
             public string PathRootRule;
             public bool PathRootEstimate;
             public bool RootUnresolved;
@@ -391,6 +424,7 @@ namespace Naoking.ClaudeCreatorTools
             public int StatesOmitted;
             public string MaWd;         // forced_on | match_avatar | unchanged (MA controllers only)
             public readonly List<string> ControlledBy = new List<string>();
+            public Dictionary<AnimatorState, List<Object>> SerializedOverrideBehaviours; // synced layers, lazily read
         }
 
         sealed class MachineData
@@ -412,6 +446,20 @@ namespace Naoking.ClaudeCreatorTools
             public Motion Motion;
             public bool Wd, DirectBt, ContainsDirect, Empty, MissingMotion;
             public AnimatorStateTransition[] Transitions = new AnimatorStateTransition[0];
+            /// <summary>Parameters written by this state's Avatar Parameter Drivers (for ANYSTATE_SELF_LOOP).</summary>
+            public readonly HashSet<string> DriverWrites = new HashSet<string>(StringComparer.Ordinal);
+        }
+
+        /// <summary>
+        /// A setting that VRChat keeps "until some other state runs this State Behavior again" (docs state-behaviors.md:31,46,61,101)
+        /// or that must be undone (Action weight, playable-layers.md:91): Away = changed from the default, else restores it.
+        /// </summary>
+        sealed class PersistRef
+        {
+            public Unit Unit;
+            public string At;
+            public string Kind;         // tracking:<part> | locomotion | pose_space | action_weight
+            public bool Away;
         }
 
         sealed class ParamUse
@@ -462,6 +510,10 @@ namespace Naoking.ClaudeCreatorTools
             var r = CctResult.Ok("アニメーターを解析しました");
             var ctx = new Ctx { Args = args, R = r, Clock = Stopwatch.StartNew() };
             ctx.LayerArg = args.GetEnum("layer", "fx", "fx", "gesture", "action", "base", "additive", "sitting", "tpose", "ikpose", "all");
+            var rawLayer = NullIfEmpty(args.GetString("layer"));
+            if (rawLayer != null && !string.Equals(rawLayer, ctx.LayerArg, StringComparison.OrdinalIgnoreCase))
+                ctx.Issue(CctSeverity.Info, "ARG_ADJUSTED",
+                    $"layer '{rawLayer}' は不明な値なので fx として扱いました (fx / gesture / action / base / additive / sitting / tpose / ikpose / all)", value: rawLayer);
             ctx.MaxStates = args.GetInt("max_states", 400, 0, 20000);
             ctx.FindParameter = NullIfEmpty(args.GetString("find_parameter"));
             ctx.FindBinding = NullIfEmpty(args.GetString("find_binding"));
@@ -469,6 +521,7 @@ namespace Naoking.ClaudeCreatorTools
             // Stay well inside the MCP call timeout (default 30 s; the bridge passes timeout_seconds through).
             var timeout = args.GetInt("timeout_seconds", 30, 1, 3600);
             ctx.BudgetMs = Math.Max(8000L, timeout * 600L);
+            DetectBuildTools(ctx);
 
             var returned = r;
             var dirtyBefore = SceneDirtiness();
@@ -481,8 +534,8 @@ namespace Naoking.ClaudeCreatorTools
                 var fail = ResolveInputs(ctx);
                 if (fail != null)
                 {
-                    returned = fail;
-                    return fail;
+                    returned = CarryIssues(ctx, fail);
+                    return returned;
                 }
 
                 bool hasRoot = ctx.Target != null || ctx.AvatarRoot != null;
@@ -493,8 +546,8 @@ namespace Naoking.ClaudeCreatorTools
                 fail = BuildUnits(ctx);
                 if (fail != null)
                 {
-                    returned = fail;
-                    return fail;
+                    returned = CarryIssues(ctx, fail);
+                    return returned;
                 }
 
                 foreach (var u in ctx.Units)
@@ -520,6 +573,15 @@ namespace Naoking.ClaudeCreatorTools
                 ReportSceneDirtiness(returned, dirtyBefore);
             }
             return r;
+        }
+
+        /// <summary>A failure result keeps the issues found before it (PLAY_MODE, ARG_ADJUSTED, TARGET_ADJUSTED, ...).</summary>
+        static CctResult CarryIssues(Ctx ctx, CctResult fail)
+        {
+            ctx.FlushOverflow();
+            fail.Issues.InsertRange(0, ctx.R.Issues);
+            ctx.R.Issues.Clear();
+            return fail;
         }
 
         static void RunSection(Ctx ctx, string name, Action action)
@@ -555,6 +617,12 @@ namespace Naoking.ClaudeCreatorTools
                 if (ctx.Expression != null) source["expression_parameter_count"] = ctx.Expression.Count;
             }
             if (ctx.LayerFilter.Count > 0) source["layers_filter"] = ctx.LayerFilter.ToList<object>();
+            if (ctx.MaInstalled || ctx.NdmfVersion != null)
+                source["build_tools"] = new Dictionary<string, object>
+                {
+                    ["modular_avatar"] = ctx.MaInstalled ? ctx.MaVersion ?? "installed (version unknown)" : "not installed",
+                    ["ndmf"] = ctx.NdmfVersion ?? "unknown",
+                };
             r.Put("source", source);
 
             if (ctx.AvatarRoot != null)
@@ -578,7 +646,14 @@ namespace Naoking.ClaudeCreatorTools
                 r.Put("playable_layers", rows);
             }
 
-            r.Put("controllers", ctx.Units.Select(UnitSummary).ToList<object>());
+            // Summary lists stay bounded even for avatars with hundreds of MA gimmicks (layer=all); the report keeps all rows.
+            var controllerRows = ctx.Units.Select(UnitSummary).ToList<object>();
+            r.Put("controllers", controllerRows.Take(SummaryControllerCap).ToList());
+            if (controllerRows.Count > SummaryControllerCap)
+            {
+                r.Put("controllers_omitted", controllerRows.Count - SummaryControllerCap);
+                r.Put("controllers_all", controllerRows);
+            }
 
             // layers table (summary capped; full list in layers_all when capped)
             var layerRows = new List<object>();
@@ -629,7 +704,13 @@ namespace Naoking.ClaudeCreatorTools
 
             if (ctx.MaMerges.Count > 0 || ctx.MaBlendTrees.Count > 0)
             {
-                r.Put("ma_merge_animators", ctx.MaMerges.Select(MaRow).ToList<object>());
+                var maRows = ctx.MaMerges.Select(MaRow).ToList<object>();
+                r.Put("ma_merge_animators", maRows.Take(SummaryControllerCap).ToList());
+                if (maRows.Count > SummaryControllerCap)
+                {
+                    r.Put("ma_merge_animators_omitted", maRows.Count - SummaryControllerCap);
+                    r.Put("ma_merge_animators_all", maRows);
+                }
                 if (ctx.MaBlendTrees.Count > 0) r.Put("ma_merge_blend_trees", ctx.MaBlendTrees);
             }
 
@@ -647,7 +728,9 @@ namespace Naoking.ClaudeCreatorTools
                 "静的解析です (エディタ上のアセットを読んだ結果)。Gesture Manager・エミュレーター・VRChat 実機での実行時の値ではありません",
             };
             if (ctx.MaMerges.Count > 0)
-                notes.Add("Modular Avatar はビルド時に Merge Animator のコントローラを統合します (layerPriority 順、Replace は置換)。同名パラメータの型衝突は Float に変換、matchAvatarWriteDefaults で WD を揃え、加算/単一 Direct BlendTree レイヤーは WD ON に強制します。統合後の Controller はビルド前には存在しません");
+                notes.Add("Modular Avatar はビルド時に Merge Animator のコントローラを統合します (layerPriority の小さい順。アバター自身のレイヤーは priority 0 扱いで、負の値はその前、0 以上は後ろ。同じ priority では Replace、続いて Hierarchy 順。Replace はアバターのレイヤーを置換)。matchAvatarWriteDefaults で WD を揃え、加算/単一 Direct BlendTree レイヤーは WD ON に強制します。統合後の Controller はビルド前には存在しません");
+            if (ctx.MaInstalled)
+                notes.Add("Modular Avatar 導入済み: ビルド時に全プレイアブルレイヤーのパラメータ型が統一されます (同名で型が違う・BlendTree で使うパラメータは Float になり、If / Equals などの条件と Parameter Driver は自動で書き換え)。空のレイヤー (先頭以外) も削除されます。ここに出る型・レイヤーはビルド前のものです (推定)");
             if (ctx.Units.Any(u => u.Origin == "sdk_default"))
                 notes.Add("SDK 既定レイヤーは VRChat クライアント内蔵のコントローラが使われます。ここでは SDK 同梱のサンプル (NDMF が代用するもの) を解析しており、内容は推定です");
             if (ctx.Units.Any(u => u.Source is AnimatorOverrideController))
@@ -655,6 +738,7 @@ namespace Naoking.ClaudeCreatorTools
             notes.AddRange(ctx.Notes);
             r.Put("notes", notes);
 
+            ctx.FlushOverflow(); // before counting issues for the message
             int unitCount = ctx.Units.Count(u => !u.Failed);
             int layerCount = ctx.Units.Sum(u => u.LayerData.Count(l => l.Included));
             r.Message = $"コントローラ {unitCount} 個 ({string.Join(", ", ctx.Units.Take(4).Select(u => u.Label))}{(ctx.Units.Count > 4 ? " ..." : "")}) / " +
@@ -744,6 +828,9 @@ namespace Naoking.ClaudeCreatorTools
                 ["merge_mode"] = m.MergeMode == 1 ? "Replace" : "Append",
                 ["layer_priority"] = m.Priority,
                 ["merge_order"] = m.Order,
+                // NDMF keeps the descriptor controller's own layers at priority 0; Replace removes them first.
+                ["merge_position"] = m.MergeMode == 1 ? "replaces_avatar_layers"
+                    : m.Priority < 0 ? "before_avatar_layers" : "after_avatar_layers",
             };
             if (m.PathMode == 0)
             {
@@ -763,7 +850,7 @@ namespace Naoking.ClaudeCreatorTools
 
         static object BuildPreview(Ctx ctx, List<object> graph)
         {
-            if (ctx.GraphStates <= PreviewFullStates && !ctx.GraphTruncated) return graph;
+            if (ctx.GraphStates <= PreviewFullStates && ctx.TotalTransitions <= PreviewFullTransitions && !ctx.GraphTruncated) return graph;
             var outline = new List<object>();
             int layersShown = 0, layersTotal = 0;
             foreach (var u in ctx.Units)
@@ -834,7 +921,7 @@ namespace Naoking.ClaudeCreatorTools
                     d["expression"] = $"{exprType}{(ep.Synced ? " synced" : " local")}{(ep.Saved ? " saved" : "")} default={Round(ep.Default).ToString(CultureInfo.InvariantCulture)}";
                     if (types.Any(t => t.ToString() != exprType)) interesting = true;
                 }
-                if (BuiltinParams.TryGetValue(name, out var bt))
+                if (list.Any(x => BuiltinApplies(ctx, x.unit)) && BuiltinParams.TryGetValue(name, out var bt))
                 {
                     d["builtin"] = bt;
                     if (types.Any(t => t.ToString() != bt)) interesting = true;
@@ -860,6 +947,14 @@ namespace Naoking.ClaudeCreatorTools
             }
         }
 
+        /// <summary>
+        /// VRChat avatar built-in parameters only mean something in avatar playable layers: a descriptor / MA / SDK default
+        /// controller, or a controller asset in a project with the Avatars SDK. Not for scene Animators (world objects, or
+        /// extra Animators inside an avatar, which VRChat does not drive).
+        /// </summary>
+        static bool BuiltinApplies(Ctx ctx, Unit u) =>
+            u.LayerType >= 0 || u.Origin == "asset" && CctSerialized.FindType(CctVrcTypes.AvatarDescriptor) != null;
+
         static string ExprTypeName(int valueType)
         {
             switch (valueType)
@@ -869,6 +964,42 @@ namespace Naoking.ClaudeCreatorTools
                 case 2: return "Bool";
                 default: return valueType.ToString(CultureInfo.InvariantCulture);
             }
+        }
+
+        /// <summary>
+        /// MA presence (type loaded) and MA / NDMF package versions. MA's plugin runs its passes on every avatar build
+        /// (MA Editor/PluginDefinition/PluginDefinition.cs: no component guard), including NDMF's
+        /// "Harmonize animator parameter types" (ndmf Editor/API/Util/GlobalTransformations.cs HarmonizeParameterTypes).
+        /// </summary>
+        static void DetectBuildTools(Ctx ctx)
+        {
+            ctx.MaInstalled = CctSerialized.FindType(TMaMergeAnimator) != null;
+            ctx.MaVersion = PackageVersion("nadena.dev.modular-avatar");
+            ctx.NdmfVersion = PackageVersion("nadena.dev.ndmf");
+            // ndmf CHANGELOG 1.14.5 [#827]: harmonization converts parameters used by blend trees to Float.
+            ctx.NdmfBlendTreeFloat = ctx.NdmfVersion == null || CompareVersion(ctx.NdmfVersion, 1, 14, 5) >= 0;
+        }
+
+        static string PackageVersion(string packageName)
+        {
+            try
+            {
+                var info = UnityEditor.PackageManager.PackageInfo.FindForAssetPath("Packages/" + packageName + "/package.json");
+                return info != null && !string.IsNullOrEmpty(info.version) ? info.version : null;
+            }
+            catch (Exception) { return null; }
+        }
+
+        /// <summary>Compares the numeric "major.minor.patch" prefix of a version ("1.15.0-beta.2" -> 1.15.0) with the given one.</summary>
+        static int CompareVersion(string version, int major, int minor, int patch)
+        {
+            var nums = new int[3];
+            var parts = (version ?? "").Split('-', '+')[0].Split('.');
+            for (int i = 0; i < 3 && i < parts.Length; i++)
+                int.TryParse(parts[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out nums[i]);
+            if (nums[0] != major) return nums[0].CompareTo(major);
+            if (nums[1] != minor) return nums[1].CompareTo(minor);
+            return nums[2].CompareTo(patch);
         }
 
         static double Round(float f) => float.IsNaN(f) || float.IsInfinity(f) ? 0 : Math.Round(f, 4);

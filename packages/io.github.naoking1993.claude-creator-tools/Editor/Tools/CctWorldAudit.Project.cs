@@ -119,7 +119,11 @@ namespace Naoking.ClaudeCreatorTools
             try
             {
                 foreach (var info in UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackages())
-                    if (info != null && !string.IsNullOrEmpty(info.name)) versions[info.name] = info.version;
+                {
+                    if (info == null || string.IsNullOrEmpty(info.name)) continue;
+                    versions[info.name] = info.version;
+                    ctx.Packages.Add(new PackageEntry { Name = info.name, DisplayName = info.displayName, Version = info.version });
+                }
             }
             catch (Exception e)
             {

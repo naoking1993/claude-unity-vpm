@@ -813,12 +813,15 @@ namespace Naoking.ClaudeCreatorTools
             if (top == null) return new List<KeyValuePair<Component, Transform>>();
             if (cache.TryGetValue(top, out var list)) return list;
             list = new List<KeyValuePair<Component, Transform>>();
-            foreach (var c in top.GetComponentsInChildren<Component>(true))
-            {
-                if (c == null || !CctSerialized.IsType(c, TPhysBoneBase)) continue;
-                using (var so = new SerializedObject(c))
-                    list.Add(new KeyValuePair<Component, Transform>(c, PhysBoneRoot(c, so)));
-            }
+            // Type-filtered native lookup: the scene top may be a large shared root (avatars nested in a world hierarchy).
+            var tBase = CctSerialized.FindType(TPhysBoneBase);
+            if (tBase != null)
+                foreach (var c in top.GetComponentsInChildren(tBase, true))
+                {
+                    if (c == null) continue;
+                    using (var so = new SerializedObject(c))
+                        list.Add(new KeyValuePair<Component, Transform>(c, PhysBoneRoot(c, so)));
+                }
             cache[top] = list;
             return list;
         }

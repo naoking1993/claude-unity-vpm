@@ -56,7 +56,33 @@ namespace Naoking.ClaudeCreatorTools
                 }
 
                 public string Unit => Kind == Kind.Megabytes ? "MB" : Kind == Kind.Bounds ? "m" : Kind == Kind.Flag ? "bool" : "count";
+
+                /// <summary>AvatarPerformanceCategory member name for <see cref="Category"/> (the SDK is queried by name, see <see cref="SdkCategoryName"/>).</summary>
+                public string SdkCategory => SdkCategoryName(Category);
             }
+
+            /// <summary>
+            /// VRC.SDKBase.Validation.Performance.AvatarPerformanceCategory member names by their SDK 3.10.5 int value (FieldCheck enum
+            /// dump). The SDK calculator is queried by NAME, not by number: an SDK without a member (RaycastCount only exists since
+            /// 3.10.3; its rating cache is sized by AvatarPerformanceCategoryCount) or with a different numbering must not shift
+            /// ratings or throw IndexOutOfRange for every category.
+            /// </summary>
+            static readonly string[] SdkCategoryNames =
+            {
+                "None", "Overall", "DownloadSize", "UncompressedSize", "PolyCount", "AABB", "SkinnedMeshCount", "MeshCount", "MaterialCount",
+                "PhysBoneComponentCount", "PhysBoneTransformCount", "PhysBoneColliderCount", "PhysBoneCollisionCheckCount", "ContactCount",
+                "AnimatorCount", "BoneCount", "LightCount", "ParticleSystemCount", "ParticleTotalCount", "ParticleMaxMeshPolyCount",
+                "ParticleTrailsEnabled", "ParticleCollisionEnabled", "TrailRendererCount", "LineRendererCount", "ClothCount", "ClothMaxVertices",
+                "PhysicsColliderCount", "PhysicsRigidbodyCount", "AudioSourceCount", "TextureMegabytes", "ConstraintsCount", "ConstraintDepth",
+                "RaycastCount",
+            };
+
+            /// <summary>SDK 3.10.5 AvatarPerformanceCategory name of an int value; null when out of range.</summary>
+            public static string SdkCategoryName(int category) =>
+                category >= 0 && category < SdkCategoryNames.Length ? SdkCategoryNames[category] : null;
+
+            /// <summary>AvatarPerformanceCategory.Overall (worst rating of all categories in the SDK).</summary>
+            public const string SdkOverallCategory = "Overall";
 
             static double[] D(params double[] v) => v;
             static bool[] B(params bool[] v) => v;
@@ -116,6 +142,52 @@ namespace Naoking.ClaudeCreatorTools
 
             /// <summary>"Excellent" .. "VeryPoor" ("None" when not rated). Same spelling as the SDK's PerformanceRating names.</summary>
             public static string Name(int rating) => rating >= 0 && rating < RatingNames.Length ? RatingNames[rating] : "None";
+
+            /// <summary>Name as VRChat shows it to people ("Very Poor" with a space); for messages, not for data values.</summary>
+            public static string DisplayName(int rating) => rating == VeryPoor ? "Very Poor" : Name(rating);
+
+            // ---------------------------------------------------------------------------------------------------------
+            // What VRChat does when a stat is worse than the viewer's Minimum Displayed Performance Rank: creator-docs
+            // avatars/avatar-performance-ranking-system.md "Minimum Displayed Performance Rank" table (snapshot 2026-10-20).
+            // Bolded rows replace the whole avatar with its Fallback; the others remove only the related components;
+            // Bounds Size never blocks ("Bounds Size will not cause the avatar to be blocked").
+            // ---------------------------------------------------------------------------------------------------------
+
+            public const string EffectFallback = "avatar_fallback";
+            public const string EffectPhysBonesContacts = "physbones_contacts_removed";
+            public const string EffectConstraints = "constraints_removed";
+            public const string EffectNone = "none";
+
+            static readonly Dictionary<string, string> MinRankEffects = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["triangles"] = EffectFallback, ["bounds_size"] = EffectNone, ["texture_memory"] = EffectFallback,
+                ["skinned_meshes"] = EffectFallback, ["basic_meshes"] = EffectFallback, ["material_slots"] = EffectFallback,
+                ["physbone_components"] = EffectPhysBonesContacts, ["physbone_transforms"] = EffectPhysBonesContacts,
+                ["physbone_colliders"] = EffectPhysBonesContacts, ["physbone_collision_checks"] = EffectPhysBonesContacts,
+                ["contacts"] = EffectPhysBonesContacts, ["constraints"] = EffectConstraints, ["constraint_depth"] = EffectConstraints,
+                ["animators"] = "animators_removed", ["bones"] = EffectFallback, ["lights"] = "lights_removed",
+                ["particle_systems"] = "particle_systems_removed", ["total_particles"] = "particle_systems_removed",
+                ["mesh_particle_polys"] = "particle_systems_removed", ["particle_trails_enabled"] = "particle_systems_removed",
+                ["particle_collision_enabled"] = "particle_systems_removed", ["trail_renderers"] = "trail_renderers_removed",
+                ["line_renderers"] = "line_renderers_removed", ["raycasts"] = "raycasts_removed", ["cloths"] = "cloth_removed",
+                ["cloth_vertices"] = "cloth_removed", ["physics_colliders"] = "physics_colliders_removed",
+                ["physics_rigidbodies"] = "rigidbodies_removed", ["audio_sources"] = "audio_sources_removed",
+            };
+
+            /// <summary>Effect token of a stat (see <see cref="MinRankEffects"/>); null for an unknown key.</summary>
+            public static string MinRankEffect(string key) => key != null && MinRankEffects.TryGetValue(key, out var e) ? e : null;
+
+            /// <summary>
+            /// docs "Mobile Removed Components": Lights, Cloths, Total Cloth Vertices, Physics Colliders, Physics Rigidbodies and
+            /// Audio Sources never exist on mobile avatars (always removed, shown as 0 in game). The SDK's mobile thresholds for
+            /// these rows are 0 at every level, so the SDK rates any of them Very Poor.
+            /// </summary>
+            static readonly HashSet<string> MobileRemovedKeys = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "lights", "cloths", "cloth_vertices", "physics_colliders", "physics_rigidbodies", "audio_sources",
+            };
+
+            public static bool IsMobileRemoved(string key) => key != null && MobileRemovedKeys.Contains(key);
 
             public static int Parse(string name)
             {

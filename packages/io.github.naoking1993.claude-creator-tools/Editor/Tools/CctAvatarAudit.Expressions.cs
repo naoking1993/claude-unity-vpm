@@ -69,12 +69,17 @@ namespace Naoking.ClaudeCreatorTools
             d["parameters_asset"] = parameters != null ? AssetPathOrName(parameters) : paramsMissing ? "(missing)" : null;
 
             // SDK builder: when either asset is set, both must be set ("VRCExpressionsMenu/Parameters object reference is missing").
-            if (menuMissing || paramsMissing)
+            // A reference to a deleted asset is null for the SDK too, so it only blocks when exactly one of the two resolves.
+            if ((menu != null) != (parameters != null))
+            {
+                var absent = menu == null ? "Menu" : "Parameters";
+                bool absentIsMissing = menu == null ? menuMissing : paramsMissing;
                 ctx.Issue(CctSeverity.Error, "EXPRESSIONS_ASSET_MISSING",
-                    $"Expressions {(menuMissing ? "Menu" : "Parameters")} の参照先アセットが削除されています (Missing)。設定し直してください", descPath);
-            else if ((menu != null) != (parameters != null))
-                ctx.Issue(CctSeverity.Error, "EXPRESSIONS_ASSET_MISSING",
-                    $"Expressions {(menu == null ? "Menu" : "Parameters")} が未設定です。片方だけの設定は SDK のエラーでアップロードできません", descPath);
+                    $"Expressions {absent} が{(absentIsMissing ? "削除されたアセットを指しています (Missing)" : "未設定です")}。Menu と Parameters の片方だけでは SDK のエラーでアップロードできません。設定し直してください", descPath);
+            }
+            else if (menuMissing || paramsMissing)
+                ctx.Issue(CctSeverity.Warning, "EXPRESSIONS_ASSET_MISSING",
+                    $"Expressions {(menuMissing && paramsMissing ? "Menu と Parameters" : menuMissing ? "Menu" : "Parameters")} の参照先アセットが削除されています (Missing)。SDK はエラーにしませんが、Expressions メニューが使えません。設定し直してください", descPath);
 
             var defs = new List<ParamDef>();
             if (parameters != null) d["parameters"] = AuditParameters(ctx, parameters, defs);
@@ -102,7 +107,11 @@ namespace Naoking.ClaudeCreatorTools
                 d["modular_avatar"] = ma;
             }
             else if (!custom && (menu != null || parameters != null))
-                d["note"] = "customExpressions が OFF のため、設定されているメニュー/パラメータは使われません (VRChat 既定の Expressions になります)";
+                // MA's "Fixup Expressions Menu" pass (PluginDefinition.cs) sets customExpressions = true on every avatar NDMF builds.
+                d["note"] = CctSerialized.FindType(TMaMenuInstaller) != null
+                    ? "customExpressions が OFF ですが、Modular Avatar が導入されているため、ビルド時に MA が ON にして割り当て済みのメニュー/パラメータを使います (NDMF の Apply on Build が ON の場合)"
+                    : "customExpressions が OFF (Descriptor の Expressions で Customize を押していない状態) なのにメニュー/パラメータが割り当てられています。" +
+                      "VRChat 既定の Expressions として扱われ、割り当て済みのアセットは使われない可能性があります (クライアントの挙動は未確認)。使うなら Customize を有効にしてください";
             return d;
         }
 
@@ -212,6 +221,7 @@ namespace Naoking.ClaudeCreatorTools
             var visited = new HashSet<Object>();
             var menus = new List<object>();
             var icons = new Dictionary<Texture2D, string>(); // icon -> first menu path using it
+            bool maSplitsMenus = EnabledMaMenuInstallers(ctx) > 0;
             int controlsTotal = 0, maxDepth = 0;
             var queue = new Queue<KeyValuePair<Object, KeyValuePair<string, int>>>();
             queue.Enqueue(new KeyValuePair<Object, KeyValuePair<string, int>>(rootMenu, new KeyValuePair<string, int>(rootMenu.name, 1)));
@@ -280,9 +290,18 @@ namespace Naoking.ClaudeCreatorTools
                 controlsTotal += controls;
                 menus.Add(new Dictionary<string, object> { ["path"] = menuPath, ["asset"] = asset, ["depth"] = depth, ["controls"] = controls });
                 if (controls > MaxMenuControls)
-                    ctx.Issue(CctSeverity.Warning, "MENU_TOO_MANY_CONTROLS",
-                        $"メニュー '{menuPath}' のコントロールが {controls} 個あり、上限 {MaxMenuControls} を超えています (docs。SDK のビルド検査はこれを止めません)。超過分はゲーム内で表示されません",
-                        asset: asset, value: controls, limit: MaxMenuControls);
+                {
+                    // MA MenuInstallHook (enabled Menu Installer present) re-serializes the whole menu tree at build time and splits every
+                    // menu with more than 8 controls into 7 + a "More" sub menu (modular-avatar Editor/MenuInstallHook.cs SplitMenu).
+                    if (maSplitsMenus)
+                        ctx.Issue(CctSeverity.Info, "MENU_TOO_MANY_CONTROLS",
+                            $"メニュー '{menuPath}' のコントロールが {controls} 個あり、上限 {MaxMenuControls} を超えています。有効な MA Menu Installer があるため、ビルド時に MA が 7 個 + \"More\" サブメニューに分割します (並びが変わってよいか確認してください)",
+                            asset: asset, value: controls, limit: MaxMenuControls);
+                    else
+                        ctx.Issue(CctSeverity.Warning, "MENU_TOO_MANY_CONTROLS",
+                            $"メニュー '{menuPath}' のコントロールが {controls} 個あり、1 メニュー {MaxMenuControls} 個の上限 (docs) を超えています。SDK のアップロード検査は止めませんが、ゲーム内で正しく表示される保証はありません。サブメニューに分けてください",
+                            asset: asset, value: controls, limit: MaxMenuControls);
+                }
             }
 
             // SDK: icons > 256 px whose importer max size is > 256, or uncompressed, are an upload error ("Images used for Actions & Moods are too large").
@@ -317,6 +336,15 @@ namespace Naoking.ClaudeCreatorTools
             if (menus.Count > 64) d["tree_omitted"] = menus.Count - 64;
             if (truncated) d["truncated"] = true;
             return d;
+        }
+
+        /// <summary>MA Menu Installers that MA's MenuInstallHook processes: enabled components outside EditorOnly objects.</summary>
+        static int EnabledMaMenuInstallers(Ctx ctx)
+        {
+            int n = 0;
+            foreach (var c in ctx.Scan.Components)
+                if (c is Behaviour b && b.enabled && !ctx.IsEditorOnly(c) && CctSerialized.IsType(c, TMaMenuInstaller)) n++;
+            return n;
         }
 
         static void AddIcon(Dictionary<Texture2D, string> icons, Texture2D icon, string where)

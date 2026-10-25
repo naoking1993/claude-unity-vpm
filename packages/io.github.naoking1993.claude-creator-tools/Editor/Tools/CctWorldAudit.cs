@@ -93,7 +93,9 @@ namespace Naoking.ClaudeCreatorTools
     /// | AUTO_SPATIALIZE_DEPRECATED        | warning | SDK    | autoSpatializeAudioSources true [WB]                                 |
     /// | REFERENCE_CAMERA_MISSING          | info    | DOC    | no Reference Camera (clip planes / post processing not applied)      |
     /// | REFERENCE_CAMERA_NO_CAMERA        | warning | COM    | Reference Camera object has no Camera                                |
-    /// | REFERENCE_CAMERA_NEAR_CLAMPED     | info    | DOC/EST| near outside 0.001..0.05 (VRChat clamps it)                          |
+    /// | REFERENCE_CAMERA_NEAR_CLAMPED     | info    | EST    | near outside 0.01..0.05 (ClientSim clamps it; docs: Udon 0.001..0.05)|
+    /// | REFERENCE_CAMERA_OBJECT_DISABLED  | warning | SDK/EST| non-camera components on/under the Reference Camera's GameObject,   |
+    /// |                                   |         |        | which is deactivated at world start (SDK text, ClientSim)            |
     /// | REFERENCE_CAMERA_TAA              | warning | SDK    | its PostProcessLayer uses TAA [WB/PB]                                |
     /// | LAYERS_NOT_SETUP                  | error   | SDK    | layer names 3..21 != VRCProjectSettings.layers [WB A4/C10]           |
     /// | COLLISION_MATRIX_NOT_SETUP        | error   | SDK    | collision matrix 0..21 != VRCProjectSettings [WB A4/C10]             |
@@ -123,6 +125,7 @@ namespace Naoking.ClaudeCreatorTools
     /// | PP_VOLUME_ON_MAIN_CAMERA          | warning | SDK    | PostProcessVolume under Camera.main [WB; hidden by ResetIssues]      |
     /// | PP_LAYER_MISSING                  | info    | COM    | volumes exist but Reference Camera has no PostProcessLayer           |
     /// | PP_VOLUME_LAYER_EMPTY             | info    | COM    | Reference Camera's PostProcessLayer volumeLayer is Nothing           |
+    /// | PP_VOLUME_NOT_IN_LAYER            | info    | EST    | active volume whose layer is outside that volumeLayer (never applied)|
     /// | PP_HEAVY_EFFECT                   | info    | DOC    | active volume enables chromatic aberration / SSR / AO                |
     /// | MIRROR_ENABLED_AT_START           | warning | DOC    | mirror active+enabled in the saved scene                             |
     /// | MIRROR_MULTIPLE_ENABLED           | warning | DOC    | >= 2 mirrors enabled at start                                        |
@@ -130,10 +133,13 @@ namespace Naoking.ClaudeCreatorTools
     /// | MIRROR_REFLECT_EVERYTHING         | info    | DOC    | Reflect Layers = Everything                                          |
     /// | MIRROR_REFLECT_UIMENU             | info    | COM    | Reflect Layers include UiMenu                                        |
     /// | MIRROR_NO_LOCAL_PLAYER            | info    | DOC    | Reflect Layers exclude MirrorReflection (you are not reflected)      |
-    /// | MIRROR_LAYER_NOT_RENDERED         | warning | EST    | mirror object's layer is not rendered by the main camera             |
-    /// | UDON_NO_PROGRAM                   | error   | UB     | UdonBehaviour without program source                                 |
-    /// | UDON_PROGRAM_MISSING_REFERENCE    | error   | UB     | program source references a deleted asset                            |
-    /// | UDON_PROGRAM_NOT_COMPILED         | warning | UB     | program source set but no serialized (compiled) program              |
+    /// | MIRROR_LAYER_NOT_RENDERED         | warning | DOC    | mirror object on MirrorReflection (not drawn by the main camera)     |
+    /// | UDON_NO_PROGRAM                   | error   | UB     | no program source and no serializedProgramAsset (nothing runs)       |
+    /// | UDON_PROGRAM_MISSING_REFERENCE    | error   | UB     | program source is a deleted asset and no serializedProgramAsset      |
+    /// | UDON_PROGRAM_SOURCE_MISSING       | warning | UB     | program source null/deleted but serializedProgramAsset kept: the    |
+    /// |                                   |         |        | last compiled program runs and edits are not picked up               |
+    /// | UDON_PROGRAM_NOT_COMPILED         | warning | UB     | program source set, but neither the behaviour nor the program source |
+    /// |                                   |         |        | has a compiled asset (a stale behaviour link is relinked on save)    |
     /// | UDON_SYNC_CONFLICT                | warning | UB     | Manual and Continuous UdonBehaviours on one GameObject (U# warning)  |
     /// | UDON_BUILTIN_MESH_REFERENCE       | warning | SDK    | Udon public variable references a builtin primitive mesh [WB]        |
     /// | OBJECT_SYNC_MANUAL_UDON           | error   | SDK    | VRCObjectSync with a Manual UdonBehaviour on the same object [WB C7] |
@@ -148,7 +154,7 @@ namespace Naoking.ClaudeCreatorTools
     /// | USHARP_SCAN_TRUNCATED             | info    | -      | program-asset scan stopped at the time budget                        |
     /// | PICKUP_NO_RIGIDBODY               | error   | SDK    | VRCPickup without Rigidbody (RequireComponent)                       |
     /// | PICKUP_NO_COLLIDER                | warning | SDK    | VRCPickup without Collider on the same object (inspector warning)    |
-    /// | PICKUP_NOT_SYNCED                 | info    | DOC    | pickups without VRCObjectSync or Udon (position is local)            |
+    /// | PICKUP_NOT_SYNCED                 | info    | DOC    | pickup without VRCObjectSync (or obsolete Udon SynchronizePosition)  |
     /// | PICKUP_COLLIDES_WITH_PLAYER       | info    | DOC    | non-kinematic pickup on a layer that collides with players           |
     /// | STATION_NO_COLLIDER               | info    | DOC    | VRCStation without Collider (cannot be interacted with)              |
     /// | STATION_NO_INTERACT_UDON          | info    | DOC    | VRCStation without an UdonBehaviour on the same object               |
@@ -162,7 +168,7 @@ namespace Naoking.ClaudeCreatorTools
     /// | VIDEO_PLAYER_NO_OUTPUT            | warning | EST    | Unity player without target texture/renderer; AVPro without screen   |
     /// | VIDEO_PLAYER_NO_AUDIO             | info    | EST    | Unity player without audio sources; AVPro without speaker            |
     /// | VIDEO_PLAYER_URL_NOT_ALLOWLISTED  | info    | DOC    | default URL host not in the docs' allowlist                          |
-    /// | VIDEO_PLAYER_HTTP_MOBILE          | warning | DOC    | http:// URL: Android does not play non-HTTPS video                   |
+    /// | VIDEO_PLAYER_HTTP_MOBILE          | warning | DOC    | http:// URL (platform all/android): Android plays only HTTPS video   |
     /// | AUDIO_NO_SPATIAL                  | warning | SDK    | AudioSource without VRC_SpatialAudioSource [WB]                      |
     /// | AUDIO_ONSP_DEPRECATED             | warning | SDK    | AudioSource with ONSPAudioSource [WB]                                |
     /// | PHYSBONE_NO_PARENT                | warning | SDK    | PhysBone root transform has no parent [WB]                           |
@@ -185,9 +191,9 @@ namespace Naoking.ClaudeCreatorTools
     /// | SDK_FIELD_NOT_FOUND               | info    | -      | an expected SDK serialized field is absent (other SDK version); the  |
     /// |                                   |         |        | checks that need it are skipped instead of reporting false errors    |
     /// | ISSUES_TRUNCATED                  | info    | -      | more than 20 issues of one code; the rest are counted only           |
-    /// | ANDROID_SHADER_NOT_SUPPORTED      | warning | SDK    | mobile: Renderer shader not in WorldValidation.ShaderWhiteList [WB]; |
-    /// |                                   | (info)  |        | info for docs mobile shaders the SDK list misses (Toon Standard,    |
-    /// |                                   |         |        | VRChat/Mobile/Worlds/Supersampled UI)                                |
+    /// | ANDROID_SHADER_NOT_SUPPORTED      | warning | SDK    | mobile: Renderer shaders not in WorldValidation.ShaderWhiteList [WB] |
+    /// |                                   | (info)  |        | (one issue for all of them, table in value); one info for the docs   |
+    /// |                                   |         |        | mobile shaders the SDK list misses (Toon Standard, Worlds/Supersampled UI)|
     /// | ANDROID_POST_PROCESSING           | warning | DOC/WV | mobile: post processing is disabled/stripped                         |
     /// | ANDROID_REALTIME_LIGHT            | warning | DOC    | mobile: active realtime lights ("bake lighting is essential")        |
     /// | ANDROID_LARGE_TEXTURE             | info    | DOC    | mobile: textures above 1024 px                                       |
@@ -199,9 +205,11 @@ namespace Naoking.ClaudeCreatorTools
     /// (docs/platforms/iOS/setting-up-unity-for-creating-ios-content.md L38) and the SDK uses #if UNITY_ANDROID || UNITY_IOS.
     /// CctRunner may add EDITOR_BUSY / EXCEPTION (fail) and REPORT_WRITE_FAILED (warning).
     ///
-    /// Data keys (* = kept in the MCP summary): scenes*, platforms*, counts*, project*, descriptor*, layers*, lighting*,
-    /// rendering*, mirrors*, udon*, android*, not_checked*, notes*, interactables, colliders, ui, components, hotspots,
-    /// editor_log.
+    /// Data keys (* = kept in the MCP summary): verdict* (build_blockers = error codes whose rule is an SDK/UdonSharp stop
+    /// condition: SdkBuildBlockerCodes in CctWorldAudit.Gimmicks.cs; upload_blockers; other_errors), scenes*, platforms*,
+    /// counts*, project*, descriptor*, layers*, lighting*, rendering*, mirrors*, udon*, gimmicks* (VRC video players, U#
+    /// namespaces, community packages by name: estimate), android*, not_checked*, notes*, interactables, colliders, ui,
+    /// components, hotspots, editor_log.
     /// </summary>
     public static partial class CctWorldAudit
     {
@@ -347,6 +355,7 @@ namespace Naoking.ClaudeCreatorTools
             Section(ctx, "interactables", () => AuditInteractables(ctx));
             Section(ctx, "ui", () => AuditUi(ctx));
             Section(ctx, "components", () => AuditComponents(ctx));
+            Section(ctx, "gimmicks", () => AuditGimmicks(ctx));
             Section(ctx, "android", () => AuditMobile(ctx));
             Section(ctx, "editor_log", () => AuditEditorLog(ctx));
 
@@ -360,10 +369,12 @@ namespace Naoking.ClaudeCreatorTools
             PutScenes(ctx);
             PutCounts(ctx);
             PutNotes(ctx);
+            Section(ctx, "verdict", () => PutVerdict(ctx));
             ctx.FinishIssues();
 
             var scopeName = ctx.ScopeLabel == "active" ? ctx.Active.name : ctx.ScopeLabel;
             r.Message = $"ワールド監査 ({scopeName}, {string.Join("/", ctx.CheckedPlatforms())}): " +
+                        (ctx.VerdictText != null ? ctx.VerdictText + "。" : "") +
                         $"error {r.CountIssues(CctSeverity.Error)} / warning {r.CountIssues(CctSeverity.Warning)} / info {r.CountIssues(CctSeverity.Info)}。" +
                         $"記述子 {ctx.Get(K.SceneDescriptor).Count} / 三角形 {ctx.TotalTriangles:N0} / Udon {ctx.Get(K.Udon).Count(i => i.Audited)} / " +
                         $"ミラー {ctx.Get(K.Mirror).Count(i => i.Audited)} (起動時 ON {ctx.MirrorsEnabledAtStart})。ビルド前の静的な推定です";
@@ -428,6 +439,7 @@ namespace Naoking.ClaudeCreatorTools
             public int MirrorsEnabledAtStart;
             public readonly Dictionary<Component, int> UdonSyncType = new Dictionary<Component, int>(); // effective Networking.SyncType
             public readonly HashSet<Component> UdonNoVariableSync = new HashSet<Component>();
+            public readonly HashSet<Component> UdonPositionSync = new HashSet<Component>();      // obsolete SynchronizePosition
             public readonly List<RendererInfo> Renderers = new List<RendererInfo>();
             public readonly Dictionary<Material, MaterialInfo> Materials = new Dictionary<Material, MaterialInfo>();
             public readonly Dictionary<Texture, TextureInfo> Textures = new Dictionary<Texture, TextureInfo>();
@@ -439,6 +451,8 @@ namespace Naoking.ClaudeCreatorTools
             public Stopwatch RefWatch;
 
             public readonly HashSet<string> MissingFields = new HashSet<string>(StringComparer.Ordinal); // "Type|field" reported once
+            public readonly List<PackageEntry> Packages = new List<PackageEntry>();               // registered UPM/VPM packages
+            public string VerdictText;                                                             // first sentence of the message
 
             readonly Dictionary<string, int> _issueCounts = new Dictionary<string, int>();
 
@@ -490,6 +504,9 @@ namespace Naoking.ClaudeCreatorTools
                 R.AddIssue(severity, code, message, path, value, limit, asset);
             }
 
+            /// <summary>Issues of this code so far, including the ones beyond the per-code cap.</summary>
+            public int IssueCount(string code) => _issueCounts.TryGetValue(code, out var n) ? n : 0;
+
             public void FinishIssues()
             {
                 foreach (var kv in _issueCounts.OrderBy(k => k.Key, StringComparer.Ordinal))
@@ -500,6 +517,11 @@ namespace Naoking.ClaudeCreatorTools
                         value: new Dictionary<string, object> { ["code"] = kv.Key, ["total"] = kv.Value, ["omitted"] = kv.Value - PerCodeIssueCap });
                 }
             }
+        }
+
+        sealed class PackageEntry
+        {
+            public string Name, DisplayName, Version;
         }
 
         sealed class RendererInfo

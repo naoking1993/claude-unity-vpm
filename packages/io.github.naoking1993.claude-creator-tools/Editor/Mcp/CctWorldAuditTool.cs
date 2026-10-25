@@ -6,41 +6,42 @@ namespace Naoking.ClaudeCreatorTools.Mcp
 {
     [McpForUnityTool(CctWorldAudit.ToolName,
         Description = "Claude Creator Tools: read-only pre-upload audit of a VRChat WORLD scene (Worlds SDK 3.10.5, Unity 2022.3.22f1). " +
-                      "Use it before Build & Test / upload, after big scene changes, and when a world fails to build or behaves differently " +
-                      "in VRChat. It re-implements the SDK's own world build checks with the same conditions (exactly one VRC Scene " +
-                      "Descriptor and one PipelineManager across ALL loaded scenes, valid spawns, spawn >= 1000 m from origin or below " +
-                      "Respawn Height, VRChat layer names 3-21 and collision matrix 0-21, VRC_EventHandler/SDK2, VRCObjectSync with a " +
-                      "Manual UdonBehaviour or an object pool, Android texture format ASTC, gravity, fog stripping, Auto Generate lighting, " +
-                      "audio sources without VRC Spatial Audio Source, PhysBone/Contact 1024 limits, textures with Max Size > 8192, Box mip " +
-                      "filter, TAA on the Reference Camera, mobile shader allowlist, last build > 100 MB on Android/iOS) plus UdonSharp's " +
-                      "project-wide compile validation (program asset without source, script outside a U# assembly = 'does not belong to a " +
-                      "U# assembly', duplicate program assets), Editor.log U#/CS errors, and the creator docs' recommendations: mirrors " +
-                      "enabled at start / reflect layers, lighting bake state (lightmaps, baked lights, light/reflection probes, occlusion " +
-                      "culling), realtime shadow lights, extra active cameras, post processing, Udon program/sync summary, pickups (Rigidbody/" +
-                      "Collider/ObjectSync/layer), stations, pools, portals, pedestals, video players (output, audio, URL allowlist, HTTPS on " +
-                      "Android, more than 2 players), VRC Ui Shape canvases, reserved layers in use, missing scripts, missing references, and " +
-                      "components outside the SDK3 world allowlist (NOT_WHITELISTED: the SDK does not check this at build, the client strips " +
-                      "them), and Android/iOS limits (250k triangles, 1k textures, realtime lights, post processing disabled, transparency, " +
-                      "GPU instancing). Everything is a static editor-side estimate: it does not build, upload, run ClientSim or modify the " +
-                      "scene. Returns issues (stable UPPER_SNAKE codes; message says when the SDK reports the same thing) and data: scenes, " +
-                      "platforms, counts, project, descriptor (spawns, respawn height, reference camera, pipeline manager / blueprint id), " +
-                      "layers, lighting, rendering (triangles, materials, shaders, textures, static flags, cameras, post_processing), " +
-                      "mirrors, udon (programs, sync methods, udonsharp), android, not_checked, notes; the report file additionally has " +
-                      "interactables, colliders, ui, components, hotspots (top renderers/meshes/textures/materials) and editor_log. " +
+                      "Use it before Build & Test or upload, after big scene changes, and when a world fails to build or behaves " +
+                      "differently in VRChat. Read data.verdict first: sdk_build_blocked and build_blockers are the errors the SDK or " +
+                      "UdonSharp really stop on (re-implemented with the SDK's own conditions: exactly one VRC Scene Descriptor and one " +
+                      "PipelineManager across ALL loaded scenes, valid spawns, VRChat layers 3-21 / collision matrix 0-21, " +
+                      "VRC_EventHandler/SDK2, VRCObjectSync with a Manual UdonBehaviour or a pool, Android ASTC, C# compile errors, " +
+                      "UdonSharp validation such as 'does not belong to a U# assembly'); upload_blockers (last Android/iOS build > 100 MB); " +
+                      "other_errors (broken in VRChat but not blocking: missing scripts, empty UdonBehaviours, pickups without Rigidbody...). " +
+                      "Warnings/info cover the SDK's non-blocking checks (spawn placement, gravity, fog stripping, Auto Generate lighting, " +
+                      "audio without VRC Spatial Audio Source, PhysBone/Contact 1024 limits, Max Size > 8192, TAA, mobile shader list) and " +
+                      "the creator docs' advice: mirrors on at start / reflect layers, light baking (lightmaps, baked lights, probes, " +
+                      "occlusion), realtime shadows, extra cameras, objects under the Reference Camera (deactivated at runtime), post " +
+                      "processing, Udon sync, pickups, stations, portals, pedestals, video players (output, audio, URL allowlist, HTTPS, " +
+                      "> 2 players), VRC Ui Shape canvases, reserved layers, missing references, components outside the SDK3 world " +
+                      "allowlist (NOT_WHITELISTED: not checked by the SDK, stripped by the client) and Android/iOS limits (ANDROID_*: " +
+                      "relevant only if the world is also uploaded for Quest/mobile). Static editor-side estimate: it never builds, " +
+                      "uploads, runs ClientSim or modifies the scene. Returns issues (stable UPPER_SNAKE codes, Japanese messages that say " +
+                      "when the SDK reports the same thing) and data: verdict, scenes, platforms, counts, project, descriptor (spawns, " +
+                      "respawn height, reference camera, blueprint id), layers, lighting, rendering (triangles, materials, shaders, textures, " +
+                      "static flags, cameras, post_processing), mirrors, udon (programs, sync, udonsharp), gimmicks (VRChat video players, " +
+                      "U# classes by namespace, AudioLink/LTCGI/ProTV/VideoTXL/VizVid... by name), android, not_checked, notes; the " +
+                      "report file also has interactables, colliders, ui, components, hotspots and editor_log. " +
                       "Parameters: scene = 'active' (default; the scene the SDK uploads) | 'all' (every loaded scene) | path or name of a " +
-                      "loaded scene (SDK-blocking descriptor/pipeline/ObjectSync/PhysBone checks always cover every loaded scene); " +
-                      "platform = 'all' (default) | 'pc' | 'android' | 'ios' (android and ios share the mobile limits); top_n = list " +
-                      "length per section (default 15, 1-500); check_references = scan components for references to deleted " +
-                      "assets/objects (default true); max_reference_scan = maximum components to scan for missing references (default " +
-                      "5000; the scan also stops when the audit has run timeout_seconds - 10 s); check_editor_log = read the tail of " +
-                      "Editor.log for 'error CS' and UdonSharp errors (default true). For big worlds pass timeout_seconds (e.g. 120)." +
+                      "loaded scene (the SDK-blocking descriptor/pipeline/ObjectSync/PhysBone checks always cover every loaded scene); " +
+                      "platform = 'all' (default) | 'pc' (PC-only world: skips the Android/iOS checks) | 'android' | 'ios' (android and " +
+                      "ios share the mobile limits); top_n = list length per section (default 15, 1-500); check_references = scan " +
+                      "components for references to deleted assets/objects (default true); max_reference_scan = maximum components to " +
+                      "scan for missing references (default 5000; the scan also stops when the audit has run timeout_seconds - 10 s); " +
+                      "check_editor_log = read the tail of Editor.log for 'error CS' and UdonSharp errors (default true). For big worlds " +
+                      "pass timeout_seconds (e.g. 120)." +
                       CctMcpBridge.CommonParamsDoc)]
     public static class CctWorldAuditTool
     {
         static readonly string[] SummaryKeys =
         {
-            "scenes", "platforms", "counts", "project", "descriptor", "layers", "lighting", "rendering", "mirrors", "udon",
-            "android", "not_checked", "notes",
+            "verdict", "scenes", "platforms", "counts", "project", "descriptor", "layers", "lighting", "rendering", "mirrors", "udon",
+            "gimmicks", "android", "not_checked", "notes",
         };
 
         public class Parameters

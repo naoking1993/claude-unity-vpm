@@ -24,7 +24,8 @@ namespace Naoking.ClaudeCreatorTools
     //      used: it writes Assets/ZZZ_GeneratedAssets and deletes same-named folders);
     //   4. audit the processed clone with the SDK calculator (fallback: estimator);
     //   5. finally: destroy the in-memory objects generated for the clone (non-persistent meshes / materials / textures / animator
-    //      objects / ScriptableObjects reachable from the clone but not from the original, skipping DontUnloadUnusedAsset caches),
+    //      objects / ScriptableObjects reachable from the processed clone but not from the same clone before processing, skipping
+    //      DontUnloadUnusedAsset caches),
     //      destroy the clone, close the preview scene, restore DISABLE_WINDOW, and delete any asset that appeared under NDMF's
     //      temporary folders during the call (safety net; expected to be none). CleanTemporaryAssets() is never called (it would
     //      delete other avatars' generated assets).
@@ -138,14 +139,19 @@ namespace Naoking.ClaudeCreatorTools
             var rootsBefore = SceneRootIds();
             try
             {
-                originalDeps = new HashSet<int>();
-                foreach (var o in EditorUtility.CollectDependencies(new Object[] { ctx.Root }))
-                    if (o != null) originalDeps.Add(o.GetInstanceID());
-
                 preview = EditorSceneManager.NewPreviewScene();
                 clone = Object.Instantiate(ctx.Root);
                 clone.name = ctx.Root.name + "(Clone)";
                 SceneManager.MoveGameObjectToScene(clone, preview);
+
+                // Baseline = what the unprocessed clone references. Instantiate shares every asset with the original, and the clone is
+                // a parent-free root, so the walk stays inside the avatar instead of following the original's parent chain into
+                // sibling hierarchies (avatars nested under a shared root / world scene).
+                // Assigned only when complete: a partial baseline would make Cleanup treat shared objects as generated.
+                var baseline = new HashSet<int>();
+                foreach (var o in EditorUtility.CollectDependencies(new Object[] { clone }))
+                    if (o != null) baseline.Add(o.GetInstanceID());
+                originalDeps = baseline;
                 if (api.CanProcess != null && !(api.CanProcess.Invoke(null, new object[] { clone }) is bool can && can))
                     throw new InvalidOperationException("NDMF がこのアバターを処理できないと判定しました (CanProcessObject = false)");
 
@@ -316,7 +322,7 @@ namespace Naoking.ClaudeCreatorTools
 
             var parts = new List<string>();
             foreach (var p in ctx.Platforms())
-                if (post.Overall.TryGetValue(p.Key, out var o)) parts.Add($"{ctx.PlatformLabel(p.Key)} {Ranks.Name(o)}");
+                if (post.Overall.TryGetValue(p.Key, out var o)) parts.Add($"{ctx.PlatformLabel(p.Key)} {Ranks.DisplayName(o)}");
             ctx.PostBuildSummary = "NDMF 処理後: " + string.Join(" / ", parts);
         }
 
@@ -340,9 +346,12 @@ namespace Naoking.ClaudeCreatorTools
                 d["total_bits"] = cost;
                 d["limit"] = Ranks.MaxParameterCost;
                 d["count"] = defs.Count;
+                // The SDK builder checks only the pre-build asset (VRCSdkControlPanelAvatarBuilder, CalcTotalCost) and MA's own
+                // 256-bit check is commented out (research/ma-ndmf-aao.md §2.5), so nothing stops this at upload; docs: 256 bits sync.
                 if (cost > Ranks.MaxParameterCost)
-                    ctx.Issue(CctSeverity.Error, "PARAM_BUDGET_EXCEEDED",
-                        $"[NDMF 処理後] 同期パラメータが {cost} bit で上限 {Ranks.MaxParameterCost} bit を超えています。MA などが追加したパラメータを含めるとアップロードできません",
+                    ctx.Issue(CctSeverity.Error, "POST_BUILD_PARAM_BUDGET_EXCEEDED",
+                        $"[NDMF 処理後] 同期パラメータが {cost} bit になり、VRChat が同期できる {Ranks.MaxParameterCost} bit (docs) を超えています。MA などがビルド時に追加した分を含みます。" +
+                        "SDK のアップロード前検査はビルド前のアセットしか見ないため止まりません (超過時の VRChat 側の挙動は未確認)。同期不要なパラメータの Synced を外してください",
                         value: cost, limit: Ranks.MaxParameterCost);
                 if (ctx.ParamDefs != null)
                 {

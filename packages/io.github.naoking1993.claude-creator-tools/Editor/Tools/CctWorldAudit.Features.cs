@@ -57,7 +57,6 @@ namespace Naoking.ClaudeCreatorTools
         {
             var mirrors = new Dictionary<string, object>();
             ctx.R.Put("mirrors", mirrors);
-            int refMask = ctx.ReferenceCamera != null && ctx.ReferenceCamera.TryGetComponent<Camera>(out var refCam) ? refCam.cullingMask : -1;
             var items = new List<object>();
             var enabledPaths = new List<string>();
             int count = 0;
@@ -120,12 +119,14 @@ namespace Naoking.ClaudeCreatorTools
 
                 // The mirror renders only when its renderer's layer is in the current camera's culling mask (VRC_MirrorReflection
                 // CameraOnPreCull / IsLayerRendered). MirrorReflection is "not rendered in VRChat's main camera" (docs layers.md L37).
-                // The UI layer is NOT hidden from the main view: docs L24 says only VRChat's (photo) camera ignores it unless 'UI'
-                // is enabled there, so a mirror on UI is visible in the world but not in photos (not reported).
-                bool layerHidden = go.layer == LayerMirrorReflection || (refMask != -1 && (refMask & (1 << go.layer)) == 0);
-                if (layerHidden)
+                // The Reference Camera's culling mask is NOT used for the player camera: ClientSim's CopyCameraValues copies only
+                // far/near/clearFlags/backgroundColor/allowHDR and the PostProcessLayer (ClientSimSceneManager.cs L150-188), and
+                // the main camera's mask is changed only through Udon (VRCCameraSettings.CullingMask, docs vrc-camera-settings.md
+                // L70). The UI layer is NOT hidden from the main view: docs L24 says only VRChat's (photo) camera ignores it
+                // unless 'UI' is enabled there, so a mirror on UI is visible in the world but not in photos (not reported).
+                if (go.layer == LayerMirrorReflection)
                     ctx.Issue(CctSeverity.Warning, "MIRROR_LAYER_NOT_RENDERED",
-                        $"ミラー本体のレイヤー {go.layer} ({LayerName(go.layer)}) はプレイヤーのカメラで描画されない可能性が高く、ミラーが表示されません (推定。VRCMirror プレハブは Water レイヤー)",
+                        $"ミラー本体が MirrorReflection レイヤー ({LayerMirrorReflection}) にあります。このレイヤーの Renderer は VRChat のメインカメラに描画されないため、ミラー自体が表示されません。VRCMirror プレハブと同じ Water などにしてください",
                         path: item.O.Path, value: LayerName(go.layer));
 
                 if (on) enabledPaths.Add(item.O.Path);
@@ -162,13 +163,15 @@ namespace Naoking.ClaudeCreatorTools
             ctx.R.Put("udon", udon);
             var programs = new Dictionary<Object, ProgramStats>();
             var usharpSyncModes = new Dictionary<Object, int>();
-            var positionSync = new HashSet<Component>();
+            var positionSync = ctx.UdonPositionSync;
             var syncCounts = new Dictionary<string, object>();
             int audited = 0, withProgram = 0;
             var noProgram = new List<string>();
             var missingProgram = new List<string>();
+            var sourceMissingCompiled = new List<string>();
             var notCompiled = new List<string>();
             var builtinMesh = new List<string>();
+            var sourceCompiled = new Dictionary<Object, bool>();
 
             // All loaded scenes (ObjectSync conflicts are checked by the SDK over every loaded scene).
             foreach (var item in ctx.Get(K.Udon))
@@ -200,10 +203,16 @@ namespace Naoking.ClaudeCreatorTools
                     if (!item.Audited) continue;
                     audited++;
                     Inc(syncCounts, syncKnown ? EnumName(SyncNames, sync) : "Unknown (field not found)");
+                    // serializedProgramAsset is what VRChat runs; programSource exists only in the editor (#if UNITY_EDITOR &&
+                    // !VRC_CLIENT, Runtime/Udon/UdonBehaviour.cs L124-129). UdonSharpEditorManager.RepairProgramAssetLinks
+                    // (L1320-1378) relinks a lost programSource from it and only calls a behaviour with neither "Empty".
+                    bool compiledKnown = HasProps(ctx, so, item.C, "serializedProgramAsset");
+                    bool hasCompiled = compiledKnown && CctSerialized.GetObject(so.FindProperty("serializedProgramAsset")) != null;
                     if (!programKnown) { /* reported as SDK_FIELD_NOT_FOUND */ }
                     else if (program == null)
                     {
-                        if (CctSerialized.IsMissingReference(programProp)) missingProgram.Add(item.O.Path);
+                        if (hasCompiled) sourceMissingCompiled.Add(item.O.Path);
+                        else if (CctSerialized.IsMissingReference(programProp)) missingProgram.Add(item.O.Path);
                         else noProgram.Add(item.O.Path);
                     }
                     else
@@ -213,7 +222,10 @@ namespace Naoking.ClaudeCreatorTools
                             programs[program] = ps = new ProgramStats { Program = program, Type = program.GetType().Name };
                         ps.Behaviours++;
                         Inc(ps.Sync, EnumName(SyncNames, sync));
-                        if (CctSerialized.GetObject(so.FindProperty("serializedProgramAsset")) == null) notCompiled.Add(item.O.Path);
+                        // A stale behaviour-side reference is relinked from the program source when the scene is opened or
+                        // saved (UdonEditorManager.PopulateSerializedProgramAssetReference, L294-345; the SDK saves the open
+                        // scenes before building), so only a program source without its own compiled asset is reported.
+                        if (compiledKnown && !hasCompiled && !ProgramSourceHasCompiledAsset(program, sourceCompiled)) notCompiled.Add(item.O.Path);
                     }
 
                     // [WB] ShouldShowPrimitivesWarning: public variables of ACTIVE UdonBehaviours referencing builtin primitive meshes.
@@ -237,15 +249,19 @@ namespace Naoking.ClaudeCreatorTools
 
             foreach (var p in noProgram)
                 ctx.Issue(CctSeverity.Error, "UDON_NO_PROGRAM",
-                    "UdonBehaviour に Program Source が設定されていません。何も実行されません (U# スクリプトや Udon Graph を割り当てるか、不要なら削除してください)",
+                    "UdonBehaviour に Program Source もコンパイル済みプログラムもありません。何も実行されません (U# スクリプトや Udon Graph を割り当てるか、不要なら削除してください)",
                     path: p);
             foreach (var p in missingProgram)
                 ctx.Issue(CctSeverity.Error, "UDON_PROGRAM_MISSING_REFERENCE",
-                    "UdonBehaviour の Program Source が削除済みのアセットを指しています。U# のプログラムアセット (.asset) やスクリプトが消えていないか確認してください",
+                    "UdonBehaviour の Program Source が削除済みのアセットを指していて、コンパイル済みプログラムもありません。何も実行されません。U# のプログラムアセット (.asset) やスクリプトが消えていないか確認してください",
+                    path: p);
+            foreach (var p in sourceMissingCompiled)
+                ctx.Issue(CctSeverity.Warning, "UDON_PROGRAM_SOURCE_MISSING",
+                    "UdonBehaviour の Program Source が空 (または削除済み) ですが、コンパイル済みプログラムが残っているため、VRChat では最後にコンパイルした内容のまま動きます。スクリプトを直しても反映されないので、元の U# スクリプトのプログラムアセットか Udon Graph を割り当て直してください (U# は対応するアセットが見つかれば自動で付け直します)",
                     path: p);
             if (notCompiled.Count > 0)
                 ctx.Issue(CctSeverity.Warning, "UDON_PROGRAM_NOT_COMPILED",
-                    $"Program Source はありますがコンパイル済みプログラム (serializedProgramAsset) が無い UdonBehaviour が {notCompiled.Count} 個あります。U# のコンパイルエラーか未コンパイルの可能性があります (VRChat SDK > Udon Sharp > Compile All UdonSharp Programs)",
+                    $"Program Source はありますが、そのプログラムアセットにコンパイル結果 (Assets/SerializedUdonPrograms) が無い UdonBehaviour が {notCompiled.Count} 個あります。U# のコンパイルエラーか未コンパイルの可能性があります (VRChat SDK > Udon Sharp > Compile All UdonSharp Programs)",
                     path: notCompiled[0], value: Grouped(notCompiled.Count, notCompiled));
             if (builtinMesh.Count > 0)
                 ctx.Issue(CctSeverity.Warning, "UDON_BUILTIN_MESH_REFERENCE",
@@ -290,6 +306,7 @@ namespace Naoking.ClaudeCreatorTools
             udon["udon_behaviours"] = audited;
             udon["with_program"] = withProgram;
             udon["without_program"] = noProgram.Count + missingProgram.Count;
+            udon["program_source_missing_but_compiled"] = sourceMissingCompiled.Count;
             udon["not_compiled"] = notCompiled.Count;
             udon["sync_methods"] = syncCounts;
             udon["program_count"] = programs.Count;
@@ -327,7 +344,7 @@ namespace Naoking.ClaudeCreatorTools
 
             // Scene proxies (UdonSharpBehaviour components): _udonSharpBackingUdonBehaviour (UdonSharpBehaviour.cs L503-504).
             int proxies = 0;
-            var noBacking = new List<string>();
+            var noBacking = new List<KeyValuePair<string, string>>(); // hierarchy path, U# class
             foreach (var item in ctx.Audited(K.USharpProxy))
             {
                 proxies++;
@@ -335,7 +352,7 @@ namespace Naoking.ClaudeCreatorTools
                 {
                     if (so == null) continue;
                     var prop = so.FindProperty("_udonSharpBackingUdonBehaviour");
-                    if (prop != null && CctSerialized.GetObject(prop) == null) noBacking.Add(item.O.Path + " (" + item.C.GetType().Name + ")");
+                    if (prop != null && CctSerialized.GetObject(prop) == null) noBacking.Add(new KeyValuePair<string, string>(item.O.Path, item.C.GetType().FullName));
                     ScanMissingReferencesWithinBudget(ctx, item, so);
                 }
             }
@@ -346,8 +363,8 @@ namespace Naoking.ClaudeCreatorTools
             // script has no valid program asset ("Program asset on ... is not valid"). Until then nothing runs in VRChat.
             foreach (var p in noBacking)
                 ctx.Issue(CctSeverity.Warning, "USHARP_PROXY_NO_BACKING",
-                    "UdonSharpBehaviour に対応する (裏側の) UdonBehaviour がありません。このままでは VRChat で動きません。通常は U# がシーンを開いたとき・Play 時・コンパイル後に自動で作り直すので、残っている場合はスクリプトに有効な UdonSharpProgramAsset があるか確認し、シーンを開き直すかコンポーネントを付け直してください",
-                    path: p);
+                    $"UdonSharpBehaviour ({p.Value}) に対応する (裏側の) UdonBehaviour がありません。このままでは VRChat で動きません。通常は U# がシーンを開いたとき・Play 時・コンパイル後に自動で作り直すので、残っている場合はスクリプトに有効な UdonSharpProgramAsset があるか確認し、シーンを開き直すかコンポーネントを付け直してください",
+                    path: p.Key, value: p.Value);
 
             // Project-wide U# validation.
             var budget = Stopwatch.StartNew();
@@ -370,7 +387,9 @@ namespace Naoking.ClaudeCreatorTools
                             asset: path);
                 }
             }
-            us["assembly_definitions"] = asmDefs;
+            us["assembly_definition_count"] = asmDefs.Count;
+            us["assembly_definitions"] = asmDefs.Take(ctx.TopN).ToList();
+            if (asmDefs.Count > ctx.TopN) us["assembly_definitions_omitted"] = asmDefs.Count - ctx.TopN;
 
             var scriptToPrograms = new Dictionary<MonoScript, List<string>>();
             var programClasses = new HashSet<Type>();
@@ -415,8 +434,16 @@ namespace Naoking.ClaudeCreatorTools
                 if (asmName != null && !asmNames.Contains(asmName))
                 {
                     notInAssembly.Add(scriptPath);
+                    // UdonSharpCompilerV1.Compile returns before compiling anything (L334-335) and, unlike the other validation
+                    // failures, leaves LastCompileDiagnostics as it was: UdonSharpBuildCompile then blocks the build only if an
+                    // error is already cached, otherwise the world is built with the previously compiled programs.
+                    bool specialFolder = asmName.StartsWith("Assembly-CSharp", StringComparison.Ordinal); // firstpass / Editor
                     ctx.Issue(CctSeverity.Error, "USHARP_SCRIPT_NOT_IN_USHARP_ASSEMBLY",
-                        $"U# スクリプト '{scriptPath}' はアセンブリ '{asmName}' に属していますが、その asmdef に U# Assembly Definition がありません。U# は \"does not belong to a U# assembly\" でプロジェクト全体のコンパイルを中止します (Console に出ず Editor.log だけに残ることがあります)。asmdef と同じフォルダに Create > U# Assembly Definition を作り、Source Assembly に設定してください",
+                        $"U# スクリプト '{scriptPath}' はアセンブリ '{asmName}' に属していますが、U# がコンパイルする対象 (Assembly-CSharp か U# Assembly Definition のある asmdef) ではありません。" +
+                        "U# は \"does not belong to a U# assembly\" でプロジェクト全体のコンパイルを中止します (Console に出ず Editor.log だけに残ることがあります)。ビルドが止まるか、前回のコンパイル結果のままアップロードされます。" +
+                        (specialFolder
+                            ? "Plugins / Standard Assets / Editor フォルダの外 (Assets 直下など) へスクリプトを移してください"
+                            : "その asmdef と同じフォルダに Create > U# Assembly Definition を作り、Source Assembly に asmdef を設定してください"),
                         asset: scriptPath, value: asmName);
                 }
             }
@@ -462,6 +489,26 @@ namespace Naoking.ClaudeCreatorTools
             catch (Exception) { return new string[0]; }
         }
 
+        /// <summary>
+        /// Does the program source keep a compiled asset? UdonProgramAsset (base of the Udon Graph / Assembly / UdonSharp
+        /// program assets) stores it in [SerializeField] protected serializedUdonProgramAsset (Editor/Udon/ProgramSources/
+        /// UdonProgram/UdonProgramAsset.cs L28-29). Read through SerializedObject: the SerializedProgramAsset getter would CREATE
+        /// the asset and compile. Unknown program source types (field absent) count as "no" so the old warning is kept.
+        /// </summary>
+        static bool ProgramSourceHasCompiledAsset(Object programSource, Dictionary<Object, bool> cache)
+        {
+            if (programSource == null) return false;
+            if (cache.TryGetValue(programSource, out var known)) return known;
+            bool has = false;
+            using (var so = TrySerializeAsset(programSource))
+            {
+                var p = so?.FindProperty("serializedUdonProgramAsset");
+                has = p != null && CctSerialized.GetObject(p) != null;
+            }
+            cache[programSource] = has;
+            return has;
+        }
+
         // ------------------------------------------------------------------ interactables, audio, dynamics, colliders
 
         static void AuditInteractables(Ctx ctx)
@@ -478,7 +525,7 @@ namespace Naoking.ClaudeCreatorTools
 
         static void AuditPickups(Ctx ctx, Dictionary<string, object> d)
         {
-            int count = 0, synced = 0, notPickupable = 0;
+            int count = 0, synced = 0, notPickupable = 0, unsyncedWithUdon = 0;
             var autoHold = new Dictionary<string, object>();
             var orientation = new Dictionary<string, object>();
             var version = new Dictionary<string, object>();
@@ -492,9 +539,16 @@ namespace Naoking.ClaudeCreatorTools
                 bool hasRb = go.TryGetComponent<Rigidbody>(out var rb);
                 bool hasCollider = go.TryGetComponent<Collider>(out _);
                 bool hasSync = HasComponentOfKind(ctx, go, K.ObjectSync);
-                bool hasUdon = HasComponentOfKind(ctx, go, K.Udon);
-                if (hasSync) synced++;
-                else if (!hasUdon) unsynced.Add(item.O.Path);
+                // An UdonBehaviour alone does not sync the position (docs vrc_pickup.md L15-17: add VRC Object Sync); only the
+                // obsolete UdonBehaviour.SynchronizePosition does. Pickups with Udon are still listed (it may sync by itself).
+                var udons = ComponentsOfKind(go, K.Udon);
+                bool legacyPositionSync = udons.Any(u => UdonSynchronizesPosition(ctx, u));
+                if (hasSync || legacyPositionSync) synced++;
+                else
+                {
+                    unsynced.Add(item.O.Path);
+                    if (udons.Count > 0) unsyncedWithUdon++;
+                }
 
                 // VRC_Pickup has [RequireComponent(Rigidbody)]; VRCPickupEditor3 L84-90 warns when there is no Collider.
                 if (!hasRb)
@@ -537,8 +591,11 @@ namespace Naoking.ClaudeCreatorTools
             }
             if (unsynced.Count > 0)
                 ctx.Issue(CctSeverity.Info, "PICKUP_NOT_SYNCED",
-                    $"VRC Object Sync も UdonBehaviour も無いピックアップが {unsynced.Count} 個あります。位置は他のプレイヤーと同期されません (意図どおりか確認)",
-                    path: unsynced[0], value: Grouped(unsynced.Count, unsynced));
+                    $"VRC Object Sync の無いピックアップが {unsynced.Count} 個あります (うち UdonBehaviour 付き {unsyncedWithUdon} 個)。持って動かしても他のプレイヤーには位置が同期されません。同期したい物には VRC Object Sync を追加してください (Udon で位置を独自に同期しているなら不要)",
+                    path: unsynced[0], value: new Dictionary<string, object>
+                    {
+                        ["count"] = unsynced.Count, ["with_udon"] = unsyncedWithUdon, ["examples"] = Examples(unsynced),
+                    });
             if (collidesWithPlayer.Count > 0)
                 ctx.Issue(CctSeverity.Info, "PICKUP_COLLIDES_WITH_PLAYER",
                     $"プレイヤーと衝突するレイヤーにある (Kinematic でない) ピックアップが {collidesWithPlayer.Count} 個あります。プレイヤーを押したり乗れたりします。通常は Pickup レイヤー (13) にします",
@@ -546,7 +603,8 @@ namespace Naoking.ClaudeCreatorTools
             d["pickups"] = new Dictionary<string, object>
             {
                 ["count"] = count,
-                ["with_object_sync"] = synced,
+                ["synced"] = synced,
+                ["not_synced"] = unsynced.Count,
                 ["not_pickupable"] = notPickupable,
                 ["auto_hold"] = autoHold,
                 ["orientation"] = orientation,
@@ -554,6 +612,9 @@ namespace Naoking.ClaudeCreatorTools
                 ["items"] = items,
             };
         }
+
+        /// <summary>Obsolete UdonBehaviour.SynchronizePosition (read in AuditUdon, which runs before the interactables).</summary>
+        static bool UdonSynchronizesPosition(Ctx ctx, Component udon) => udon != null && ctx.UdonPositionSync.Contains(udon);
 
         static bool LayerCollidesWithPlayer(Ctx ctx, int layer)
         {
@@ -738,7 +799,8 @@ namespace Naoking.ClaudeCreatorTools
                             ctx.Issue(CctSeverity.Info, "VIDEO_PLAYER_URL_NOT_ALLOWLISTED",
                                 $"既定 URL のドメイン '{host}' は VRChat の動画許可リストにありません。\"Allow Untrusted URLs\" を有効にしたユーザーにしか再生されず、Public インスタンスでは VRChat.com の \"Video Player Allowed Domains\" への登録も必要です",
                                 path: item.O.Path, value: host);
-                        if (ctx.CheckMobile && url.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+                        // docs www-whitelist.md L10 states this for Android only.
+                        if ((ctx.Platform == "all" || ctx.Platform == "android") && url.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
                             ctx.Issue(CctSeverity.Warning, "VIDEO_PLAYER_HTTP_MOBILE",
                                 "既定 URL が http:// です。Android 版 VRChat は HTTPS でない動画を再生しません",
                                 path: item.O.Path, value: Trim(url, 200));
@@ -783,7 +845,7 @@ namespace Naoking.ClaudeCreatorTools
 
         static void AuditAudio(Ctx ctx, Dictionary<string, object> d)
         {
-            int count = 0, playOnAwake = 0, twoD = 0;
+            int count = 0, playOnAwake = 0, twoD = 0, noSpatial2D = 0;
             var noSpatial = new List<string>();
             var onsp = new List<string>();
             foreach (var item in ctx.Audited(K.AudioSource))
@@ -797,16 +859,25 @@ namespace Naoking.ClaudeCreatorTools
                 var go = a.gameObject;
                 // [WB] L614-648: ONSPAudioSource first, then a missing VRC_SpatialAudioSource (the SDK stops at the first hit).
                 if (HasComponentOfKind(ctx, go, K.Onsp)) onsp.Add(item.O.Path);
-                else if (!HasComponentOfKind(ctx, go, K.SpatialAudio)) noSpatial.Add(item.O.Path + (is2D ? " (2D)" : " (3D)"));
+                else if (!HasComponentOfKind(ctx, go, K.SpatialAudio))
+                {
+                    noSpatial.Add(item.O.Path);
+                    if (is2D) noSpatial2D++;
+                }
             }
             if (onsp.Count > 0)
                 ctx.Issue(CctSeverity.Warning, "AUDIO_ONSP_DEPRECATED",
                     $"ONSP Audio Source (非推奨) を使う AudioSource が {onsp.Count} 個あります。SDK の Fix で VRC Spatial Audio Source に変換してください",
                     path: onsp[0], value: Grouped(onsp.Count, onsp));
+            // [WB] Fix = AutoAddSpatialAudioComponents.AddVRCSpatialToBareAudioSource: adds VRCSpatialAudioSource (Gain/Far
+            // defaults) with EnableSpatialization false for 2D sources (com.vrchat.base Editor/.../AutoAddSpatialAudioComponents.cs L194-228).
             if (noSpatial.Count > 0)
                 ctx.Issue(CctSeverity.Warning, "AUDIO_NO_SPATIAL",
-                    $"VRC Spatial Audio Source が無い AudioSource が {noSpatial.Count} 個あります。SDK はこれを非推奨として警告します (Fix で追加。2D の音は無効状態で追加されます)",
-                    path: noSpatial[0].Substring(0, noSpatial[0].LastIndexOf(" (", StringComparison.Ordinal)), value: Grouped(noSpatial.Count, noSpatial));
+                    $"VRC Spatial Audio Source が無い AudioSource が {noSpatial.Count} 個 (うち 2D {noSpatial2D} 個) あります。SDK はこれを非推奨として警告します。Control Panel の Fix で追加できます (2D の音は Enable Spatialization を OFF にして追加されます)",
+                    path: noSpatial[0], value: new Dictionary<string, object>
+                    {
+                        ["count"] = noSpatial.Count, ["two_d"] = noSpatial2D, ["examples"] = Examples(noSpatial),
+                    });
             d["audio"] = new Dictionary<string, object>
             {
                 ["audio_sources"] = count,

@@ -16,6 +16,9 @@ namespace Naoking.ClaudeCreatorTools
     /// Performance stats and ranks come from the VRChat SDK's own calculator when the avatars SDK is loaded
     /// (VRC.SDKBase.Validation.Performance.AvatarPerformance.CalculatePerformanceStats via reflection, exactly the call the SDK
     /// Control Panel makes, research/avatar-limits.md §15.1), so values match the SDK panel; data.method.stats = "sdk".
+    /// Categories and ratings are matched by enum name, so an SDK that lacks a category (RaycastCount before 3.10.3, constraints
+    /// before 3.7.0) keeps the SDK values and rates only those stats with the tool's table (data.method.sdk_unrated_stats);
+    /// a stat whose field the SDK does not have is estimated (stats.X.estimate = true).
     /// If that fails (types/methods missing, exception) or in Play mode (the SDK scan re-initialises live PhysBone chains),
     /// the tool's own estimator (CctAvatarAudit.Stats.cs, re-implementing the SDK 3.10.5 counting rules of avatar-limits.md §4)
     /// is used, every stat gets "estimate": true and data.method.stats = "estimate". The estimator always runs too, because
@@ -27,6 +30,15 @@ namespace Naoking.ClaudeCreatorTools
     /// Sources: VRChat SDK 3.10.5 (com.vrchat.base / com.vrchat.avatars) and creator-docs snapshot 2026-10-20, via
     /// research/avatar-limits.md and research/ma-ndmf-aao.md. Where the SDK and docs differ the SDK is followed and the
     /// message says so.
+    ///
+    /// Severity and platforms: the platform of the active build target is "primary" (it is what the SDK Control Panel rates and
+    /// uploads). With platform = 'all' (the default) findings that only concern the other platform (RANK_LIMIT and the MOBILE_* /
+    /// NOT_WHITELISTED_MOBILE / ANDROID_INCOMPATIBLE_SHADER rules for Android while the target is PC, PC RANK_LIMIT while the target
+    /// is Android/iOS) are lowered from warning to info; ranks / stats still show both platforms. platform = 'pc' / 'android' / 'ios'
+    /// keeps them as warnings. RANK_LIMIT messages say what VRChat does when the stat's rank is worse than the viewer's Minimum Displayed
+    /// Performance Rank (docs table: whole avatar to Fallback for triangles / texture memory / meshes / material slots / bones,
+    /// otherwise only the related components are removed, bounds never block; value.min_displayed_rank_effect has the token).
+    /// data.upload summarises which error codes stop the SDK builder for the active build target (UploadBlockingCodes in Output.cs).
     ///
     /// Issue codes (stable):
     /// | code                              | severity        | rule |
@@ -41,26 +53,26 @@ namespace Naoking.ClaudeCreatorTools
     /// | BREAKDOWN_MISMATCH                | info            | SDK total differs from the sum of the tool's breakdown (breakdown lists are approximate for that stat) |
     /// | TEXTURE_MEMORY_PLATFORM           | info            | texture memory is computed from the textures imported for the active build target only |
     /// | PREBUILD_ESTIMATE                 | info            | MA / NDMF / AAO / VRCFury components present: values are pre-build |
-    /// | RANK_LIMIT                        | warning/info    | stat rated VeryPoor (warning) or Poor (mobile: warning, PC: info); value, limit for the next rank, platform |
-    /// | MOBILE_DYNAMICS_REMOVED           | warning         | mobile VeryPoor in PhysBone/Contact/Constraint rows: those components are all removed on mobile (docs) |
-    /// | MOBILE_REMOVED_COMPONENTS         | info            | lights/cloth/physics/audio exist: always removed on mobile (docs "Mobile Removed Components") |
+    /// | RANK_LIMIT                        | warning/info    | stat rated VeryPoor (warning) or Poor (mobile: warning, PC: info; info on a secondary platform); value, limit for the next rank, platform, min_displayed_rank_effect; not raised for the mobile-removed rows |
+    /// | MOBILE_DYNAMICS_REMOVED           | warning/info    | mobile VeryPoor in PhysBone/Contact/Constraint rows (one issue, rows in value): docs footnote - all PhysBones, Contacts and VRChat Constraints are removed even with Show Avatar |
+    /// | MOBILE_REMOVED_COMPONENTS         | warning/info    | lights/cloth/physics/audio on mobile: never allowed on mobile avatars (docs "Mobile Removed Components"); the SDK rates them Very Poor (thresholds 0) |
     /// | HARD_LIMIT_EXCEEDED               | error           | SDK hard caps: PhysBones 256, colliders 256, contacts incl. local-only 256, constraints 2000, raycasts 80, VRCHeadChop 16 |
     /// | GLOBAL_COLLIDERS_EXCEEDED         | error           | more than 4 PhysBone colliders with globalCollision != False (SDK builder error) |
     /// | PHYSBONE_CHAIN_TOO_LONG           | error           | one PhysBone affects more than 256 transforms: PhysBoneManager does not simulate it (SDK MAX_TRANSFORMS_PER_CHAIN) |
     /// | BOUNDS_LARGE                      | warning         | bounds exceed 5x6x5 m (VeryPoor); lists the renderers that extend furthest |
-    /// | FALLBACK_INELIGIBLE               | info            | not usable as a custom fallback on that platform (needs humanoid and overall Good or better) |
+    /// | FALLBACK_INELIGIBLE               | info            | one issue: not usable as a custom fallback (needs humanoid and overall Good or better on every platform it is uploaded for) |
     /// | MESH_NOT_READABLE                 | error           | model-imported mesh with Read/Write disabled (SDK upload error; docs: shown as Very Poor in game) |
     /// | BLENDSHAPE_NORMALS_LEGACY_OFF     | error           | model imported with Blendshape Normals = Calculate but Legacy Blendshape Normals off (SDK upload error) |
     /// | TEXTURE_MIP_STREAMING_OFF         | error           | mipmapped texture without Streaming Mip Maps (SDK upload error, Auto Fix exists) |
     /// | TEXTURE_MAX_SIZE_OVER_8192        | error           | TextureImporter.maxTextureSize > 8192 (SDK upload error) |
     /// | TEXTURE_UNCOMPRESSED              | warning/info    | importer compression Uncompressed (warning when the texture costs >= 4 MB) |
     /// | TEXTURE_BOX_MIP_FILTER            | info            | Box mip filter (SDK suggests Kaiser) |
-    /// | ANDROID_INCOMPATIBLE_SHADER       | error/warning/info | shader not in the SDK mobile whitelist (error when the active build target is Android/iOS); info for Toon Standard (Outline), which mobile clients replace |
+    /// | ANDROID_INCOMPATIBLE_SHADER       | error/warning/info | shader not in the SDK mobile whitelist (error on an Android/iOS target, warning with platform=android/ios on a PC target, info with platform=all on a PC target); info for Toon Standard (Outline), which mobile clients replace |
     /// | MISSING_SCRIPT                    | error           | GameObject with missing MonoBehaviours (GameObjectUtility.GetMonoBehavioursWithMissingScriptCount, nulls never filtered first) |
     /// | MISSING_SCRIPT_GUID               | info            | m_Script GUID of a missing script found in the saved scene/prefab YAML (prefab chain of each object), with why it does not resolve (script_not_found / class_not_loadable / class_not_in_dll) |
     /// | MISSING_REFERENCE                 | warning         | ObjectReference pointing at a deleted/unloadable object (SerializedObject scan, capped) |
     /// | NOT_WHITELISTED                   | error           | component not allowed on avatars for the active build target (SDK error "will be removed by the client") |
-    /// | NOT_WHITELISTED_MOBILE            | warning/error   | allowed on PC but not on Android/iOS (FinalIK, Cloth, Light, colliders, Rigidbody, joints, Unity constraints, Camera, AudioSource, ...) |
+    /// | NOT_WHITELISTED_MOBILE            | warning/info    | PC target only: allowed on PC but not on Android/iOS (FinalIK, Cloth, Light, colliders, Rigidbody, joints, Camera, AudioSource, ...); on a mobile target these are NOT_WHITELISTED errors |
     /// | DYNAMIC_BONE_PRESENT              | error           | DynamicBone / DynamicBoneCollider (SDK requires conversion to PhysBones) |
     /// | UNITY_CONSTRAINTS                 | warning/error   | Unity constraints (PC warning, mobile error per SDK); info when MA Convert Constraints converts them |
     /// | PIPELINE_MANAGER_COUNT            | error           | not exactly one PipelineManager in the avatar (SDK builder error) |
@@ -72,31 +84,31 @@ namespace Naoking.ClaudeCreatorTools
     /// | ROOT_ANIMATOR_MISSING             | error           | no Animator on the avatar root (SDK error) |
     /// | AVATAR_NOT_HUMANOID               | warning         | Animator avatar is not humanoid |
     /// | AVATAR_INACTIVE                   | error           | humanoid avatar is disabled in the hierarchy (SDK error; warning for prefab assets) |
-    /// | HUMANOID_BONES_MISSING            | error           | required humanoid bones unmapped (SDK checks feet / upper arms / head / hands) |
+    /// | HUMANOID_BONES_MISSING            | error           | bones the SDK requires unmapped: head, hands, feet, upper arms (builder) and hips, spine, chest, neck, both shoulders (AnalyzeIK), plus Unity's required limbs |
     /// | HUMANOID_OPTIONAL_BONES_MISSING   | info            | optional bones (upper chest, toes, eyes, jaw, fingers) unmapped |
     /// | HUMANOID_SPINE_HIERARCHY          | error           | shoulders / neck are not children of UpperChest (or Chest) (SDK AnalyzeIK error) |
     /// | HUMANOID_LIMB_CHILD_ORDER         | warning         | lower arm/leg not the first child of the upper one, or hand/foot not the first child (SDK warning) |
     /// | HUMANOID_SPLIT_HIERARCHY          | warning         | Hips is not an ancestor of both hands and feet (SDK warning) |
     /// | ARMATURE_NOT_DIRECT_CHILD         | warning         | Animator.avatarRoot is a descendant of the avatar root, not the root itself (SDK error; read from the cached value, so warning) |
-    /// | AVATAR_HEIGHT                     | error/warning   | shoulder height < 0.2 m (error), < 1.0 m / > 2.5 m / > 5 m (warning) (SDK builder rules) |
+    /// | AVATAR_HEIGHT                     | error/warning/info | shoulder height < 0.2 m (error), > 5 m (warning); < 1.0 m / > 2.5 m are the SDK's "shorter/taller than average" notices (info) |
     /// | FEET_BELOW_ORIGIN                 | warning         | left foot below the avatar root (SDK warning) |
     /// | VISEME_MESH_MISSING               | error           | Lip Sync = Viseme Blend Shape without a face mesh (SDK error) |
     /// | VIEWPOINT_SUSPICIOUS              | warning         | View Position at (0,0,0), below the root, or farther from the head bone than 0.35 m x max(root scale, shoulder height / 1.4 m) (heuristic) |
-    /// | LAYER_CONTROLLER_MISSING          | warning         | customised playable layer (not default) without controller, or the controller reference is missing |
+    /// | LAYER_CONTROLLER_MISSING          | warning/info    | customised playable layer (not default) without controller (info when MA Merge Animator exists), or the controller reference is missing |
     /// | GESTURE_MASK_MISSING              | error           | custom humanoid Gesture controller whose first layer has no AvatarMask (SDK error) |
     /// | WD_MIXED                          | warning         | one playable-layer controller mixes Write Defaults on/off (SDK rule: Additive layers and Direct blend tree states excluded) |
     /// | WD_MIXED_ACROSS_CONTROLLERS       | info            | controllers are each uniform but differ from each other (docs: keep WD consistent across the avatar) |
     /// | WD_OFF_EMPTY_MOTION               | warning         | WD-off state with no motion / empty clip / empty blend tree child (SDK warning) |
     /// | WD_MERGE_ANIMATOR_NOT_CHECKED     | info            | MA Merge Animator controllers are merged at build time and are not part of the Write Defaults checks |
     /// | BLUEPRINT_ID_EMPTY                | info            | PipelineManager has no blueprint ID (uploads as a new avatar) |
-    /// | EXPRESSIONS_ASSET_MISSING         | error           | only one of Expressions Menu / Parameters is set, or the reference is missing (SDK error) |
-    /// | PARAM_BUDGET_EXCEEDED             | error           | synced parameter cost > 256 bits (SDK error) |
+    /// | EXPRESSIONS_ASSET_MISSING         | error/warning   | only one of Expressions Menu / Parameters resolves (SDK error; a deleted asset counts as unset); warning when both are unset but a reference points at a deleted asset |
+    /// | PARAM_BUDGET_EXCEEDED             | error           | synced parameter cost of the descriptor's Expression Parameters asset > 256 bits (SDK upload error) |
     /// | PARAM_COUNT_EXCEEDED              | warning         | more than 8192 parameters (docs limit; the SDK does not check it) |
     /// | PARAM_DUPLICATE                   | warning         | the same parameter name defined more than once (the SDK resolves to the first) |
     /// | PARAM_EMPTY_NAME                  | warning/info    | parameter without a name (warning when synced: it still costs bits) |
     /// | PARAM_BUILTIN_NAME                | warning         | parameter named like a VRChat built-in (docs: do not add built-ins) |
     /// | PARAM_DEFAULT_OUT_OF_RANGE        | info            | default outside the type range (Int 0..255 integer, Float -1..1, Bool 0/1) |
-    /// | MENU_TOO_MANY_CONTROLS            | warning         | menu with more than 8 controls (docs limit; the SDK builder does not check it; MA splits its own installs) |
+    /// | MENU_TOO_MANY_CONTROLS            | warning/info    | menu with more than 8 controls (docs limit; the SDK builder does not check it); info when an enabled MA Menu Installer exists, because MA then splits every menu into 7 + "More" |
     /// | MENU_PARAM_UNDEFINED              | error           | control parameter not defined in Expression Parameters (SDK error, built-ins are not accepted either) |
     /// | MENU_SUBMENU_MISSING              | warning         | Sub Menu control without a menu (or a missing reference) |
     /// | MENU_PUPPET_BOOL_PARAM            | error           | puppet sub-parameter is a Bool parameter (SDK error) |
@@ -107,6 +119,7 @@ namespace Naoking.ClaudeCreatorTools
     /// | POST_BUILD_FAILED                 | warning         | NDMF processing of the temporary clone threw |
     /// | POST_BUILD_NDMF_ERROR             | error/warning/info | error reported by an NDMF plugin while processing the clone (Error/InternalError block uploads) |
     /// | POST_BUILD_PARTIAL                | info            | the clone was processed by NDMF only (VRCFury / other SDK build hooks did not run) |
+    /// | POST_BUILD_PARAM_BUDGET_EXCEEDED  | error           | synced parameter cost of the NDMF-processed clone > 256 bits (docs limit; the SDK checks only the pre-build asset, so nothing stops it) |
     /// | NDMF_APPLY_ON_BUILD_OFF           | warning         | NDMF "Apply on Build" is off: a real upload would skip MA/AAO entirely |
     /// | POST_BUILD_CLEANUP_FAILED         | warning         | the temporary preview scene or clone could not be removed, or an NDMF plugin wrote temporary assets (deleted again) |
     /// | POST_BUILD_STRAY_OBJECTS          | info            | root objects created in the user's scenes during NDMF processing were destroyed so they are not saved |
@@ -249,8 +262,10 @@ namespace Naoking.ClaudeCreatorTools
                 return f;
             }
             var below = new List<GameObject>();
-            foreach (var c in go.GetComponentsInChildren<Component>(true))
-                if (c != null && CctSerialized.IsType(c, CctVrcTypes.AvatarDescriptor)) below.Add(c.gameObject);
+            var tDesc = CctSerialized.FindType(CctVrcTypes.AvatarDescriptor);
+            if (tDesc != null)
+                foreach (var c in go.GetComponentsInChildren(tDesc, true))
+                    if (c != null && !below.Contains(c.gameObject)) below.Add(c.gameObject);
             if (below.Count == 1)
             {
                 f.Root = below[0];
@@ -272,17 +287,23 @@ namespace Naoking.ClaudeCreatorTools
         static List<GameObject> AvatarsInLoadedScenes()
         {
             var list = new List<GameObject>();
-            foreach (var go in CctTargets.AllGameObjectsInLoadedScenes())
-                foreach (var c in go.GetComponents<Component>())
-                    if (c != null && CctSerialized.IsType(c, CctVrcTypes.AvatarDescriptor)) { list.Add(go); break; }
+            // No avatars SDK loaded (world project): there cannot be a descriptor, so do not walk a possibly huge world scene.
+            var tDesc = CctSerialized.FindType(CctVrcTypes.AvatarDescriptor);
+            if (tDesc == null) return list;
+            // GetComponentsInChildren(Type) filters natively (derived types included) instead of GetComponents on every object.
+            foreach (var scene in CctTargets.LoadedScenes())
+                foreach (var root in scene.GetRootGameObjects())
+                    foreach (var c in root.GetComponentsInChildren(tDesc, true))
+                        if (c != null && !list.Contains(c.gameObject)) list.Add(c.gameObject);
             return list;
         }
 
         static Transform FindDescriptorOwner(Transform t)
         {
+            var tDesc = CctSerialized.FindType(CctVrcTypes.AvatarDescriptor);
+            if (tDesc == null) return null;
             for (var cur = t; cur != null; cur = cur.parent)
-                foreach (var c in cur.GetComponents<Component>())
-                    if (c != null && CctSerialized.IsType(c, CctVrcTypes.AvatarDescriptor)) return cur;
+                if (cur.GetComponent(tDesc) != null) return cur;
             return null;
         }
 
@@ -402,6 +423,21 @@ namespace Naoking.ClaudeCreatorTools
                 if (WantMobile) yield return new KeyValuePair<string, bool>(MobileKey, true);
             }
 
+            /// <summary>
+            /// platform = 'all' (not chosen explicitly) and <paramref name="mobile"/> is not the active build target's platform:
+            /// findings that only concern that platform are context, not something to fix for the build being prepared.
+            /// </summary>
+            public bool IsSecondary(bool mobile) => Platform == "all" && mobile != ActiveMobile;
+
+            /// <summary>Warning -> info for findings that only concern a secondary platform (see <see cref="IsSecondary"/>).</summary>
+            public string ForPlatform(string severity, bool mobile) =>
+                severity == CctSeverity.Warning && IsSecondary(mobile) ? CctSeverity.Info : severity;
+
+            /// <summary>Error-severity issues per code, suppressed ones included (data.upload).</summary>
+            public readonly Dictionary<string, int> ErrorCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+            /// <summary>Warning-severity issues per code, suppressed ones included (data.upload "may_block").</summary>
+            public readonly Dictionary<string, int> WarningCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
             public string PathOf(Transform t)
             {
                 if (t == null) return null;
@@ -420,6 +456,8 @@ namespace Naoking.ClaudeCreatorTools
             {
                 _issueCounts.TryGetValue(code, out var n);
                 _issueCounts[code] = n + 1;
+                if (severity == CctSeverity.Error) Inc(ErrorCounts, code);
+                else if (severity == CctSeverity.Warning) Inc(WarningCounts, code);
                 if (n < MaxIssuesPerCode)
                 {
                     R.AddIssue(severity, code, message, path, value, limit, asset);
@@ -486,9 +524,11 @@ namespace Naoking.ClaudeCreatorTools
             r.Put("rank_tables", Section(ctx, "rank_tables", () => RankTablesForReport(ctx)));
 
             if (ctx.Args.GetBool("post_build", false)) r.Put("post_build", Section(ctx, "post_build", () => RunPostBuild(ctx, output)));
+            var upload = Section(ctx, "upload", () => BuildUploadSummary(ctx));
+            r.Put("upload", upload);
 
             ctx.FlushSuppressed();
-            r.Message = BuildMessage(ctx, output);
+            r.Message = BuildMessage(ctx, output, upload);
         }
 
         static Dictionary<string, object> Section(Ctx ctx, string name, Func<Dictionary<string, object>> build)
@@ -523,7 +563,7 @@ namespace Naoking.ClaudeCreatorTools
             return null;
         }
 
-        static string BuildMessage(Ctx ctx, StatsOutput o)
+        static string BuildMessage(Ctx ctx, StatsOutput o, Dictionary<string, object> upload)
         {
             var parts = new List<string>();
             foreach (var p in ctx.Platforms())
@@ -531,12 +571,17 @@ namespace Naoking.ClaudeCreatorTools
                 if (!o.Overall.TryGetValue(p.Key, out var overall)) continue;
                 o.LimitingKeys.TryGetValue(p.Key, out var lim);
                 var top = lim == null || lim.Count == 0 ? "" : $" (主因: {string.Join(", ", lim.Take(3))}{(lim.Count > 3 ? " ほか" : "")})";
-                parts.Add($"{ctx.PlatformLabel(p.Key)} {Ranks.Name(overall)}{top}");
+                parts.Add($"{ctx.PlatformLabel(p.Key)} {Ranks.DisplayName(overall)}{top}");
             }
             var r = ctx.R;
             var head = ctx.Descriptor != null ? $"アバター '{ctx.Root.name}'" : $"階層 '{ctx.Root.name}' (Descriptor なし)";
             var post = string.IsNullOrEmpty(ctx.PostBuildSummary) ? "" : $" / {ctx.PostBuildSummary}";
-            return $"{head}: {string.Join(" / ", parts)}{(o.UsedSdk ? "" : " [推定値]")}{post} / error {r.CountIssues(CctSeverity.Error)}, warning {r.CountIssues(CctSeverity.Warning)}";
+            string uploadText = "";
+            if (upload != null && upload.TryGetValue("blocked", out var b) && b is bool blocked)
+                uploadText = blocked
+                    ? $" / SDK でアップロード不可 ({string.Join(", ", ((List<object>)upload["blocking"]).Cast<Dictionary<string, object>>().Take(3).Select(x => x["code"]))})"
+                    : " / SDK でアップロードが止まる error は未検出 (一部未検査、upload.note 参照)";
+            return $"{head}: {string.Join(" / ", parts)}{(o.UsedSdk ? "" : " [推定値]")}{post}{uploadText} / error {r.CountIssues(CctSeverity.Error)}, warning {r.CountIssues(CctSeverity.Warning)}";
         }
 
         // =====================================================================================================================

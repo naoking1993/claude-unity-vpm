@@ -47,6 +47,10 @@ VRC.SDKBase.VRC_MirrorReflection+AntialiasingSamples
 #   VRC.Udon.UdonBehaviour|serializedProgramAsset            L124-125 [SerializeField] private AbstractSerializedUdonProgramAsset
 #   VRC.Udon.UdonBehaviour|programSource                     L127-129 [SerializeField] public AbstractUdonProgramSource (#if UNITY_EDITOR)
 #   VRC.Udon.UdonBehaviour|publicVariablesUnityEngineObjects[]  L1205-1206 [SerializeField] private List<Object>
+#   VRC.Udon.Editor.ProgramSources.UdonProgramAsset|serializedUdonProgramAsset  Editor/Udon/ProgramSources/UdonProgram/UdonProgramAsset.cs
+#     L28-29 [SerializeField] protected AbstractSerializedUdonProgramAsset (base of UdonGraph/UdonAssembly/UdonSharp program
+#     assets: UdonSharpProgramAsset : UdonAssemblyProgramAsset : UdonProgramAsset). Read via SerializedObject only; the
+#     SerializedProgramAsset getter creates the asset.
 VRC.SDKBase.Networking+SyncType
 # UdonSharp (source-only, vrcsdk_worlds_3.10.5/Integrations/UdonSharp):
 #   UdonSharp.UdonSharpBehaviour|_udonSharpBackingUdonBehaviour   Runtime/UdonSharpBehaviour.cs L503-504 [SerializeField, HideInInspector] private UdonBehaviour

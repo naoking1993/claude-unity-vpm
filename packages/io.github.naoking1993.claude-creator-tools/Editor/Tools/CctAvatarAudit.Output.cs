@@ -87,6 +87,15 @@ namespace Naoking.ClaudeCreatorTools
             {
                 var ratings = o.Ratings[p.Key];
                 int overall = Ranks.Overall(ratings.Values);
+                // The SDK's own Overall covers every category of the installed SDK. A newer SDK may rate a category this tool does
+                // not list; then its Overall is worse than ours and wins, so the result still matches the SDK Control Panel.
+                string sdkOverallNote = null;
+                if (sdkOk && sdk.Overall.TryGetValue(p.Value ? "mobile" : "pc", out var sdkOverall) && sdkOverall > overall && sdkOverall <= Ranks.VeryPoor)
+                {
+                    sdkOverallNote = $"SDK の総合ランク {Ranks.Name(sdkOverall)} を採用しました (この表に無い SDK の項目が原因です。SDK Control Panel で確認してください)";
+                    o.RankMismatches.Add($"{ctx.PlatformLabel(p.Key)} overall: SDK {Ranks.Name(sdkOverall)} / 表 {Ranks.Name(overall)}");
+                    overall = sdkOverall;
+                }
                 o.Overall[p.Key] = overall;
                 var limiting = Ranks.Limiting(ratings, overall);
                 o.LimitingKeys[p.Key] = limiting;
@@ -99,6 +108,8 @@ namespace Naoking.ClaudeCreatorTools
                         ["stat"] = key,
                         ["value"] = DisplayValue(def, o.Values[key]),
                         ["rank"] = Ranks.Name(overall),
+                        // docs "Minimum Displayed Performance Rank": avatar_fallback | <component>_removed | none (bounds)
+                        ["min_displayed_rank_effect"] = Ranks.MinRankEffect(key),
                     };
                     if (Ranks.NextImprovement(def, p.Value, overall, out var limit, out var atLimit))
                     {
@@ -117,10 +128,13 @@ namespace Naoking.ClaudeCreatorTools
                 {
                     ["overall"] = Ranks.Name(overall),
                     ["limiting_stats"] = limitingRows,
+                    // true for the platform of the active build target (the one the SDK Control Panel would rate and upload).
+                    ["active_build_target"] = p.Value == ctx.ActiveMobile,
                 };
                 bool humanoid = ctx.RootAnimator != null && SafeIsHuman(ctx.RootAnimator);
                 if (ctx.Descriptor != null) rank["fallback_eligible"] = humanoid && overall != Ranks.None && overall <= Ranks.Good;
                 if (p.Value) rank["note"] = MobilePlatformNote;
+                if (sdkOverallNote != null) rank["sdk_overall_note"] = sdkOverallNote;
                 if (o.EstimatedKeys.Count > 0) rank["estimate"] = true;
                 o.Ranks[p.Key] = rank;
             }
@@ -135,6 +149,9 @@ namespace Naoking.ClaudeCreatorTools
                 o.Method["sdk_elapsed_ms"] = sdk.ElapsedMs;
                 if (sdk.ConstraintRefresh != "not_needed") o.Method["constraint_groups"] = sdk.ConstraintRefresh;
                 if (!sdk.Ok) o.Method["fallback_reason"] = sdk.Error;
+                // Stats this SDK cannot rate (category missing in an older SDK, or the rating call threw): rated with the tool's table.
+                if (sdk.Ok && sdk.UnratedKeys.Count > 0) o.Method["sdk_unrated_stats"] = sdk.UnratedKeys.Cast<object>().ToList();
+                if (sdk.Ok && sdk.RatingFailures > 0) o.Method["sdk_rating_failures"] = $"{sdk.RatingFailures} ({sdk.RatingError})";
             }
             else o.Method["fallback_reason"] = ctx.PlayMode ? "play_mode" : "not_run";
             if (o.EstimatedKeys.Count > 0 && sdkOk) o.Method["estimated_stats"] = o.EstimatedKeys.Cast<object>().ToList();
@@ -232,11 +249,46 @@ namespace Naoking.ClaudeCreatorTools
         // Rank related issues
         // =====================================================================================================================
 
-        static readonly HashSet<string> MobileDynamicsPhysBone = new HashSet<string>(StringComparer.Ordinal)
+        /// <summary>Japanese text for a <see cref="Ranks.MinRankEffect"/> token (docs "Minimum Displayed Performance Rank" table).</summary>
+        static string EffectText(string effect)
         {
-            "physbone_components", "physbone_transforms", "physbone_colliders", "physbone_collision_checks", "contacts",
-        };
-        static readonly HashSet<string> MobileDynamicsConstraint = new HashSet<string>(StringComparer.Ordinal) { "constraints", "constraint_depth" };
+            switch (effect)
+            {
+                case Ranks.EffectFallback: return "アバター全体が Fallback に置き換わります";
+                case Ranks.EffectPhysBonesContacts: return "PhysBone・PhysBone Collider・Contact がすべて削除されます";
+                case Ranks.EffectConstraints: return "Constraint がすべて削除されます";
+                case "animators_removed": return "ルート以外の Animator がすべて削除されます";
+                case "lights_removed": return "Light がすべて削除されます";
+                case "particle_systems_removed": return "Particle System がすべて削除されます";
+                case "trail_renderers_removed": return "Trail Renderer がすべて削除されます";
+                case "line_renderers_removed": return "Line Renderer がすべて削除されます";
+                case "raycasts_removed": return "VRCRaycast がすべて削除されます";
+                case "cloth_removed": return "Cloth がすべて削除されます";
+                case "physics_colliders_removed": return "Collider がすべて削除されます";
+                case "rigidbodies_removed": return "Rigidbody がすべて削除されます";
+                case "audio_sources_removed": return "Audio Source がすべて削除されます";
+                default: return "表示は制限されません";
+            }
+        }
+
+        /// <summary>
+        /// What a Poor / Very Poor stat means for viewers (docs "Minimum Displayed Performance Rank"): PC defaults to Very Poor
+        /// (nothing is managed unless the viewer chooses Medium or Poor); mobile defaults to Medium, can be relaxed to Poor but
+        /// never to Very Poor (only "Show Avatar" overrides it).
+        /// </summary>
+        static string BlockingText(bool mobile, int rating, string effect)
+        {
+            var what = EffectText(effect);
+            if (mobile && rating == Ranks.VeryPoor && (effect == Ranks.EffectPhysBonesContacts || effect == Ranks.EffectConstraints))
+                return "。モバイルの上限 (docs: Mobile Avatar Component Limits) を超えているため、Show Avatar でも PhysBone・Contact・VRChat Constraint が除去されます";
+            if (mobile)
+                return rating == Ranks.VeryPoor
+                    ? $"。モバイルでは既定で{what} (見る側は Very Poor を許可できず、Show Avatar でのみ解除)"
+                    : $"。モバイルでは既定 (Minimum Displayed Rank = Medium) で{what} (見る側が Poor まで許可すれば解除)";
+            return rating == Ranks.VeryPoor
+                ? $"。PC の既定では制限されませんが、Minimum Displayed Rank を Medium / Poor にしている人には{what}"
+                : $"。Minimum Displayed Rank を Medium にしている人には{what}";
+        }
 
         static void RaiseRankIssues(Ctx ctx, Est est, SdkResult sdk, StatsOutput o)
         {
@@ -261,67 +313,74 @@ namespace Naoking.ClaudeCreatorTools
                 ctx.Issue(CctSeverity.Info, "TEXTURE_MEMORY_PLATFORM",
                     $"Texture Memory はビルドターゲット {ctx.ActiveTarget} でインポートされたテクスチャから計算しています。{ctx.PlatformLabel(ctx.MobileKey)} の正確な値はビルドターゲットを切り替えてから再計測してください");
 
+            var fallbackReasons = new List<string>();
             foreach (var p in ctx.Platforms())
             {
                 var label = ctx.PlatformLabel(p.Key);
+                bool mobile = p.Value;
                 var ratings = o.Ratings[p.Key];
-                bool dynamicsPb = false, dynamicsConstraint = false;
+                var dynamicsRows = new List<string>();
+                var removedRows = new List<string>();
                 foreach (var def in Ranks.All)
                 {
                     if (!ratings.TryGetValue(def.Key, out var rating)) continue;
                     if (def.Kind == Ranks.Kind.Bounds) continue; // BOUNDS_LARGE explains bounds with the contributing renderers
-                    if (rating == Ranks.VeryPoor && p.Value)
+                    var value = o.Values[def.Key];
+                    // docs "Mobile Removed Components": one MOBILE_REMOVED_COMPONENTS issue instead of a rank issue per row.
+                    if (mobile && Ranks.IsMobileRemoved(def.Key))
                     {
-                        if (MobileDynamicsPhysBone.Contains(def.Key)) dynamicsPb = true;
-                        if (MobileDynamicsConstraint.Contains(def.Key)) dynamicsConstraint = true;
+                        if (value != null && Convert.ToDouble(value) > 0) removedRows.Add($"{def.Label} {FormatValue(def, value)}");
+                        continue;
                     }
+                    var effect = Ranks.MinRankEffect(def.Key);
+                    if (mobile && rating == Ranks.VeryPoor && (effect == Ranks.EffectPhysBonesContacts || effect == Ranks.EffectConstraints))
+                        dynamicsRows.Add(def.Label);
                     string severity;
                     if (rating == Ranks.VeryPoor) severity = CctSeverity.Warning;
-                    else if (rating == Ranks.Poor) severity = p.Value ? CctSeverity.Warning : CctSeverity.Info;
+                    else if (rating == Ranks.Poor) severity = mobile ? CctSeverity.Warning : CctSeverity.Info;
                     else continue;
-                    var value = o.Values[def.Key];
                     string limitText = "";
                     object limitValue = null;
-                    if (Ranks.NextImprovement(def, p.Value, rating, out var limit, out var atLimit))
+                    if (Ranks.NextImprovement(def, mobile, rating, out var limit, out var atLimit))
                     {
                         limitValue = def.Kind == Ranks.Kind.Megabytes ? (object)limit : (long)limit;
-                        limitText = $" ({FormatValue(def, def.Kind == Ranks.Kind.Megabytes ? (object)limit : (long)limit)} 以下で {Ranks.Name(atLimit)})";
+                        limitText = $" ({FormatValue(def, limitValue)} 以下で {Ranks.DisplayName(atLimit)})";
                     }
                     else if (def.Kind == Ranks.Kind.Flag)
                     {
                         limitValue = false;
                         limitText = " (無効にすると改善)";
                     }
-                    var blocked = p.Value
-                        ? (rating == Ranks.VeryPoor ? "。モバイルでは既定で非表示 (Fallback 表示) になります" : "。モバイルの既定設定 (Minimum Displayed Rank = Medium) では表示されません")
-                        : (rating == Ranks.VeryPoor ? "。表示制限を設定しているユーザーには非表示/部分削除されます" : "");
-                    ctx.Issue(severity, "RANK_LIMIT",
-                        $"{label}: {def.Label} = {FormatValue(def, value)} は {Ranks.Name(rating)}{limitText}{blocked}{(o.EstimatedKeys.Contains(def.Key) ? " [推定]" : "")}",
-                        value: new Dictionary<string, object> { ["stat"] = def.Key, ["platform"] = p.Key, ["value"] = DisplayValue(def, value), ["rank"] = Ranks.Name(rating) },
+                    ctx.Issue(ctx.ForPlatform(severity, mobile), "RANK_LIMIT",
+                        $"{label}: {def.Label} = {FormatValue(def, value)} は {Ranks.DisplayName(rating)}{limitText}{BlockingText(mobile, rating, effect)}{(o.EstimatedKeys.Contains(def.Key) ? " [推定]" : "")}",
+                        value: new Dictionary<string, object>
+                        {
+                            ["stat"] = def.Key, ["platform"] = p.Key, ["value"] = DisplayValue(def, value), ["rank"] = Ranks.Name(rating),
+                            ["min_displayed_rank_effect"] = effect,
+                        },
                         limit: limitValue);
                 }
-                if (dynamicsPb)
-                    ctx.Issue(CctSeverity.Warning, "MOBILE_DYNAMICS_REMOVED",
-                        $"{label}: PhysBone / Contact 系の項目が Very Poor のため、表示設定に関係なく PhysBone・PhysBone Collider・Contact がすべて除去されます (docs)");
-                if (dynamicsConstraint)
-                    ctx.Issue(CctSeverity.Warning, "MOBILE_DYNAMICS_REMOVED",
-                        $"{label}: Constraint 系の項目が Very Poor のため、VRChat Constraint がすべて除去されます (docs)");
-                if (p.Value)
-                {
-                    var removed = new List<string>();
-                    foreach (var key in new[] { "lights", "cloths", "physics_colliders", "physics_rigidbodies", "audio_sources" })
-                        if (Convert.ToInt64(o.Values[key] ?? 0L) > 0) removed.Add($"{Ranks.Find(key).Label} {Convert.ToInt64(o.Values[key])}");
-                    if (removed.Count > 0)
-                        ctx.Issue(CctSeverity.Info, "MOBILE_REMOVED_COMPONENTS",
-                            $"{label}: {string.Join(", ", removed)} はモバイルでは常に無効/除去されます (docs: Mobile Removed Components)。SDK の計算ではこれらがあると該当項目が Very Poor になります");
-                }
+                // docs footnote: exceeding Very Poor on mobile removes all PhysBones, Contacts and VRChat Constraints, even with "Show Avatar".
+                if (dynamicsRows.Count > 0)
+                    ctx.Issue(ctx.ForPlatform(CctSeverity.Warning, mobile), "MOBILE_DYNAMICS_REMOVED",
+                        $"{label}: {string.Join(", ", dynamicsRows)} が Very Poor のため、表示設定や Show Avatar に関係なく PhysBone・PhysBone Collider・Contact・VRChat Constraint が除去されます (docs: Mobile Avatar Component Limits)。" +
+                        "PhysBone 8 個 / 影響 Transform 64 / Collider 16 / 衝突チェック 64 / Contact 16 / Constraint 150 個 / 深さ 50 以下にしてください",
+                        value: dynamicsRows.Cast<object>().ToList());
+                if (removedRows.Count > 0)
+                    ctx.Issue(ctx.ForPlatform(CctSeverity.Warning, mobile), "MOBILE_REMOVED_COMPONENTS",
+                        $"{label}: {string.Join(", ", removedRows)} はモバイルのアバターでは使えず常に除去されます (docs: Mobile Removed Components)。" +
+                        "SDK の計算ではこれらが 1 つでもあると Very Poor (総合も Very Poor) になり、Light / Cloth / Collider / Rigidbody / AudioSource はモバイルのビルドターゲットではホワイトリスト外のエラーでアップロードできません。モバイル版では削除するか EditorOnly にしてください" +
+                        (removedRows.Any(x => x.StartsWith("Lights", StringComparison.Ordinal)) ? " (Lights には Particle System の Lights モジュールに設定された Light も含みます)" : ""),
+                        value: removedRows.Cast<object>().ToList());
                 if (ctx.Descriptor != null && o.Ranks.TryGetValue(p.Key, out var rankObj) && rankObj is Dictionary<string, object> rank &&
                     rank.TryGetValue("fallback_eligible", out var fe) && fe is bool eligible && !eligible)
-                {
-                    bool humanoid = ctx.RootAnimator != null && SafeIsHuman(ctx.RootAnimator);
-                    ctx.Issue(CctSeverity.Info, "FALLBACK_INELIGIBLE",
-                        $"{label}: カスタム Fallback には使えません ({(humanoid ? "総合ランクが Good より悪い: " + Ranks.Name(o.Overall[p.Key]) : "Humanoid ではない")})。Fallback にするには Humanoid かつ総合 Good 以上が必要です");
-                }
+                    fallbackReasons.Add($"{label}: 総合 {Ranks.DisplayName(o.Overall[p.Key])}");
+            }
+            if (fallbackReasons.Count > 0)
+            {
+                bool humanoid = ctx.RootAnimator != null && SafeIsHuman(ctx.RootAnimator);
+                ctx.Issue(CctSeverity.Info, "FALLBACK_INELIGIBLE",
+                    $"カスタム Fallback には使えません ({(humanoid ? string.Join(" / ", fallbackReasons) : "Humanoid ではありません")})。Fallback にするには Humanoid かつ総合 Good 以上が必要です (対応する全プラットフォームでのアップロードも必要)");
             }
 
             // Hard caps outside the rank system (SDK AvatarValidation constants, SDK 3.10.5).
@@ -354,7 +413,8 @@ namespace Naoking.ClaudeCreatorTools
                         ? string.Join(", ", rows.OrderByDescending(x => x.Key).Take(3).Select(x => $"{x.Data["path"]} ({x.Data["max_offset_m"]} m)"))
                         : "";
                     ctx.Issue(CctSeverity.Warning, "BOUNDS_LARGE",
-                        $"Bounds が {FormatValue(bdef, ext)} で 5x6x5 m を超え Very Poor です (総合ランクにも入ります)。遠くまで伸びている Renderer: {reach}",
+                        $"Bounds が {FormatValue(bdef, ext)} で 5x6x5 m を超え Very Poor です。docs では Bounds Size だけで表示がブロックされることはありませんが、SDK の総合ランクには入ります。" +
+                        $"非表示のオブジェクトも数えるため、遠くに置いたギミックや大きなメッシュを確認してください。遠くまで伸びている Renderer: {reach}",
                         value: DisplayValue(bdef, ext), limit: new List<object> { 5.0, 6.0, 5.0 });
                 }
             }
@@ -425,6 +485,57 @@ namespace Naoking.ClaudeCreatorTools
             var applyOnBuild = NdmfApplyOnBuild();
             if (applyOnBuild.HasValue) notes["ndmf_apply_on_build"] = applyOnBuild.Value;
             return notes;
+        }
+
+        /// <summary>
+        /// Issue codes whose error-severity instances stop the build: the SDK 3.10.5 avatar builder reports them with OnGUIError
+        /// (Build / Upload disabled) for the active build target (research/avatar-limits.md §6; the mobile-only rules are errors only
+        /// on an Android/iOS target), and POST_BUILD_NDMF_ERROR (an NDMF Error / InternalError fails the build).
+        /// </summary>
+        static readonly string[] UploadBlockingCodes =
+        {
+            "HARD_LIMIT_EXCEEDED", "GLOBAL_COLLIDERS_EXCEEDED", "MESH_NOT_READABLE", "BLENDSHAPE_NORMALS_LEGACY_OFF",
+            "TEXTURE_MIP_STREAMING_OFF", "TEXTURE_MAX_SIZE_OVER_8192", "ANDROID_INCOMPATIBLE_SHADER", "NOT_WHITELISTED",
+            "NOT_WHITELISTED_MOBILE", "DYNAMIC_BONE_PRESENT", "UNITY_CONSTRAINTS", "PIPELINE_MANAGER_COUNT", "PARTICLE_STOP_ACTION_DESTROY",
+            "PARTICLE_ROOT_STOP_DISABLE", "TRAIL_AUTODESTRUCT", "AUDIO_DECOMPRESS_ON_LOAD", "ROOT_ANIMATOR_MISSING", "AVATAR_INACTIVE",
+            "HUMANOID_BONES_MISSING", "HUMANOID_SPINE_HIERARCHY", "AVATAR_HEIGHT", "VISEME_MESH_MISSING", "GESTURE_MASK_MISSING",
+            "EXPRESSIONS_ASSET_MISSING", "PARAM_BUDGET_EXCEEDED", "MENU_PARAM_UNDEFINED", "MENU_PUPPET_BOOL_PARAM", "MENU_ICON_INVALID",
+            "POST_BUILD_NDMF_ERROR",
+        };
+
+        /// <summary>Reported as warnings because the tool reads a cached value, but the SDK makes them an error.</summary>
+        static readonly string[] MayBlockCodes = { "ARMATURE_NOT_DIRECT_CHILD" };
+
+        /// <summary>data.upload: would the SDK builder (active build target) let this avatar be built and uploaded?</summary>
+        static Dictionary<string, object> BuildUploadSummary(Ctx ctx)
+        {
+            var d = new Dictionary<string, object>
+            {
+                ["build_target"] = ctx.ActiveTarget,
+                ["platform"] = ctx.ActiveMobile ? (ctx.ActiveTarget == "iOS" ? "ios" : "android") : "pc",
+            };
+            if (ctx.Descriptor == null)
+            {
+                d["applicable"] = false;
+                d["note"] = "VRCAvatarDescriptor が無いため、アップロードの可否は判定していません";
+                return d;
+            }
+            var blocking = new List<object>();
+            foreach (var code in UploadBlockingCodes)
+                if (ctx.ErrorCounts.TryGetValue(code, out var n) && n > 0)
+                    blocking.Add(new Dictionary<string, object> { ["code"] = code, ["count"] = n });
+            var other = ctx.ErrorCounts.Where(kv => kv.Value > 0 && Array.IndexOf(UploadBlockingCodes, kv.Key) < 0)
+                .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+                .Select(kv => (object)new Dictionary<string, object> { ["code"] = kv.Key, ["count"] = kv.Value }).ToList();
+            var may = MayBlockCodes.Where(c => ctx.WarningCounts.TryGetValue(c, out var n) && n > 0).Cast<object>().ToList();
+            d["blocked"] = blocking.Count > 0;
+            d["blocking"] = blocking;
+            // e.g. MISSING_SCRIPT, PHYSBONE_CHAIN_TOO_LONG, POST_BUILD_PARAM_BUDGET_EXCEEDED: real problems the SDK does not stop.
+            if (other.Count > 0) d["errors_not_blocking"] = other;
+            if (may.Count > 0) d["may_block"] = may;
+            d["note"] = $"SDK 3.10.5 のビルダーがビルドターゲット {ctx.ActiveTarget} で Build / Upload を止める error だけを blocking に数えています (NDMF の Error を含む)。" +
+                        "未検査: ビルド後のサイズ上限 (PC 200/500 MB、モバイル 10/40 MB)、PhysBone の依存の深さ、Particle の衝突レイヤー";
+            return d;
         }
     }
 }

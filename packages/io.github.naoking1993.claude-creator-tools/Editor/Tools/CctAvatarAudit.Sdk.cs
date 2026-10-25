@@ -12,6 +12,8 @@ namespace Naoking.ClaudeCreatorTools
     //   VRCConstraintManager.Sdk_ManuallyRefreshGroups(VRCConstraintBase[])    - like the SDK builder, so Constraint Depth matches
     //   new AvatarPerformanceStats(bool) + AvatarPerformance.CalculatePerformanceStats(string, GameObject, AvatarPerformanceStats, bool)
     //   AvatarPerformanceStats.CalculateAllPerformanceRatings(bool) + GetPerformanceRatingForCategory(AvatarPerformanceCategory)
+    // Categories and ratings are matched by enum NAME (Ranks.SdkCategoryName / Ranks.Parse), never by the 3.10.5 int values, so
+    // an older or newer SDK (e.g. no RaycastCount before 3.10.3) degrades per stat instead of failing as a whole.
     // Side effects (verified in the SDK source): VRCPhysBoneBase.InitTransforms(force) rewrites [NonSerialized] chain data and the
     // constraint refresh writes non-serialized group indices; nothing serialized, no scene dirtying. Not run in Play mode.
     public static partial class CctAvatarAudit
@@ -20,8 +22,6 @@ namespace Naoking.ClaudeCreatorTools
         const string TAvatarPerformanceStats = "VRC.SDKBase.Validation.Performance.Stats.AvatarPerformanceStats";
         const string TAvatarPerformanceCategory = "VRC.SDKBase.Validation.Performance.AvatarPerformanceCategory";
         const string TVrcConstraintManager = "VRC.Dynamics.VRCConstraintManager";
-        const int CategoryOverall = 1;  // AvatarPerformanceCategory.Overall (FieldCheck enum dump)
-        const int CategoryLast = 32;    // RaycastCount; AvatarPerformanceCategoryCount (33) would throw IndexOutOfRange in the SDK
 
         sealed class SdkResult
         {
@@ -38,6 +38,11 @@ namespace Naoking.ClaudeCreatorTools
             public readonly Dictionary<string, int> Overall = new Dictionary<string, int>();
             public string ConstraintRefresh = "not_needed";
             public bool IgnoreRuleReplaced;
+            /// <summary>Stat keys whose AvatarPerformanceCategory member this SDK does not define (rated with the tool's table).</summary>
+            public readonly List<string> UnratedKeys = new List<string>();
+            /// <summary>GetPerformanceRatingForCategory calls that threw (that stat falls back to the tool's table).</summary>
+            public int RatingFailures;
+            public string RatingError;
         }
 
         static Exception Unwrap(Exception e)
@@ -92,21 +97,45 @@ namespace Naoking.ClaudeCreatorTools
                 var stats = ctor.Invoke(new object[] { false });
                 mCalc.Invoke(null, new object[] { root.name, root, stats, false });
 
-                foreach (var def in Ranks.All) ReadSdkValue(tStats, stats, def, res);
-                var complete = tStats.GetField("contactCompleteCount", PI)?.GetValue(stats);
-                if (complete != null) res.ContactCompleteCount = Convert.ToInt32(complete);
+                // Per field: a field whose type changed in another SDK version is skipped (that stat is estimated), not fatal.
+                foreach (var def in Ranks.All)
+                {
+                    try { ReadSdkValue(tStats, stats, def, res); }
+                    catch (Exception) { res.Values.Remove(def.Key); }
+                }
+                try
+                {
+                    var complete = tStats.GetField("contactCompleteCount", PI)?.GetValue(stats);
+                    if (complete != null) res.ContactCompleteCount = Convert.ToInt32(complete);
+                }
+                catch (Exception) { res.ContactCompleteCount = null; /* the estimator's count is used */ }
 
-                // Same counts, both threshold sets: CalculateAllPerformanceRatings clears the rating cache and re-rates 1..32.
+                // Categories are looked up by NAME (Ranks.SdkCategoryName). Older SDKs lack members (RaycastCount before 3.10.3, the
+                // constraint rows before 3.7.0) and size the rating cache by their own category count, so passing the 3.10.5 int
+                // would throw IndexOutOfRange and discard the whole SDK result. Missing members are rated with the tool's table.
+                var categories = new List<KeyValuePair<string, object>>();
+                foreach (var def in Ranks.All)
+                {
+                    var name = def.SdkCategory;
+                    if (name != null && Enum.IsDefined(tCat, name)) categories.Add(new KeyValuePair<string, object>(def.Key, Enum.Parse(tCat, name)));
+                    else res.UnratedKeys.Add(def.Key);
+                }
+                var overallCategory = Enum.IsDefined(tCat, Ranks.SdkOverallCategory) ? Enum.Parse(tCat, Ranks.SdkOverallCategory) : null;
+
+                // Same counts, both threshold sets: CalculateAllPerformanceRatings clears the rating cache and re-rates every category.
                 foreach (var platform in new[] { "pc", "mobile" })
                 {
                     bool isMobile = platform == "mobile";
                     if (isMobile ? !mobile : !pc) continue;
                     mAll.Invoke(stats, new object[] { isMobile });
                     var ratings = new Dictionary<string, int>(StringComparer.Ordinal);
-                    foreach (var def in Ranks.All)
-                        ratings[def.Key] = Convert.ToInt32(mRating.Invoke(stats, new[] { Enum.ToObject(tCat, def.Category) }));
+                    foreach (var kv in categories)
+                    {
+                        var rating = SdkRating(mRating, stats, kv.Value, res);
+                        if (rating != Ranks.None) ratings[kv.Key] = rating;
+                    }
                     res.Ratings[platform] = ratings;
-                    res.Overall[platform] = Convert.ToInt32(mRating.Invoke(stats, new[] { Enum.ToObject(tCat, CategoryOverall) }));
+                    if (overallCategory != null) res.Overall[platform] = SdkRating(mRating, stats, overallCategory, res);
                 }
                 res.Ok = true;
             }
@@ -122,6 +151,25 @@ namespace Naoking.ClaudeCreatorTools
                 res.ElapsedMs = sw.ElapsedMilliseconds;
             }
             return res;
+        }
+
+        /// <summary>
+        /// One category rating by enum NAME ("VeryPoor" -> Ranks.VeryPoor), so a renumbered PerformanceRating cannot shift ranks.
+        /// A category that throws is skipped (counted in RatingFailures) instead of discarding the whole SDK result.
+        /// </summary>
+        static int SdkRating(MethodInfo mRating, object stats, object category, SdkResult res)
+        {
+            try
+            {
+                var v = mRating.Invoke(stats, new[] { category });
+                return v == null ? Ranks.None : Ranks.Parse(v.ToString());
+            }
+            catch (Exception e)
+            {
+                res.RatingFailures++;
+                res.RatingError ??= category + ": " + Unwrap(e).GetType().Name + ": " + Unwrap(e).Message;
+                return Ranks.None;
+            }
         }
 
         static void ReadSdkValue(Type tStats, object stats, Ranks.Stat def, SdkResult res)

@@ -31,7 +31,7 @@ namespace Naoking.ClaudeCreatorTools
             var ac = u.Controller;
             foreach (var p in ac.parameters ?? new AnimatorControllerParameter[0])
             {
-                if (p == null) continue;
+                if (p == null || p.name == null) continue;
                 if (u.Params.ContainsKey(p.name))
                 {
                     ctx.Issue(CctSeverity.Warning, "PARAM_DUPLICATE", $"パラメータ '{p.name}' が '{u.Label}' に重複して定義されています", u.Id, p.name, asset: u.Asset, quiet: u.Quiet);
@@ -177,11 +177,11 @@ namespace Naoking.ClaudeCreatorTools
                 if (s.mirrorParameterActive && !string.IsNullOrEmpty(s.mirrorParameter)) AddUse(ctx, u, ld, where, "mirror", s.mirrorParameter);
                 if (s.cycleOffsetParameterActive && !string.IsNullOrEmpty(s.cycleOffsetParameter)) AddUse(ctx, u, ld, where, "cycle_offset", s.cycleOffsetParameter);
 
-                var behaviours = synced ? SyncedBehaviours(u, s, ld.Index) : GetBehaviours(s, () => s.behaviours);
+                var behaviours = synced ? SyncedBehaviours(u, ld, s) : GetBehaviours(s, () => s.behaviours);
                 var bdesc = new List<object>();
                 foreach (var b in behaviours)
                 {
-                    var d = DescribeBehaviour(ctx, u, ld, where, b, false);
+                    var d = DescribeBehaviour(ctx, u, ld, where, b, false, sd);
                     if (emit) bdesc.Add(d);
                 }
 
@@ -226,7 +226,11 @@ namespace Naoking.ClaudeCreatorTools
 
             if (!ld.Included) return;
             if (ld.States.Count == 0)
-                ctx.Issue(CctSeverity.Info, "LAYER_EMPTY", $"レイヤー '{ld.Name}' にステートがありません", Loc(u, ld, null), asset: u.Asset, quiet: u.Quiet);
+                ctx.Issue(CctSeverity.Info, "LAYER_EMPTY",
+                    $"レイヤー '{ld.Name}' にステートがありません" +
+                    // ndmf GlobalTransformations.RemoveEmptyLayers (run by MA): no states / sub machines, not synced, not first.
+                    (ctx.MaInstalled && ld.Index > 0 && !synced && ld.Machines.Count <= 1 ? " (Modular Avatar 導入済みのため、ビルド時に削除されます)" : ""),
+                    Loc(u, ld, null), asset: u.Asset, quiet: u.Quiet);
             if (synced) return; // transitions / machine behaviours belong to the source layer
 
             foreach (var md in ld.Machines)
@@ -309,14 +313,45 @@ namespace Naoking.ClaudeCreatorTools
             return list;
         }
 
-        static List<Object> SyncedBehaviours(Unit u, AnimatorState s, int layerIndex)
+        /// <summary>
+        /// Behaviours of a state in a synced layer (the layer's own override list, not the source state's).
+        /// AnimatorControllerLayer.GetOverrideBehaviours (what NDMF / AAO use) and AnimatorController.GetStateEffectiveBehaviours
+        /// both return "ScriptableObject[] as StateMachineBehaviour[]" (UnityCsReference), which can be null; then the
+        /// serialized m_AnimatorLayers[i].m_Behaviours[] {m_State, m_StateMachineBehaviours[]} list is read instead
+        /// (missing scripts become null entries -> MISSING_BEHAVIOUR).
+        /// </summary>
+        static List<Object> SyncedBehaviours(Unit u, LayerData ld, AnimatorState s)
         {
-            try
+            StateMachineBehaviour[] arr = null;
+            try { arr = ld.Layer.GetOverrideBehaviours(s); }
+            catch (Exception) { /* fall through */ }
+            if (arr == null)
             {
-                var arr = u.Controller.GetStateEffectiveBehaviours(s, layerIndex);
-                return arr == null ? new List<Object>() : arr.Select(b => (Object)b).ToList();
+                try { arr = u.Controller.GetStateEffectiveBehaviours(s, ld.Index); }
+                catch (Exception) { /* fall through */ }
             }
-            catch (Exception) { return new List<Object>(); }
+            if (arr != null) return arr.Select(b => (Object)b).ToList();
+
+            if (ld.SerializedOverrideBehaviours == null)
+            {
+                ld.SerializedOverrideBehaviours = new Dictionary<AnimatorState, List<Object>>();
+                try
+                {
+                    using (var so = new SerializedObject(u.Controller))
+                    {
+                        var layers = so.FindProperty("m_AnimatorLayers");
+                        var layerProp = layers != null && layers.isArray && ld.Index < layers.arraySize ? layers.GetArrayElementAtIndex(ld.Index) : null;
+                        foreach (var pair in CctSerialized.Elements(CctSerialized.Child(layerProp, "m_Behaviours")))
+                        {
+                            if (!(CctSerialized.GetObject(CctSerialized.Child(pair, "m_State")) is AnimatorState state)) continue;
+                            ld.SerializedOverrideBehaviours[state] = CctSerialized.Elements(CctSerialized.Child(pair, "m_StateMachineBehaviours"))
+                                .Select(el => (Object)(CctSerialized.GetObject(el) as StateMachineBehaviour)).ToList();
+                        }
+                    }
+                }
+                catch (Exception) { /* leave empty */ }
+            }
+            return ld.SerializedOverrideBehaviours.TryGetValue(s, out var list) ? list : new List<Object>();
         }
 
         // =====================================================================================================================
@@ -384,7 +419,10 @@ namespace Naoking.ClaudeCreatorTools
                             {
                                 f.Empty = true;
                                 if (btSo == null) btSo = new SerializedObject(bt);
-                                var childProp = CctSerialized.Child(btSo.FindProperty("m_Childs")?.GetArrayElementAtIndex(i), "m_Motion");
+                                var childs = btSo.FindProperty("m_Childs");
+                                var childProp = childs != null && childs.isArray && i < childs.arraySize
+                                    ? CctSerialized.Child(childs.GetArrayElementAtIndex(i), "m_Motion")
+                                    : null;
                                 if (CctSerialized.IsMissingReference(childProp))
                                 {
                                     ctx.Issue(CctSeverity.Warning, "MISSING_MOTION", $"BlendTree '{bt.name}' の子 {i} の Motion 参照が切れています", where, asset: u.Asset, quiet: u.Quiet);
@@ -454,9 +492,21 @@ namespace Naoking.ClaudeCreatorTools
                 ctx.Issue(CctSeverity.Warning, "TRANSITION_NEVER_FIRES",
                     "条件も Exit Time も無い遷移です。Unity はこの遷移を無視します (条件を足すか Has Exit Time を有効に)", at, asset: u.Asset, quiet: u.Quiet);
             if (kind == "any" && st.canTransitionToSelf && !conds.Any(c => u.Params.TryGetValue(c.parameter ?? "", out var pt) && pt == AnimatorControllerParameterType.Trigger))
-                ctx.Issue(CctSeverity.Warning, "ANYSTATE_SELF_LOOP",
-                    "AnyState からの遷移で Can Transition To Self が有効、かつ Trigger 以外の条件です。条件が成立している間は遷移が繰り返され、ステートが毎回最初から再生されます (Behaviour も毎回実行)。通常は Can Transition To Self を外します",
-                    at, ConditionsSummary(conds), asset: u.Asset, quiet: u.Quiet);
+            {
+                // Self-resetting pattern: the destination's Parameter Driver rewrites a condition parameter on entry, so the
+                // condition usually turns false after one entry (then this is not a loop).
+                var resets = t.destinationState != null && ld.StateByObj.TryGetValue(t.destinationState, out var dsd)
+                    ? conds.Select(c => c.parameter).Where(p => !string.IsNullOrEmpty(p) && dsd.DriverWrites.Contains(p)).Distinct().ToList()
+                    : new List<string>();
+                if (resets.Count > 0)
+                    ctx.Issue(CctSeverity.Info, "ANYSTATE_SELF_LOOP",
+                        $"AnyState からの遷移で Can Transition To Self が有効です。遷移先の Parameter Driver が条件のパラメータ ({string.Join(", ", resets)}) を書き換えるので、通常は 1 回で止まります。書き換え後も条件が成立する値なら入り直しを繰り返します",
+                        at, ConditionsSummary(conds), asset: u.Asset, quiet: u.Quiet);
+                else
+                    ctx.Issue(CctSeverity.Warning, "ANYSTATE_SELF_LOOP",
+                        "AnyState からの遷移で Can Transition To Self が有効、かつ Trigger 以外の条件です。条件が成立している間は遷移が繰り返され、ステートが毎回最初から再生されます (Behaviour も毎回実行)。通常は Can Transition To Self を外します",
+                        at, ConditionsSummary(conds), asset: u.Asset, quiet: u.Quiet);
+            }
         }
 
         static string DestLabel(LayerData ld, AnimatorTransitionBase t)
@@ -521,7 +571,8 @@ namespace Naoking.ClaudeCreatorTools
             new[] { "eyes", "trackingEyes" }, new[] { "mouth", "trackingMouth" },
         };
 
-        static Dictionary<string, object> DescribeBehaviour(Ctx ctx, Unit u, LayerData ld, string at, Object b, bool onMachine)
+        static Dictionary<string, object> DescribeBehaviour(Ctx ctx, Unit u, LayerData ld, string at, Object b, bool onMachine,
+            StateData state = null)
         {
             if (b == null)
             {
@@ -533,7 +584,7 @@ namespace Naoking.ClaudeCreatorTools
             {
                 using (var so = new SerializedObject(b))
                 {
-                    if (IsAny(b, TParameterDriver, TParameterDriverBase)) ReadDriver(ctx, u, ld, at, so, d);
+                    if (IsAny(b, TParameterDriver, TParameterDriverBase)) ReadDriver(ctx, u, ld, at, so, d, state);
                     else if (IsAny(b, TTrackingControl, TTrackingControlBase))
                     {
                         var parts = new Dictionary<string, object>();
@@ -542,6 +593,7 @@ namespace Naoking.ClaudeCreatorTools
                             // VRC_AnimatorTrackingControl+TrackingType: NoChange=0, Tracking=1, Animation=2
                             var v = CctSerialized.GetInt(so.FindProperty(p[1]), 0);
                             if (v != 0) parts[p[0]] = v == 1 ? "Tracking" : v == 2 ? "Animation" : v.ToString(CultureInfo.InvariantCulture);
+                            if (v == 1 || v == 2) AddPersist(ctx, u, at, "tracking:" + p[0], v == 2);
                         }
                         d["tracking"] = parts;
                     }
@@ -555,18 +607,35 @@ namespace Naoking.ClaudeCreatorTools
                         d["goal_weight"] = Round(goal);
                         d["blend_duration"] = Round(dur);
                         ctx.PlayableControls.Add(new PlayableControlRef { Unit = u, At = at, Layer = layer, Goal = goal, Duration = dur });
+                        if (layer == 0) AddPersist(ctx, u, at, "action_weight", goal > 0f); // BlendableLayer Action=0
                     }
                     else if (IsAny(b, TLocomotionControl, TLocomotionControlBase))
-                        d["disable_locomotion"] = CctSerialized.GetBool(so.FindProperty("disableLocomotion"));
+                    {
+                        var disable = CctSerialized.GetBool(so.FindProperty("disableLocomotion"));
+                        d["disable_locomotion"] = disable;
+                        AddPersist(ctx, u, at, "locomotion", disable);
+                    }
                     else if (IsAny(b, TTemporaryPoseSpace, TTemporaryPoseSpaceBase))
                     {
-                        d["enter_pose_space"] = CctSerialized.GetBool(so.FindProperty("enterPoseSpace"));
+                        var enter = CctSerialized.GetBool(so.FindProperty("enterPoseSpace"));
+                        d["enter_pose_space"] = enter;
+                        AddPersist(ctx, u, at, "pose_space", enter);
                         d["fixed_delay"] = CctSerialized.GetBool(so.FindProperty("fixedDelay"));
                         d["delay_time"] = Round(CctSerialized.GetFloat(so.FindProperty("delayTime")));
                     }
-                    else if (IsAny(b, TPlayAudio, TPlayAudioBase)) ReadPlayAudio(ctx, u, ld, at, so, d, onMachine);
-                    else d["type"] = b.GetType().FullName;
+                    else if (IsAny(b, TPlayAudio, TPlayAudioBase))
+                    {
+                        ReadPlayAudio(ctx, u, ld, at, so, d, onMachine);
+                        return d; // VRC_AnimatorPlayAudio has no debugString
+                    }
+                    else
+                    {
+                        d["type"] = b.GetType().FullName;
+                        return d;
+                    }
 
+                    // debugString: declared by the parameter driver, tracking / layer / playable layer / locomotion control
+                    // and temporary pose space behaviours (FieldCheck dumps).
                     var dbg = CctSerialized.GetString(so.FindProperty("debugString"));
                     if (!string.IsNullOrEmpty(dbg)) d["debug"] = dbg;
                 }
@@ -590,7 +659,7 @@ namespace Naoking.ClaudeCreatorTools
             }
         }
 
-        static void ReadDriver(Ctx ctx, Unit u, LayerData ld, string at, SerializedObject so, Dictionary<string, object> d)
+        static void ReadDriver(Ctx ctx, Unit u, LayerData ld, string at, SerializedObject so, Dictionary<string, object> d, StateData state)
         {
             bool local = CctSerialized.GetBool(so.FindProperty("localOnly"));
             d["local_only"] = local;
@@ -605,6 +674,7 @@ namespace Naoking.ClaudeCreatorTools
                 var destType = ParamTypeName(ctx, u, name);
                 string where = at + " [Driver " + typeName + " " + name + "]";
                 AddUse(ctx, u, ld, at, "driver_dest", name, typeName);
+                if (state != null && !string.IsNullOrEmpty(name)) state.DriverWrites.Add(name);
                 switch (type)
                 {
                     case 0:
@@ -651,16 +721,23 @@ namespace Naoking.ClaudeCreatorTools
                         $"Bool パラメータ '{name}' に Add を使っています。docs: Add は float / int のみ (bool は Set / Random / Copy)",
                         where, name, asset: u.Asset, quiet: u.Quiet);
                 if ((type == 1 || type == 2) && !local)
-                    ctx.Issue(CctSeverity.Info, "DRIVER_NON_LOCAL",
+                    ctx.Issue(CctSeverity.Info, "DRIVER_IN_NON_LOCAL",
                         $"{typeName} が Local Only なしで動きます。docs: Add / Random はリモートで結果が変わり得るため、同期パラメータを宛先にしてローカルだけで実行することが推奨されています",
                         where, name, asset: u.Asset, quiet: u.Quiet);
-                if (type == 0 && ctx.Expression != null && ctx.Expression.TryGetValue(name, out var ep) && ep.Synced)
+                // docs state-behaviors.md:118-120: anything defined in VRCExpressionParameters is clamped to Int [0,255] /
+                // Float [-1,1]; parameters only in the controller are not. Checked for Set values and Random bounds.
+                if ((type == 0 || type == 2) && ctx.Expression != null && ctx.Expression.TryGetValue(name, out var ep) &&
+                    (ep.ValueType == 0 || ep.ValueType == 1))
                 {
-                    bool outOfRange = ep.ValueType == 0 ? (value < 0f || value > 255f) : ep.ValueType == 1 && (value < -1f || value > 1f);
-                    if (outOfRange)
+                    float lo = ep.ValueType == 0 ? 0f : -1f, hi = ep.ValueType == 0 ? 255f : 1f;
+                    var values = type == 0
+                        ? new[] { value }
+                        : new[] { CctSerialized.GetFloat(CctSerialized.Child(el, "valueMin")), CctSerialized.GetFloat(CctSerialized.Child(el, "valueMax")) };
+                    var bad = values.Where(x => x < lo || x > hi).ToList();
+                    if (bad.Count > 0)
                         ctx.Issue(CctSeverity.Info, "DRIVER_VALUE_OUT_OF_RANGE",
-                            $"Set の値 {Round(value).ToString(CultureInfo.InvariantCulture)} は同期パラメータ '{name}' ({ExprTypeName(ep.ValueType)}) の範囲外です。docs: 同期パラメータは Int [0,255] / Float [-1,1] に丸められます",
-                            where, Round(value), ep.ValueType == 0 ? "0..255" : "-1..1", u.Asset, u.Quiet);
+                            $"{typeName} の値 {string.Join(" / ", bad.Select(x => Round(x).ToString(CultureInfo.InvariantCulture)))} は Expression Parameter '{name}' ({ExprTypeName(ep.ValueType)}) の範囲外です。docs: Expression Parameters にあるパラメータは Int 0〜255 / Float -1〜1 に丸められます (clamp)",
+                            where, Round(bad[0]), ep.ValueType == 0 ? "0..255" : "-1..1", u.Asset, u.Quiet);
                 }
             }
             d["entries"] = entries;
@@ -717,14 +794,24 @@ namespace Naoking.ClaudeCreatorTools
                 var param = CctSerialized.GetString(so.FindProperty("ParameterName"), "");
                 d["parameter"] = param;
                 AddUse(ctx, u, ld, at, "play_audio", param);
-                if (ctx.Expression != null && !string.IsNullOrEmpty(param) && !ctx.Expression.ContainsKey(param))
+                // docs state-behaviors.md:203: an int avatar parameter that must be defined in Expression Parameters (the
+                // client reads it; the SDK has no implementation to show whether the animator declaration matters).
+                ExprParam pep = null;
+                if (ctx.AvatarRoot != null && !string.IsNullOrEmpty(param) && (ctx.Expression == null || !ctx.Expression.TryGetValue(param, out pep)))
                     ctx.Issue(CctSeverity.Warning, "PLAY_AUDIO_PARAM_NOT_IN_EXPRESSIONS",
-                        $"Animator Play Audio の Playback Order = Parameter の '{param}' が Expression Parameters にありません。docs: Expression Parameters に定義が必要で、見つからない場合は最初のクリップが使われます",
+                        $"Animator Play Audio の Playback Order = Parameter の '{param}' が Expression Parameters にありません{(ctx.Expression == null ? " (Expression Parameters が未設定)" : "")}。docs: Expression Parameters に int で定義が必要で、見つからない場合は最初のクリップが使われます",
                         at, param, asset: u.Asset, quiet: u.Quiet);
+                else if (pep != null && pep.ValueType != 0)
+                    ctx.Issue(u.Quiet ? CctSeverity.Info : CctSeverity.Warning, "PARAM_TYPE_MISMATCH",
+                        $"Animator Play Audio の Parameter '{param}' は Expression Parameters で {ExprTypeName(pep.ValueType)} です。docs: Playback Order = Parameter は int 型のパラメータで何番目のクリップかを選びます",
+                        at, new Dictionary<string, object> { ["source"] = "usage", ["param"] = param, ["type"] = ExprTypeName(pep.ValueType), ["uses"] = 1, ["first"] = "play_audio" },
+                        asset: u.Asset, quiet: u.Quiet);
             }
             if (u.BindingRoot != null)
             {
-                var t = sourcePath.Length == 0 ? u.BindingRoot : u.BindingRoot.Find(sourcePath);
+                // docs write Source Path with a trailing slash ("Armature/Hips/Spine/"); Transform.Find needs it trimmed.
+                var trimmed = sourcePath.Trim('/');
+                var t = trimmed.Length == 0 ? u.BindingRoot : u.BindingRoot.Find(trimmed);
                 if (t == null || t.GetComponent<AudioSource>() == null)
                     ctx.Issue(u.BindingRootEstimate ? CctSeverity.Info : CctSeverity.Warning, "PLAY_AUDIO_SOURCE_MISSING",
                         $"Animator Play Audio の Source Path '{sourcePath}' に AudioSource がありません ({CctTargets.GetPath(u.BindingRoot)} 基準)。docs: 見つからない場合この Behaviour は無効になります",
@@ -735,7 +822,10 @@ namespace Naoking.ClaudeCreatorTools
                     "Animator Play Audio がサブステートマシン自体に付いています。docs: 内部の全遷移で実行されるため非推奨 (ステートに付ける)", at, asset: u.Asset, quiet: u.Quiet);
         }
 
-        /// <summary>Type of a parameter as seen by this controller: own declaration, else merged controllers, else Expression Parameters.</summary>
+        static void AddPersist(Ctx ctx, Unit u, string at, string kind, bool away) =>
+            ctx.Persistent.Add(new PersistRef { Unit = u, At = at, Kind = kind, Away = away });
+
+        /// <summary>Type of a parameter as seen by this controller: its own declaration, else the Expression Parameter type.</summary>
         static string ParamTypeName(Ctx ctx, Unit u, string name)
         {
             if (string.IsNullOrEmpty(name)) return null;

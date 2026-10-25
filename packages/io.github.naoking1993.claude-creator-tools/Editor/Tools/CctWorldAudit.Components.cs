@@ -187,8 +187,10 @@ namespace Naoking.ClaudeCreatorTools
             if ((v.Kinds & K.LegacyAnimation) != 0) return "レガシー Animation の代わりに Animator を使ってください";
             if ((v.Kinds & K.AvatarDescriptor) != 0) return "アバター用のコンポーネントです。ワールドでは使えません";
             if ((v.Kinds & K.EventHandler) != 0 || (v.Kinds & K.Sdk2) != 0) return "SDK2 のコンポーネントです";
+            // VRWorld Toolkit (community) reports Bakery lights the same way: "external scripts get removed in the upload
+            // process" and the client logs errors for them; tagging the object EditorOnly removes them at build instead.
             if (asm != null && (asm.StartsWith("Assembly-CSharp", StringComparison.Ordinal) || !IsClientAssembly(asm)))
-                return "独自の C# スクリプト (MonoBehaviour) はワールドに含まれません。UdonSharp で実装してください";
+                return "独自の C# スクリプト (MonoBehaviour) はワールドに含まれません。ベイク用などエディタでだけ使うものなら、その GameObject のタグを EditorOnly にするとビルド時に除去されます (読み込み時のエラーも出なくなります)。VRChat 内で動かしたい処理は UdonSharp で実装してください";
             return "";
         }
 
@@ -335,18 +337,21 @@ namespace Naoking.ClaudeCreatorTools
                     if (list.Count == 0 || list[list.Count - 1] != item.O.Path) list.Add(item.O.Path);
                 }
             }
-            foreach (var kv in shaderUse.OrderByDescending(k => k.Value.Count).ThenBy(k => k.Key, StringComparer.Ordinal))
-            {
-                bool docMobile = DocMobileShadersMissingFromSdkList.Contains(kv.Key);
-                bool outline = kv.Key == ToonStandardOutlineShader;
-                ctx.Issue(docMobile ? CctSeverity.Info : CctSeverity.Warning, "ANDROID_SHADER_NOT_SUPPORTED",
-                    outline
-                        ? $"シェーダー '{kv.Key}' は SDK のモバイル用許可リストに無いため SDK が警告します。docs によると Outline 版は PC 専用で、モバイルでは自動的に Outline なしの Toon Standard になります (輪郭線は表示されません)"
-                        : docMobile
-                            ? $"シェーダー '{kv.Key}' は SDK のモバイル用許可リストに名前が無いため SDK が警告しますが、docs ではモバイル用シェーダーです (対応は不要)"
-                            : $"シェーダー '{kv.Key}' はモバイル (Android/iOS) 用の許可リストにありません。SDK は \"World uses unsupported shader\" と警告します。ワールドでは禁止ではありませんが、VRChat/Mobile/* (ベイクなら Lightmapped) が推奨です",
-                    path: kv.Value[0], value: Grouped(kv.Value.Count, kv.Value));
-            }
+            // One issue for all shaders outside the list (the SDK prints one warning per shader name); the per-shader table is
+            // android.shaders_outside_sdk_list. Docs mobile shaders missing from the SDK list get one separate info.
+            var ordered = shaderUse.OrderByDescending(k => k.Value.Count).ThenBy(k => k.Key, StringComparer.Ordinal).ToList();
+            var outsideList = ordered.Where(k => !DocMobileShadersMissingFromSdkList.Contains(k.Key)).ToList();
+            var docOnly = ordered.Where(k => DocMobileShadersMissingFromSdkList.Contains(k.Key)).ToList();
+            if (outsideList.Count > 0)
+                ctx.Issue(CctSeverity.Warning, "ANDROID_SHADER_NOT_SUPPORTED",
+                    $"モバイル (Android/iOS) 用の許可リストに無いシェーダーが {outsideList.Count} 種類あります ({string.Join(", ", outsideList.Take(5).Select(k => $"{k.Key} ×{k.Value.Count}"))}{(outsideList.Count > 5 ? " ほか" : "")})。" +
+                    "SDK はモバイル向けビルドでシェーダーごとに \"World uses unsupported shader\" と警告します。ワールドでは禁止ではありませんが、性能のため VRChat/Mobile/* (ベイクしたライティングなら Lightmapped) が推奨です",
+                    path: outsideList[0].Value[0], value: ShaderTable(outsideList, ctx.TopN));
+            if (docOnly.Count > 0)
+                ctx.Issue(CctSeverity.Info, "ANDROID_SHADER_NOT_SUPPORTED",
+                    $"{string.Join(", ", docOnly.Select(k => k.Key))} は SDK のモバイル用許可リストに名前が無いため SDK が警告しますが、docs ではモバイル用シェーダーです (対応は不要)" +
+                    (docOnly.Any(k => k.Key == ToonStandardOutlineShader) ? "。ただし Outline 版は PC 専用で、モバイルでは自動的に Outline なしの Toon Standard になります (輪郭線は表示されません)" : ""),
+                    path: docOnly[0].Value[0], value: ShaderTable(docOnly, ctx.TopN));
             m["shader_list_source"] = Lists.ShaderListSource;
             m["shaders_outside_sdk_list"] = shaderUse.OrderByDescending(k => k.Value.Count).Take(ctx.TopN)
                 .Select(kv => (object)new Dictionary<string, object> { ["shader"] = kv.Key, ["renderers"] = kv.Value.Count }).ToList();
@@ -400,12 +405,12 @@ namespace Naoking.ClaudeCreatorTools
                     value: ctx.TotalTriangles, limit: MobileTriangleBudget);
 
             // Components disabled on Android (quest-content-limitations.md L47-48).
-            var unsupported = ctx.Audited(K.Cloth | K.DynamicBone).Select(i => i.O.Path + " (" + i.C.GetType().Name + ")").ToList();
-            m["unsupported_components"] = unsupported.Count;
-            if (unsupported.Count > 0)
+            var unsupportedItems = ctx.Audited(K.Cloth | K.DynamicBone).ToList();
+            m["unsupported_components"] = unsupportedItems.Count;
+            if (unsupportedItems.Count > 0)
                 ctx.Issue(CctSeverity.Warning, "ANDROID_UNSUPPORTED_COMPONENT",
-                    $"Android/iOS で完全に無効なコンポーネント (Cloth / Dynamic Bone) が {unsupported.Count} 個あります",
-                    value: Grouped(unsupported.Count, unsupported));
+                    $"Android/iOS で完全に無効なコンポーネント ({string.Join(" / ", unsupportedItems.Select(i => i.C.GetType().Name).Distinct())}) が {unsupportedItems.Count} 個あります。モバイル版では動かない前提で見た目を確認してください (揺れ物は PhysBone なら動きます)",
+                    path: PathOf(unsupportedItems[0]), value: Grouped(unsupportedItems.Count, unsupportedItems.Select(PathOf)));
 
             // Materials: transparency (incl. cutout) and GPU instancing (optimization.md L98, L145-147).
             var transparent = new List<string>();
@@ -434,11 +439,53 @@ namespace Naoking.ClaudeCreatorTools
                     asset: noInstancing[0], value: Grouped(noInstancing.Count, noInstancing));
         }
 
-        /// <summary>Estimated max dimension on a mobile platform: imported size capped by the platform override (or default) Max Size.</summary>
+        static List<object> ShaderTable(List<KeyValuePair<string, List<string>>> shaders, int cap) =>
+            shaders.Take(cap).Select(k => (object)new Dictionary<string, object>
+            {
+                ["shader"] = k.Key, ["renderers"] = k.Value.Count, ["example"] = k.Value[0],
+            }).ToList();
+
+        static System.Reflection.MethodInfo _sourceSizeMethod;
+        static bool _sourceSizeLooked;
+
+        /// <summary>
+        /// Source image size from TextureImporter.GetSourceTextureWidthAndHeight (public in 2022.3, read-only; absent from the
+        /// 2021.1 API this package compiles against, so it is called by reflection). -1 when unavailable.
+        /// </summary>
+        static int SourceTextureMaxDimension(TextureImporter importer)
+        {
+            if (importer == null) return -1;
+            if (!_sourceSizeLooked)
+            {
+                _sourceSizeLooked = true;
+                try
+                {
+                    _sourceSizeMethod = typeof(TextureImporter).GetMethod("GetSourceTextureWidthAndHeight",
+                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance, null,
+                        new[] { typeof(int).MakeByRefType(), typeof(int).MakeByRefType() }, null);
+                }
+                catch (Exception) { _sourceSizeMethod = null; }
+            }
+            if (_sourceSizeMethod == null) return -1;
+            try
+            {
+                var a = new object[] { 0, 0 };
+                _sourceSizeMethod.Invoke(importer, a);
+                return Math.Max((int)a[0], (int)a[1]);
+            }
+            catch (Exception) { return -1; }
+        }
+
+        /// <summary>
+        /// Estimated max dimension on a mobile platform: the source size (or, if unknown, the size imported for the current
+        /// build target) capped by that platform's override Max Size, else the default Max Size.
+        /// </summary>
         static int MobileTextureSize(TextureInfo ti, string platformName)
         {
             int current = Math.Max(ti.Width, ti.Height);
             if (ti.Importer == null) return current;
+            int source = SourceTextureMaxDimension(ti.Importer);
+            if (source > 0) current = source;
             int max = ti.Importer.maxTextureSize;
             try
             {
