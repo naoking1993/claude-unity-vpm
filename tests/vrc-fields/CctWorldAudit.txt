@@ -1,0 +1,147 @@
+# CctWorldAudit (cct_world_audit): every VRChat SDK type / serialized property path the tool reads (SDK 3.10.5).
+# Fields are read with SerializedObject.FindProperty by these exact names; enums are stored as their int values
+# (mapped in code from FieldCheck dumps: SpawnOrder, SpawnOrientation, RespawnHeightBehaviour, AutoHoldMode,
+# PickupOrientation, VRCPickup+Version, VRCStation+Mobility, VRC_PortalMarker+VRChatWorld, Networking+SyncType, Dimension).
+
+# --- Scene descriptor (fields declared on the base VRC.SDKBase.VRC_SceneDescriptor) -------------------------------
+VRC.SDKBase.VRC_SceneDescriptor
+VRC.SDK3.Components.VRCSceneDescriptor|spawns[]
+VRC.SDK3.Components.VRCSceneDescriptor|spawnRadius
+VRC.SDK3.Components.VRCSceneDescriptor|spawnOrder
+VRC.SDK3.Components.VRCSceneDescriptor|spawnOrientation
+VRC.SDK3.Components.VRCSceneDescriptor|ReferenceCamera
+VRC.SDK3.Components.VRCSceneDescriptor|RespawnHeightY
+VRC.SDK3.Components.VRCSceneDescriptor|ObjectBehaviourAtRespawnHeight
+VRC.SDK3.Components.VRCSceneDescriptor|ForbidUserPortals
+VRC.SDK3.Components.VRCSceneDescriptor|interactThruLayers
+VRC.SDK3.Components.VRCSceneDescriptor|autoSpatializeAudioSources
+VRC.SDKBase.VRC_SceneDescriptor+SpawnOrder
+VRC.SDKBase.VRC_SceneDescriptor+SpawnOrientation
+VRC.SDKBase.VRC_SceneDescriptor+RespawnHeightBehaviour
+VRC.Core.PipelineManager|blueprintId
+
+# --- Project layer setup (Resources.Load("VRCProjectSettings"); UpdateLayers static methods called by reflection) ---
+VRCProjectSettings|layers[]
+VRCProjectSettings|numLayers
+VRCProjectSettings|layerCollisionArr[]
+# UpdateLayers.AreLayersSetup() / IsCollisionLayerMatrixSetup(): public static bool, no parameters (VRCCore-Editor.dll;
+# methods are not checkable here; the call fails soft to the tool's own comparison).
+UpdateLayers
+
+# --- Mirror ----------------------------------------------------------------------------------------------------------
+VRC.SDK3.Components.VRCMirrorReflection|m_ReflectLayers
+VRC.SDK3.Components.VRCMirrorReflection|m_DisablePixelLights
+VRC.SDK3.Components.VRCMirrorReflection|TurnOffMirrorOcclusion
+VRC.SDKBase.VRC_MirrorReflection+Dimension
+VRC.SDKBase.VRC_MirrorReflection+AntialiasingSamples
+# [SerializeField] private on VRC.SDKBase.VRC_MirrorReflection (FieldCheck cannot read private SerializeField attributes;
+# verified in the ILSpy decompile vrcsdk_decompiled_3.10.5/VRCSDKBase/VRC.SDKBase/VRC_MirrorReflection.cs L74-84):
+#   VRC.SDK3.Components.VRCMirrorReflection|mirrorResolution     (Dimension: Auto=0, X256=256, X512=512, X1024=1024)
+#   VRC.SDK3.Components.VRCMirrorReflection|maximumAntialiasing  (AntialiasingSamples: X1=1, X2=2, X4=4, X8=8)
+#   VRC.SDK3.Components.VRCMirrorReflection|customShader         (Shader)
+
+# --- Udon (source-only types, not in a DLL; verified against vrcsdk_worlds_3.10.5 sources) --------------------------
+#   VRC.Udon.UdonBehaviour|_syncMethod                       Runtime/Udon/UdonBehaviour.cs L70-71  [SerializeField] private SyncType
+#   VRC.Udon.UdonBehaviour|Reliable                          L66-67  public bool (legacy; resolves SyncType.Unknown)
+#   VRC.Udon.UdonBehaviour|SynchronizePosition               L50-53  public bool (obsolete position sync)
+#   VRC.Udon.UdonBehaviour|serializedProgramAsset            L124-125 [SerializeField] private AbstractSerializedUdonProgramAsset
+#   VRC.Udon.UdonBehaviour|programSource                     L127-129 [SerializeField] public AbstractUdonProgramSource (#if UNITY_EDITOR)
+#   VRC.Udon.UdonBehaviour|publicVariablesUnityEngineObjects[]  L1205-1206 [SerializeField] private List<Object>
+VRC.SDKBase.Networking+SyncType
+# UdonSharp (source-only, vrcsdk_worlds_3.10.5/Integrations/UdonSharp):
+#   UdonSharp.UdonSharpBehaviour|_udonSharpBackingUdonBehaviour   Runtime/UdonSharpBehaviour.cs L503-504 [SerializeField, HideInInspector] private UdonBehaviour
+#   UdonSharp.UdonSharpProgramAsset|sourceCsScript                Editor/UdonSharpProgramAsset.cs L48 public MonoScript
+#   UdonSharp.UdonSharpProgramAsset|behaviourSyncMode             Editor/UdonSharpProgramAsset.cs L94 public BehaviourSyncMode (Runtime/UdonSharpAttributes.cs L49-71)
+#   UdonSharpEditor.UdonSharpAssemblyDefinition|sourceAssembly    Editor/UdonSharpAssemblyDefinition.cs L12 public AssemblyDefinitionAsset
+
+# --- Interactables -----------------------------------------------------------------------------------------------
+VRC.SDK3.Components.VRCPickup|pickupable
+VRC.SDK3.Components.VRCPickup|AutoHold
+VRC.SDK3.Components.VRCPickup|orientation
+VRC.SDK3.Components.VRCPickup|version
+VRC.SDK3.Components.VRCPickup|proximity
+VRC.SDKBase.VRC_Pickup+AutoHoldMode
+VRC.SDKBase.VRC_Pickup+PickupOrientation
+VRC.SDK3.Components.VRCPickup+Version
+VRC.SDK3.Components.VRCObjectSync
+VRC.SDK3.Components.VRCObjectPool|Pool[]
+VRC.SDK3.Components.VRCStation|PlayerMobility
+VRC.SDKBase.VRCStation+Mobility
+VRC.SDK3.Components.VRCPortalMarker|world
+VRC.SDK3.Components.VRCPortalMarker|roomId
+VRC.SDKBase.VRC_PortalMarker+VRChatWorld
+VRC.SDK3.Components.VRCAvatarPedestal|blueprintId
+VRC.SDK3.Components.VRCUiShape
+VRC.SDKBase.VRC_SpatialAudioSource
+VRC.SDK3.Components.VRCSpatialAudioSource
+
+# --- Video players (all fields are [SerializeField] private; verified in the ILSpy decompile
+# vrcsdk_worlds_decompiled_3.10.5/VRCSDK3/VRC.SDK3.Video.Components[.AVPro]/*.cs; VRCUrl.url in
+# vrcsdk_decompiled_3.10.5/VRCSDKBase/VRC.SDKBase/VRCUrl.cs L14-16) ---------------------------------------------------
+VRC.SDK3.Video.Components.VRCUnityVideoPlayer
+VRC.SDK3.Video.Components.AVPro.VRCAVProVideoPlayer
+VRC.SDK3.Video.Components.AVPro.VRCAVProVideoScreen
+VRC.SDK3.Video.Components.AVPro.VRCAVProVideoSpeaker
+VRC.SDKBase.VRCUrl
+#   VRCUnityVideoPlayer|videoURL.url, autoPlay, loop, renderMode (private enum RenderTexture=0, MaterialOverride=1),
+#     targetTexture, targetMaterialRenderer, targetAudioSources[], maximumResolution          (VRCUnityVideoPlayer.cs L183-211)
+#   VRCAVProVideoPlayer|videoURL.url, autoPlay, loop, maximumResolution, useLowLatency         (VRCAVProVideoPlayer.cs L14-31)
+#   VRCAVProVideoScreen|videoPlayer (VRCAVProVideoScreen.cs L11-12); VRCAVProVideoSpeaker|videoPlayer (VRCAVProVideoSpeaker.cs L27-28)
+
+# --- Dynamics (world PhysBones / Contacts, SDK 3.10.0+) --------------------------------------------------------------
+VRC.Dynamics.VRCPhysBoneBase|rootTransform
+VRC.Dynamics.VRCPhysBoneColliderBase
+VRC.Dynamics.ContactBase
+
+# --- Types matched by name only (categories / SDK2 leftovers / editor-only / avatar components in a world) ----------
+VRC.SDKBase.VRC_EventHandler
+VRC.SDKBase.IEditorOnly
+VRC.SDK3.Components.VRCPlayerObject
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor
+VRC.SDKBase.VRC_AvatarDescriptor
+
+# --- Allowlists read by reflection (fallback: the embedded 3.10.5 copies in CctWorldAudit.Scan.cs / .Components.cs) ----
+# Source-only type (compiled into the VRC.SDKBase asmdef, not a DLL), verified against
+# vrcsdk_base_3.10.5/Runtime/VRCSDK/Dependencies/VRChat/Scripts/Validation/WorldValidation.cs:
+#   VRC.SDKBase.Validation.WorldValidation|ComponentTypeWhiteListCommon   L46  static readonly string[] (private)
+#   VRC.SDKBase.Validation.WorldValidation|ComponentTypeWhiteListSdk3     L441 static readonly string[] (private)
+#   VRC.SDKBase.Validation.WorldValidation|ShaderWhiteList                L531 public static readonly string[]
+# The reader requires FieldType == string[] and an assembly name starting with "VRC"; anything else uses the embedded lists.
+
+# --- SDK3 world allowlist entries in the VRC namespace (WorldValidation.cs ComponentTypeWhiteListSdk3 L441-529),
+# checked here so a misspelling would show up. Not present in the 3.10.5 DLLs, ignored by the SDK too (never matches):
+#   VRC.SDK3.VRCDestructibleStandard
+# Source-only: VRC.Udon.AbstractUdonBehaviourEventProxy (Runtime/Udon/EventProxies/AbstractUdonBehaviourEventProxy.cs)
+VRC.SDK3.Components.VRCVisualDamage
+VRC.SDK3.Components.VRCAvatarPedestal
+VRC.SDK3.Components.VRCPickup
+VRC.SDK3.Components.VRCPortalMarker
+VRC.SDK3.Components.VRCMirrorReflection
+VRC.SDK3.Components.VRCSceneDescriptor
+VRC.SDK3.Components.VRCStation
+VRC.SDK3.Components.VRCObjectPool
+VRC.SDK3.Components.VRCInputFieldKeyboardOverride
+VRC.SDK3.Components.VRCEnablePersistence
+VRC.SDK3.Midi.VRCMidiListener
+VRC.SDK3.Midi.VRCMidiPlayer
+VRC.SDK3.Components.VRCCameraDollyAnimation
+VRC.SDK3.Components.VRCCameraDollyPath
+VRC.SDK3.Components.VRCCameraDollyPathPoint
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBone
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBoneCollider
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBoneRoot
+VRC.SDK3.Dynamics.Constraint.Components.VRCAimConstraint
+VRC.SDK3.Dynamics.Constraint.Components.VRCLookAtConstraint
+VRC.SDK3.Dynamics.Constraint.Components.VRCParentConstraint
+VRC.SDK3.Dynamics.Constraint.Components.VRCPositionConstraint
+VRC.SDK3.Dynamics.Constraint.Components.VRCRotationConstraint
+VRC.SDK3.Dynamics.Constraint.Components.VRCScaleConstraint
+VRC.SDK3.Dynamics.Contact.Components.VRCContactSender
+VRC.SDK3.Dynamics.Contact.Components.VRCContactReceiver
+
+# Non-VRChat types read by name (Unity packages / Oculus; not checkable here): UnityEngine.Rendering.PostProcessing.
+# PostProcessLayer|antialiasingMode, volumeLayer, volumeTrigger; PostProcessVolume|isGlobal, sharedProfile, priority, weight;
+# PostProcessProfile|settings[]; PostProcessEffectSettings|active, enabled.value (com.unity.postprocessing 3.2.2 public
+# fields); UnityEngine.UI.Graphic|m_Material, UnityEngine.UI.Selectable|m_Navigation.m_Mode, UnityEngine.UI.ScrollRect|
+# m_ScrollSensitivity; TMPro.TMP_Text / TMP_SubMeshUI|m_sharedMaterial; ONSPAudioSource (type only);
+# GraphicsSettings.asset m_FogStripping / m_FogKeepLinear / m_FogKeepExp / m_FogKeepExp2.
