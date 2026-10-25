@@ -13,21 +13,21 @@ namespace Naoking.ClaudeCreatorTools
     /// </summary>
     public static class CctDependencyReportMenu
     {
-        const string Prefix = CctMenu.Root + "依存関係: ";
+        const string Prefix = CctMenu.Root + "依存関係 (cct_dependency_report)/";
 
         static CctArgs MenuArgs(string mode, string reportName) => new CctArgs()
             .Set("mode", mode)
             .Set("timeout_seconds", CctDependencyReport.MenuTimeoutSeconds)
             .Set("report_name", reportName);
 
-        [MenuItem(Prefix + "選択アセット", priority = 500)]
+        [MenuItem(Prefix + "選択アセットの依存関係", priority = 500)]
         static void Dependencies()
         {
             CctRunner.RunFromMenu(CctDependencyReport.ToolName, CctDependencyReport.Run, MenuArgs(CctDependencyReport.ModeDependencies, "deps")
                 .Set("assets", CctDependencyReport.SelectedAssetPaths().Cast<object>().ToList()));
         }
 
-        [MenuItem(Prefix + "選択アセット", true)]
+        [MenuItem(Prefix + "選択アセットの依存関係", true)]
         static bool ValidateDependencies() => HasAssetSelection();
 
         [MenuItem(Prefix + "選択アセットの使用元を検索", priority = 501)]

@@ -275,7 +275,7 @@ namespace Naoking.ClaudeCreatorTools
         {
             var platform = string.IsNullOrWhiteSpace(args.GetString("platform")) ? "all" : args.GetEnum("platform", null, "all", "pc", "android", "ios");
             if (platform == null)
-                return CctResult.Fail($"platform は 'all' / 'pc' / 'android' / 'ios' のいずれかを指定してください (指定値: '{args.GetString("platform")}')", "INVALID_ARGUMENT");
+                return CctResult.Fail($"platform は 'all' / 'pc' / 'android' / 'ios' のいずれかを指定してください (Quest は 'android'。指定値: '{args.GetString("platform")}')", "INVALID_ARGUMENT");
 
             if (CctSerialized.FindType(TSceneDescriptor) == null)
             {

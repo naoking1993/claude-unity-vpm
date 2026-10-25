@@ -42,6 +42,8 @@ namespace Naoking.ClaudeCreatorTools.Mcp
             "requirements", "missing", "dest", "dest_exists", "dest_problem", "asmdef", "samples", "sample_count", "imported_count",
             "program_asset_count", "importable", "dry_run", "plan", "program_assets_planned", "files_written", "files_failed",
             "files_skipped", "program_assets_created", "next_steps",
+            // failure context (SAMPLES_NOT_FOUND)
+            "package_root",
         };
 
         public class Parameters

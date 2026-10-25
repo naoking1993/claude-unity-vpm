@@ -37,7 +37,7 @@ namespace Naoking.ClaudeCreatorTools.Mcp
                       "delete: removes a snapshot folder (dry run unless confirm=true; ask the user first). " +
                       "Response lists are capped at max_entries and report <key>_omitted; the complete lists are then under full_lists in the " +
                       "saved report (report_path) or with detail='full'. Big snapshots/restores (hundreds of MB, dependency_filter='all', reimporting textures/models) can " +
-                      "exceed the 30 s default: pass timeout_seconds=300; a timed-out call keeps running in Unity, so check with action=list or " +
+                      "exceed the 30 s default: pass timeout_seconds=240; a timed-out call keeps running in Unity, so check with action=list or " +
                       "diff instead of repeating it. " +
                       "Parameters: action (required) = 'create' | 'list' | 'diff' | 'restore' | 'delete'; " +
                       "label = create: free-text label stored in the manifest, Japanese OK (default ''); " +

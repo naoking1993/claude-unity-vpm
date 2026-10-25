@@ -12,9 +12,9 @@ namespace Naoking.ClaudeCreatorTools
     /// </summary>
     public static class CctSnapshotMenu
     {
-        const string Prefix = CctMenu.Root + "スナップショット: ";
+        const string Prefix = CctMenu.Root + "スナップショット (cct_snapshot)/";
 
-        [MenuItem(Prefix + "開いているシーンを保存", priority = 600)]
+        [MenuItem(Prefix + "開いているシーンと依存アセットを保存", priority = 600)]
         static void SnapshotOpenScenes()
         {
             // Scenes plus the editable assets they use: a scene copy alone cannot bring back shared materials / clips.

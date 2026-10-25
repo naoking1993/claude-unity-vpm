@@ -461,20 +461,20 @@ namespace Naoking.ClaudeCreatorTools
 
             var steps = new List<object>();
             if (!env.UdonSharp)
-                steps.Add("ワールドプロジェクト (VRChat Worlds SDK 3.4.0 以降は UdonSharp 同梱) で実行してください。アバタープロジェクトには入れないこと");
+                steps.Add("ワールドプロジェクト (VRChat Worlds SDK 3.4.0 以降は UdonSharp 同梱) で実行してください。アバタープロジェクトには入れないでください");
             else
             {
                 if (destProblem != null && importable.Count > 0)
-                    steps.Add($"dest ({dest}) には取り込めません ({destProblem})。asmdef / Editor / Plugins の外のフォルダ (例: {DefaultDestination}) を dest に指定する");
+                    steps.Add($"dest ({dest}) には取り込めません ({destProblem})。asmdef / Editor / Plugins の外のフォルダ (例: {DefaultDestination}) を dest に指定してください");
                 if (importable.Count > 0)
                 {
                     var onlyHint = blocked.Count > 0 || imported > 0 || elsewhere.Count > 0
                         ? $" (only=[{string.Join(", ", importable.Select(n => "\"" + n + "\""))}] で取り込めるものだけを指定)"
                         : "";
-                    steps.Add($"action=import (confirm なし) で書き込み予定 (plan) を確認 → confirm=true で {dest} に取り込む{onlyHint}。既存ファイルは上書きしない");
+                    steps.Add($"action=import (confirm なし) で書き込み予定 (plan) を確認 → confirm=true で {dest} に取り込みます{onlyHint}。既存ファイルは上書きしません");
                 }
                 if (blocked.Count > 0)
-                    steps.Add($"{string.Join(", ", blocked)} は必要なパッケージが無いため取り込めません (MISSING_DEPENDENCY の警告を参照。入れれば取り込める)");
+                    steps.Add($"{string.Join(", ", blocked)} は必要なパッケージが無いため取り込めません (MISSING_DEPENDENCY の警告を参照。入れれば取り込めます)");
                 if (imported > 0 || elsewhere.Count > 0)
                     steps.AddRange(AfterImportSteps(dest,
                         withProgramAsset == imported && elsewhere.Keys.All(n => programAssets.ContainsKey(elsewhere[n])),
@@ -495,13 +495,13 @@ namespace Naoking.ClaudeCreatorTools
                          "作った .asset の Inspector の Source Script に対応する .cs をドラッグ (1 スクリプトにつき 1 個だけ)";
             var steps = new List<object>
             {
-                "Unity のスクリプトコンパイル完了を待つ。続けて UdonSharp が U# プログラムを自動コンパイルする (Console に UdonSharp のエラーが無いこと)",
+                "Unity のスクリプトコンパイル完了を待ちます。続けて UdonSharp が U# プログラムを自動コンパイルします (Console に UdonSharp のエラーが無いことを確認)",
                 programAssetsReady
                     ? $"各スクリプトと同じフォルダ ({scripts} など) に同名の .asset (UdonSharp Program Asset) があることを確認"
                     : canAutoCreate
-                        ? "Program Asset が無いスクリプトがあります。action=import, confirm=true (create_program_assets は既定で true) をもう一度実行すると作成します (既存ファイルは上書きしない)。" + manual
+                        ? "Program Asset が無いスクリプトがあります。action=import, confirm=true (create_program_assets は既定で true) をもう一度実行すると作成します (既存ファイルは上書きしません)。" + manual
                         : "Program Asset が無いスクリプトがあります。" + manual,
-                "ギミックを置く GameObject を選び Add Component でスクリプト名 (例: CctLocalToggle) を追加。Inspector に表示された時点で UdonSharp が裏の UdonBehaviour を自動で用意する (MCP で追加した場合は、その GameObject を選択して Inspector を表示するか、Play に入る / シーンを開き直すと U# がセットアップする)",
+                "ギミックを置く GameObject を選び Add Component でスクリプト名 (例: CctLocalToggle) を追加。Inspector に表示された時点で UdonSharp が裏の UdonBehaviour を自動で用意します (MCP で追加した場合は、その GameObject を選択して Inspector を表示するか、Play に入る / シーンを開き直すと U# がセットアップします)",
                 $"各スクリプト冒頭のコメントと {dest}/README.md の手順で Collider・レイヤー・UI イベント (UdonBehaviour.SendCustomEvent) を設定",
                 "Play (ClientSim) でローカル動作を確認 → VRChat SDK > Show Control Panel > Builder > Build & Test (Number of Clients = 2) で同期を確認",
                 "U# が自動コンパイルされない場合: VRChat SDK > Udon Sharp > Refresh All UdonSharp Assets、または任意の Program Asset の Inspector > Utilities > Compile All UdonSharp Programs",
@@ -823,7 +823,7 @@ namespace Naoking.ClaudeCreatorTools
                 }
             }
             if (alreadyThere.Count > 0)
-                r.AddIssue(CctSeverity.Info, "PROGRAM_ASSET_EXISTS", $"Program Asset (または同名の .asset) が既にある {alreadyThere.Count} 個は作成しません (上書きしない)", value: alreadyThere);
+                r.AddIssue(CctSeverity.Info, "PROGRAM_ASSET_EXISTS", $"Program Asset (または同名の .asset) が既にある {alreadyThere.Count} 個は作成しません (上書きしません)", value: alreadyThere);
             if (created.Count > 0)
                 r.AddIssue(CctSeverity.Info, "PROGRAM_ASSET_CREATED", $"UdonSharp Program Asset を {created.Count} 個作成しました", value: created.ToList());
         }

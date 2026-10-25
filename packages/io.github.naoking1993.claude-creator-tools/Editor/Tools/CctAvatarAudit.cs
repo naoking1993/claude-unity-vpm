@@ -128,7 +128,8 @@ namespace Naoking.ClaudeCreatorTools
     /// | AUDIT_SECTION_FAILED              | warning         | one section threw unexpectedly; it is omitted (value = stack excerpt) and the rest of the result stays valid |
     /// Per code at most <see cref="MaxIssuesPerCode"/> issues are listed; the rest are summarised in one extra issue.
     /// Failure codes (success=false, data.candidates lists paths + instance IDs): TARGET_NOT_FOUND (spec does not resolve),
-    /// AMBIGUOUS_TARGET (several avatars / same-named objects), NO_AVATAR (nothing selected and no avatar in the loaded scenes).
+    /// AMBIGUOUS_TARGET (several avatars / same-named objects), NO_AVATAR (nothing selected and no avatar in the loaded scenes),
+    /// INVALID_ARGUMENT (platform is not all / pc / android / ios).
     /// </summary>
     public static partial class CctAvatarAudit
     {
@@ -157,7 +158,11 @@ namespace Naoking.ClaudeCreatorTools
         public static CctResult Run(CctArgs args)
         {
             var clock = Stopwatch.StartNew();
-            var platform = args.GetEnum("platform", "all", "all", "pc", "android", "ios");
+            // An unknown platform (e.g. "quest") must not silently become "all": on a PC target that lowers the mobile findings to info.
+            var rawPlatform = args.GetString("platform");
+            var platform = string.IsNullOrWhiteSpace(rawPlatform) ? "all" : args.GetEnum("platform", null, "all", "pc", "android", "ios");
+            if (platform == null)
+                return CctResult.Fail($"platform は 'all' / 'pc' / 'android' / 'ios' のいずれかを指定してください (Quest は 'android'。指定値: '{rawPlatform}')", "INVALID_ARGUMENT");
             var targetSpec = args.GetString("target");
 
             var found = ResolveAvatar(targetSpec);

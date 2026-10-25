@@ -9,8 +9,8 @@ namespace Naoking.ClaudeCreatorTools
     /// </summary>
     public static class CctWorldAuditMenu
     {
-        const string Prefix = CctMenu.Root + "ワールド監査: ";
-        const int Priority = 300;
+        const string Prefix = CctMenu.Root + "ワールド監査 (cct_world_audit)/";
+        const int Priority = 400;
         const int MenuTimeoutSeconds = 300;
 
         static void RunAudit(string platform) =>

@@ -43,7 +43,7 @@ namespace Naoking.ClaudeCreatorTools
     /// | code                      | severity | meaning |
     /// |---------------------------|----------|---------|
     /// | TARGET_NOT_FOUND          | error    | target spec did not resolve (result fails) |
-    /// | INVALID_ARGS              | error    | no valid view requested (result fails) |
+    /// | INVALID_ARGUMENT          | error    | no valid view requested (result fails) |
     /// | UNKNOWN_VIEW              | warning  | a requested view / preset name was ignored |
     /// | PARAM_ADJUSTED            | info/warn| a parameter was clamped, unknown, or replaced by its default |
     /// | MODE_FALLBACK             | warning  | scene mode impossible (prefab asset / Prefab Mode) or skybox in isolated -> changed |
@@ -203,7 +203,7 @@ namespace Naoking.ClaudeCreatorTools
             }
 
             var opt = ParseOptions(args, prev, r, out var optError);
-            if (opt == null) return FailWith(r, optError, "INVALID_ARGS", null);
+            if (opt == null) return FailWith(r, optError, "INVALID_ARGUMENT", null);
 
             bool isAsset = resolved.IsPrefabAsset || EditorUtility.IsPersistent(target);
             bool inPreviewScene = !isAsset && target.scene.IsValid() && EditorSceneManager.IsPreviewScene(target.scene);

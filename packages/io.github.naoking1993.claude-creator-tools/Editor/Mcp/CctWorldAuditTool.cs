@@ -42,6 +42,8 @@ namespace Naoking.ClaudeCreatorTools.Mcp
         {
             "verdict", "scenes", "platforms", "counts", "project", "descriptor", "layers", "lighting", "rendering", "mirrors", "udon",
             "gimmicks", "android", "not_checked", "notes",
+            // failure context (SCENE_NOT_LOADED / WORLDS_SDK_MISSING)
+            "loaded_scenes", "avatars_sdk_present",
         };
 
         public class Parameters
