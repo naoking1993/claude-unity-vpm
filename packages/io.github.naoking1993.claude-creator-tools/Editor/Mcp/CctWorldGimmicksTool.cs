@@ -6,35 +6,24 @@ namespace Naoking.ClaudeCreatorTools.Mcp
 {
     [McpForUnityTool(CctWorldGimmicks.ToolName,
         Description = "Claude Creator Tools: UdonSharp (U#) world gimmick samples for VRChat WORLD projects - local toggle, global " +
-                      "synced toggle (Manual sync, late joiners), mirror switcher, teleporter, pickup resetter (ObjectSync-aware: idle pickups are reset by the presser taking " +
-                      "ownership, held ones by their holder), UI audio volume (+PlayerData), area toggle (trigger zone with periodic " +
-                      "position re-check), player counter. Use when the user wants one of these gimmicks in a world; call list first. " +
-                      "action=list (read-only): each sample's sync mode, Japanese summary, required packages and whether they are present, " +
-                      "source (absolute path of the script in the package; its Japanese header has the setup), whether UdonSharp / Worlds SDK " +
-                      "are present, whether each sample is already imported at dest (with its U# program asset) or exists elsewhere in the " +
-                      "project, whether dest is usable, importable (names an import would add; pass them as only), next_steps. " +
-                      "action=import (WRITES files, then Unity recompiles; wait and retry on EDITOR_BUSY before the next call): copies the " +
-                      "package's Samples~/WorldGimmicks into dest with their .meta (stable GUIDs); refuses with NO_UDONSHARP when UdonSharp " +
-                      "is absent (avatar projects would get compile errors), MISSING_DEPENDENCY when a selected sample needs a missing " +
-                      "package (the failure lists missing and importable), DEST_HAS_ASMDEF / DEST_SPECIAL_FOLDER when dest is under an " +
-                      "asmdef/asmref, an Editor folder or Assets/Plugins; skips samples whose script already exists elsewhere " +
-                      "(SAMPLE_EXISTS_ELSEWHERE); never overwrites existing files unless overwrite=true and never replaces existing .meta; " +
-                      "then AssetDatabase.Refresh and creates one UdonSharpProgramAsset (<Name>.asset) per script, also for a copy found " +
-                      "elsewhere under Assets/ that has none (UdonSharp does not create them for copied scripts). Without confirm=true it " +
-                      "is a dry run returning plan and program_assets_planned; for the real import pass timeout_seconds=120 (the " +
-                      "Refresh imports scripts and can exceed 30 s in big projects; a timed-out import still finishes, so call list " +
-                      "instead of repeating it). Returns files_written / files_skipped / files_failed / " +
-                      "program_assets_created and Japanese next_steps. After import read <dest>/README.md: per gimmick which GameObject " +
-                      "gets the script, inspector fields with their serialized names (for setting them over MCP), collider / Is Trigger / " +
-                      "layer, UI OnClick / OnValueChanged wiring (UdonBehaviour.SendCustomEvent + exact method name), ClientSim and " +
-                      "Build & Test (2 clients) checklist. " +
-                      "Parameters: action = 'list' (default) or 'import'; dest = destination folder under Assets/ (default " +
-                      "'Assets/ClaudeWorldGimmicks'; must not be inside an asmdef/asmref folder, an Editor folder or Assets/Plugins); " +
-                      "confirm = import only: true to actually write files, otherwise dry run (default false); overwrite = import only: " +
-                      "overwrite sample files that already exist at dest, existing .meta files are always kept (default false); " +
-                      "create_program_assets = import only: create <Name>.asset (UdonSharpProgramAsset) next to each imported script " +
-                      "(default true); only = import only: array of sample class names to import, e.g. ['CctTeleporter','CctLocalToggle'] " +
-                      "(case-insensitive; README is always included; omit for all)." +
+                      "synced toggle, mirror switcher, teleporter, pickup resetter, UI audio volume, area toggle, player counter. Use " +
+                      "when the user wants one of these gimmicks in a world; call action=list first. Parameters: action = 'list' " +
+                      "(default, read-only: per sample its sync mode, Japanese summary, required packages, source script path and " +
+                      "import state, plus importable names and next_steps) or 'import' (WRITES files); dest = destination folder under " +
+                      "Assets/ (default 'Assets/ClaudeWorldGimmicks'; must not be inside an asmdef/asmref folder, an Editor folder or " +
+                      "Assets/Plugins); confirm = import only: true to actually write files, otherwise a dry run returning plan " +
+                      "(default false); overwrite = import only: overwrite sample files that already exist at dest, existing .meta " +
+                      "files are always kept (default false); create_program_assets = import only: create <Name>.asset " +
+                      "(UdonSharpProgramAsset) next to each imported script (default true); only = import only: sample class names as " +
+                      "a JSON array, e.g. [\"CctTeleporter\",\"CctLocalToggle\"] (through execute_custom_tool also the comma string " +
+                      "\"CctTeleporter,CctLocalToggle\"; case-insensitive; README is always included; omit for all). import copies the " +
+                      "package's Samples~/WorldGimmicks with their .meta (stable GUIDs), runs AssetDatabase.Refresh and creates the " +
+                      "program assets (also next to a copy found elsewhere that has none); it refuses without UdonSharp (NO_UDONSHARP), when a selected sample needs a missing package " +
+                      "(MISSING_DEPENDENCY, lists importable) or for a bad dest (DEST_HAS_ASMDEF / DEST_SPECIAL_FOLDER), and skips " +
+                      "samples whose script exists elsewhere (SAMPLE_EXISTS_ELSEWHERE). Unity recompiles afterwards: wait and retry on " +
+                      "EDITOR_BUSY. For the real import pass timeout_seconds=120; a timed-out import still finishes, so call list " +
+                      "instead of repeating it. Then read <dest>/README.md: per gimmick the GameObject, serialized field names, " +
+                      "collider/layer, UI SendCustomEvent wiring and the ClientSim / 2-client test checklist." +
                       CctMcpBridge.CommonParamsDoc)]
     public static class CctWorldGimmicksTool
     {
@@ -65,7 +54,7 @@ namespace Naoking.ClaudeCreatorTools.Mcp
             [ToolParameter("import: create a UdonSharpProgramAsset (<Name>.asset) next to each imported script, as UdonSharp's 'Create > U# Script' does (default true)", Required = false, DefaultValue = "true")]
             public bool create_program_assets { get; set; }
 
-            [ToolParameter("import: only these samples by class name, e.g. ['CctTeleporter','CctLocalToggle'] (case-insensitive; README is always included); omit for all", Required = false)]
+            [ToolParameter("import: only these samples by class name as a JSON array, e.g. [\"CctTeleporter\",\"CctLocalToggle\"] (case-insensitive; README is always included); omit for all", Required = false)]
             public string[] only { get; set; }
 
             [ToolParameter("'summary' (default) or 'full'. Summary keeps the response short; the full report is always saved to disk", Required = false, DefaultValue = "summary")]

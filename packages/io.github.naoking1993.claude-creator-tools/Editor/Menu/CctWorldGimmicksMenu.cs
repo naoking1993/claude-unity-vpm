@@ -37,7 +37,7 @@ namespace Naoking.ClaudeCreatorTools
             Debug.Log(sb.ToString());
         }
 
-        [MenuItem(Prefix + "Assets/ClaudeWorldGimmicks にインポート", priority = 701)]
+        [MenuItem(Prefix + "ClaudeWorldGimmicks にインポート (Assets 直下)", priority = 701)]
         static void Import()
         {
             CctRunner.RunFromMenu(CctWorldGimmicks.ToolName, CctWorldGimmicks.Run, new CctArgs()

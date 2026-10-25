@@ -125,7 +125,7 @@ MCP が使えないときは、ユーザーに Unity の Tools > Claude Creator 
 | アニメーター解析 (cct_animator_inspect)/選択中のアバターの FX / Gesture / 全レイヤー (+ MA Merge Animator) / Project で選択中のコントローラ | `cct_animator_inspect` |
 | 依存関係 (cct_dependency_report)/選択アセットの依存関係 / 選択アセットの使用元を検索 / 選択オブジェクトのシーン外参照 | `cct_dependency_report`（dependencies / reverse / scene_references） |
 | ワールドギミック (UdonSharp)/一覧と導入状況をログ出力 | `cct_world_gimmicks list` |
-| ワールドギミック (UdonSharp)/Assets/ClaudeWorldGimmicks にインポート | `cct_world_gimmicks import` を **confirm=true** で（ドライランなし。既存ファイルは上書きしない） |
+| ワールドギミック (UdonSharp)/ClaudeWorldGimmicks にインポート (Assets 直下) | `cct_world_gimmicks import` を **confirm=true** で（ドライランなし。既存ファイルは上書きしない） |
 | レポートフォルダを開く / キャプチャフォルダを開く / スナップショットフォルダを開く | — |
 
 restore と delete はメニューに無い（id と確認が要るため）。メニューはダイアログを出さない。
@@ -304,7 +304,7 @@ restore と delete はメニューに無い（id と確認が要るため）。�
 
 失敗コード：`TARGET_NOT_FOUND`、`AMBIGUOUS_TARGET`（アバターや同名の物が複数）、`NO_AVATAR`（何も選んでおらず、シーンにアバターが無い）、`INVALID_ARGUMENT`（platform が all・pc・android・ios のどれでもない）。候補は `data.candidates`（パスと instance ID）。
 
-**副作用**：シーンとアセットは変えない。プレハブアセットは読み取り専用で一時的に読み込んで解放する。`post_build` は非公開のプレビューシーンにクローンを作って NDMF で処理し、生成物ごと破棄する（生成アセットは保存しない）。NDMF のログが Console に出る。
+**副作用**：シーンとアセットは変えない。プレハブアセットは読み取り専用で一時的に読み込んで解放する。SDK の計算は保存されない実行時のデータだけに触る。`post_build` は非公開のプレビューシーンにクローンを作って NDMF で処理し、生成物ごと破棄する（生成アセットは保存しない）。NDMF のログが Console に出る。
 
 **呼び出し例**
 
@@ -633,7 +633,7 @@ restore の動き：まず今の状態（未保存のシーンを含む）を自
 | `SCENE_HAS_UNSAVED_CHANGES` | warning | diff：シーンのメモリとディスクが違う（保存してから diff） |
 | `FILES_ADDED` | info | 退避したフォルダーに増えたファイル |
 | `PROJECT_ROOT_DIFFERS` | warning | 別のプロジェクトのフォルダーで作った退避 |
-| `BLUEPRINT_ID_CHANGES` | warning | .unity/.prefab の Blueprint ID が退避と違う（戻すとアップロード先が変わる） |
+| `BLUEPRINT_ID_CHANGES` | warning | .unity/.prefab の Blueprint ID が退避と違う（戻すと古い ID が戻り、アップロード先が変わる。戻した後で ID を設定し直すか、そのファイルを restore の `assets` から外す） |
 | `NOT_IN_SNAPSHOT` | warning / 失敗 | 指定したパスが退避に無い |
 | `SNAPSHOT_CORRUPT` | error | 退避したコピーが無い・SHA-256 が違う |
 | `FILE_READ_ONLY` | error | 戻し先が読み取り専用 |
@@ -693,7 +693,7 @@ restore の動き：まず今の状態（未保存のシーンを含む）を自
 | `include_ma` | bool | target があれば true | MA Merge Animator を一覧にして、そのレイヤーの分も調べる |
 | `layers` | string[] | 全部 | 調べるアニメーターのレイヤー名か番号（WD の Controller 全体の判定は全レイヤーで行う） |
 | `include_transitions` | bool | true | graph に遷移を入れる（検査は常に行う） |
-| `check_bindings` | bool | target があれば true | クリップのカーブのパスをアバターのルート（Relative の MA は relative root）から確かめる |
+| `check_bindings` | bool | target があれば true | クリップ（BlendTree の子も）のカーブのパスをアバターのルート（Relative の MA は relative root）から確かめる |
 | `max_states` | int | 400 | graph に書くステートの上限（0〜20000） |
 | `find_parameter` | string | `""` | パラメーター名（大文字小文字を区別する。一致が無く大文字小文字だけ違う名前があれば `case_insensitive_matches` に出る）：宣言、条件、BlendTree、speed/time、Driver の読み書き、Play Audio をすべて列挙 |
 | `find_binding` | string | `""` | カーブのパスと `Component.property` に対する部分一致（大文字小文字を区別しない）。`path:property` で両方。例 `Body:blendShape.smile` で顔のシェイプを書くクリップとステートを列挙 |
@@ -709,6 +709,9 @@ restore の動き：まず今の状態（未保存のシーンを含む）を自
 | `controllers[]` | 調べた Controller（id は fx・gesture…、MA は ma1…） |
 | `layers[]` | 重み・ブレンド・マスク・同期・WD の ON/OFF・ステート数・MA の WD 予測 |
 | `parameters[]` | Controller のパラメーターと、Expression Parameter・組み込みの型 |
+| `graph_preview` | ステートが20個以下・遷移が60本以下で打ち切りも無ければ `graph` そのもの。それより大きければ概要だけ（`outline_only: true`、`reason`、`layers[]`＝`controller`・`index`・`name`・`states`（ステートのパス12個まで、`states_omitted`）、40レイヤーまで、`layers_omitted`）。全体はレポートの `graph`、細かく見るレイヤーは `layers` で指定する |
+| `bindings` | `check_bindings` の結果：`clips_checked`・`clips_total`・`bindings_total`・`humanoid_bindings_skipped`・`missing_paths_total`・`clips_with_problems`・`problems[]`（クリップごとの `missing_paths`・`missing_components`・`missing_blendshapes`、各5件まで）・`problems_omitted` |
+| `ma_merge_animators[]` | MA Merge Animator ごと：`id`（ma1…）・`path`・`layer_type`・`animator`・`path_mode`（Relative / Absolute）・`relative_root`・`relative_root_rule`・`match_avatar_write_defaults`・`merge_mode`（Append / Replace）・`layer_priority`・`merge_order`・`merge_position`（before_avatar_layers / after_avatar_layers / replaces_avatar_layers）・`inspected`・`unit`、無効・非アクティブ・EditorOnly の印 |
 | `graph` のステート | `name`・`path`・`default`・`motion`・`speed`・`speed_param`・`motion_time_param`・`mirror`・`mirror_param`・`cycle_offset`・`cycle_offset_param`・`wd`・`tag`・`behaviours`（Parameter Driver、Tracking・Layer・Playable Layer・Locomotion Control、Temporary Pose Space、Play Audio）・`transitions`（条件付き）。既定値のキーは省かれる：`speed` は 1 以外のときだけ（無ければ speed 1）、`speed_param`・`motion_time_param`・`mirror_param`・`cycle_offset_param` は Inspector でパラメーターを有効にしたときだけ入る |
 | `find` | `find.parameter`（find_parameter）：`declared_in[]`（どの Controller に `type`・`default` で宣言されているか）、`expression`（Expression Parameter の `type`・`synced`・`saved`・`default`）、`builtin`（組み込みなら型）、`uses_total`、`uses[]`（`controller`・`kind`・`at`・`detail`）。`find.binding`（find_binding）：`matches_total`、`matches[]`（`clip`・`asset`・`path`・`component`・`property`・`constant`・`values`・`exists`・`used_by`）、`clips_searched`。どちらも要約は50行まで（超えると `full_list` の案内が付き、全件はレポートの `find_all`） |
 
@@ -869,7 +872,7 @@ reverse で拾えないもの：バイナリのファイル、コードからの
 
 ## 8. cct_world_gimmicks
 
-**目的**：パッケージの `Samples~/WorldGimmicks` にある UdonSharp のワールドギミック8種を一覧にし、ワールドプロジェクトへ取り込む。サンプル：`CctLocalToggle`（自分だけの ON/OFF）、`CctGlobalToggle`（全員で共有、Manual 同期・後から入った人にも反映）、`CctMirrorSwitcher`（HQ/LQ/OFF の切替）、`CctTeleporter`、`CctPickupResetter`（ObjectSync 対応）、`CctAudioVolume`（UI スライダー、PlayerData で保存）、`CctAreaToggle`（エリアにいる間だけ表示）、`CctPlayerCounter`（人数と参加・退出のログ）。
+**目的**：パッケージの `Samples~/WorldGimmicks` にある UdonSharp のワールドギミック8種を一覧にし、ワールドプロジェクトへ取り込む。サンプル：`CctLocalToggle`（自分だけの ON/OFF）、`CctGlobalToggle`（全員で共有、Manual 同期・後から入った人にも反映）、`CctMirrorSwitcher`（HQ/LQ/OFF の切替）、`CctTeleporter`、`CctPickupResetter`（ObjectSync 対応：置いてある物は押した人が持ち主になって戻し、持たれている物は持っている人が離して戻す。ObjectSync 無しは各自ローカル）、`CctAudioVolume`（UI スライダー、PlayerData で保存）、`CctAreaToggle`（エリアにいる間だけ表示。テレポート・リスポーンでの Enter/Exit の取りこぼしを位置の定期確認で補正）、`CctPlayerCounter`（人数と参加・退出のログ）。
 
 **引数**
 
@@ -909,7 +912,7 @@ reverse で拾えないもの：バイナリのファイル、コードからの
 | `PROGRAM_ASSET_TYPE_MISSING` / `PROGRAM_ASSET_FAILED` | warning | プログラムアセットの型が無い / 作れなかった（手で作る。next_steps） |
 | `ALREADY_IMPORTED` / `PARTIALLY_IMPORTED` | info | list：全部 / 一部が取り込み済み |
 
-**副作用**：list は無し。import は confirm=true のときだけ、`Samples~/WorldGimmicks`（か `only` の分）を .meta ごと `dest` にコピーし、`AssetDatabase.Refresh` し、プログラムアセットを作る（別の場所にあるコピーでプログラムアセットが無いものにも作る）。その後 Unity がコンパイルするので、次の呼び出しは `EDITOR_BUSY` が出なくなるまで待つ。
+**副作用**：list は無し。import は confirm=true のときだけ、`Samples~/WorldGimmicks`（か `only` の分）を .meta ごと `dest` にコピーし、`AssetDatabase.Refresh` し、プログラムアセットを作る（別の場所にあるコピーでプログラムアセットが無いものにも作る。UdonSharp はコピーしたスクリプトには作らないため）。その後 Unity がコンパイルするので、次の呼び出しは `EDITOR_BUSY` が出なくなるまで待つ。
 
 **呼び出し例**
 

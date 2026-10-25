@@ -62,7 +62,7 @@ Claude Creator Tools の MCP ツール `cct_world_gimmicks` を使います。
 
 ### B. Unity のメニューから
 
-`Tools > Claude Creator Tools > ワールドギミック (UdonSharp) > Assets/ClaudeWorldGimmicks にインポート`
+`Tools > Claude Creator Tools > ワールドギミック (UdonSharp) > ClaudeWorldGimmicks にインポート (Assets 直下)`
 (内容は A の `import, confirm: true` と同じ。`一覧と導入状況をログ出力` で状態を Console に出せます)
 
 ### C. Package Manager の Samples から (非推奨)

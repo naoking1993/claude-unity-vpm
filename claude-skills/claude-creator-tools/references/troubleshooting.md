@@ -51,6 +51,7 @@ MCP が使えない間の代わり：ユーザーに Unity の Tools > Claude Cr
 ## 3. タイムアウト
 
 - 1回の呼び出しは既定 30 秒で打ち切られる。`timeout_seconds` で延ばせる（サーバーの上限は 3600 だが、Claude Code 側の都合で 240 以下にする。目安はこの章の最後）。サーバーは送るコマンドの引数から `timeout_seconds` を読むので、`execute_custom_tool` でも `parameters` の中に入れればよい（コード読解）。
+- **stdio で接続しているとき**は、Unity 側が1回の呼び出しを常に 30 秒で打ち切り、`timeout_seconds` は待ち時間を延ばさない（MCP for Unity 9.7.1 の `StdioBridgeHost.cs`、`FrameIOTimeoutMs = 30000`）。走査の上限には使われるので、stdio では `timeout_seconds` を渡さない（`cct_world_audit`・`cct_dependency_report`・`cct_animator_inspect` の走査が 30 秒を超え、結果が届かない）。重い処理は範囲を絞って分けるか、ユーザーに Tools メニューから実行してもらう（tool-reference.md 0.7。メニューは MCP の 30 秒に縛られない。アニメーター解析のメニューは約 18 秒で走査を止める）。ユーザーの環境は HTTP。
 - 打ち切られたとき、サーバーは `success: false` と `hint: "retry"` を返すことがある（コード読解。エラーの文面は環境で違いうる）。**cct ではこの hint に従って再送しない**。Unity 側では、まだ始まっていない呼び出しは取り消されるが、始まっていた呼び出しは最後まで動き、その間 Unity のメインスレッドを止める。終わったかどうかは結果では分からない。
 - 打ち切られた後の確かめ方：
   - 読み取り系（audit・inspect・report）：少し待って、範囲を絞るか `timeout_seconds` を上げて呼び直す。

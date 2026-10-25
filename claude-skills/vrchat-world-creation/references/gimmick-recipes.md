@@ -24,7 +24,7 @@
 3. **取り込み（確定）**：既定の取り込み先は `Assets/ClaudeWorldGimmicks/`。ツールは次の場合に拒否・スキップする：UdonSharp が無い、選んだサンプルの依存パッケージが無い、同じスクリプトが別の場所にある（同じクラスが2つあるとプロジェクト全体がコンパイルエラー）、取り込み先が asmdef / asmref のあるフォルダ・`Editor` フォルダ・`Assets/Plugins`・`Assets/Standard Assets` の中（U# がコンパイルしない）。既存ファイルは既定で上書きしない。サンプル側に `.meta` があればコピーして GUID を保つ（無いファイルは Unity が新しい GUID を振る。同じ GUID を別のアセットが使っていればコピーせず警告）。一部だけ取り込むこともできる。
 4. 取り込み後、Unity の再コンパイルが走る。コンパイル中の次の MCP 呼び出しは「エディタが忙しい」旨で返るので、少し待って読み直す。
 
-他の取り込み方：Unity のメニュー `Tools > Claude Creator Tools > ワールドギミック (UdonSharp) > Assets/ClaudeWorldGimmicks にインポート`（1の確定と同じ）。Package Manager の「Samples > Import」は UdonSharp の有無を確かめず Program Asset も作らないので非推奨。
+他の取り込み方：Unity のメニュー `Tools > Claude Creator Tools > ワールドギミック (UdonSharp) > ClaudeWorldGimmicks にインポート (Assets 直下)`（1の確定と同じ）。Package Manager の「Samples > Import」は UdonSharp の有無を確かめず Program Asset も作らないので非推奨。
 
 ---
 

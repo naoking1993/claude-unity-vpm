@@ -92,6 +92,7 @@ Claude Code では、MCP サーバー名が `UnityMCP` なので、ツール名�
 ### 時間の上限（30 秒）
 
 - MCP の 1 回の呼び出しは、既定で 30 秒で打ち切られます。`timeout_seconds` を渡すとサーバーが待つ時間を延ばします（サーバーの上限は 3600）。
+- **stdio で接続している場合**、MCP for Unity は Unity 側で 1 回の呼び出しを常に 30 秒で打ち切り、`timeout_seconds` を待ち時間に使いません。それでも `cct_world_audit`・`cct_dependency_report`・`cct_animator_inspect` は `timeout_seconds` を自分の走査の上限に使うので、stdio では `timeout_seconds` を渡さないでください（走査が 30 秒を超え、結果が届かなくなります）。重い呼び出しは範囲を絞って複数回に分けるか、Unity の **Tools > Claude Creator Tools** メニューから実行してください（メニューは MCP を通らないので 30 秒で打ち切られません。ただしアニメーター解析のメニューは既定どおり約 18 秒で走査を止めます）。作者の環境は HTTP 接続で、`timeout_seconds` が効きます。
 - ただし Claude Code は、HTTP の MCP サーバーから 5 分間何も返ってこない呼び出しを中断します（Claude Code のドキュメント。`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` で変更可）。**`timeout_seconds` は 240 以下**にしてください。
 - 大きいアバターの `post_build`、高解像度・多方向の撮影、大きいプロジェクトの逆引き、数百 MB のスナップショットは 30 秒を超えることがあります。各ツールの説明にある目安（120〜240）を渡します。
 - `cct_world_audit`・`cct_dependency_report`・`cct_animator_inspect` は `timeout_seconds` に合わせて走査を途中で止め、「途中までの結果」だと issue で示します（`cct_world_audit` は `REFERENCE_SCAN_TRUNCATED` / `USHARP_SCAN_TRUNCATED`、`cct_dependency_report` は `SCAN_INCOMPLETE` と `conclusive: false`、`cct_animator_inspect` は `TRUNCATED`）。
@@ -163,7 +164,7 @@ issue は `{severity, code, message, path?, asset?, value?, limit?}` です。`c
 | ワールド監査 (cct_world_audit) > アクティブシーン (全プラットフォーム) / アクティブシーン (PC) / アクティブシーン (Android) / アクティブシーン (iOS) | `scene=active`、`platform=all` / `pc` / `android` / `ios`。メニューからは `timeout_seconds=300` 相当まで走査します |
 | 依存関係 (cct_dependency_report) > 選択アセットの依存関係 / 選択アセットの使用元を検索 / 選択オブジェクトのシーン外参照 | `mode=dependencies` / `reverse`（Project の選択）/ `scene_references`（Hierarchy の選択） |
 | スナップショット (cct_snapshot) > 開いているシーンと依存アセットを保存 / 選択アセットを保存 / 一覧をログ出力 | `action=create`（開いているシーン + 編集可能な依存アセット）/ `create`（選択アセットだけ）/ `list`。復元と削除はメニューに置いていません（確認なしに実行できないため） |
-| ワールドギミック (UdonSharp) > 一覧と導入状況をログ出力 / Assets/ClaudeWorldGimmicks にインポート | クリックが同意の代わりなので、インポートは `confirm=true` で実行します（既存ファイルは上書きしません） |
+| ワールドギミック (UdonSharp) > 一覧と導入状況をログ出力 / ClaudeWorldGimmicks にインポート (Assets 直下) | クリックが同意の代わりなので、インポートは `confirm=true` で実行します（既存ファイルは上書きしません） |
 | レポートフォルダを開く / キャプチャフォルダを開く / スナップショットフォルダを開く | そのフォルダーをエクスプローラーで表示（無ければ作ってから） |
 
 ## 出力先
@@ -199,7 +200,7 @@ issue は `{severity, code, message, path?, asset?, value?, limit?}` です。`c
 - **ワールドプロジェクト専用です。** アバタープロジェクトには UdonSharp が無いので、入れるとコンパイルエラーでプロジェクト全体のスクリプトが止まります。
 - 取り込みは次のどちらかで行います。どちらも UdonSharp の有無と必要パッケージを確かめ、`.meta` ごとコピーし（GUID が安定します）、各スクリプトの UdonSharp Program Asset を作ります。
   - Claude から: `cct_world_gimmicks` を `action=list` → `action=import`（ドライラン）→ 本人の同意 → `action=import, confirm=true`
-  - メニューから: `Tools > Claude Creator Tools > ワールドギミック (UdonSharp) > Assets/ClaudeWorldGimmicks にインポート`
+  - メニューから: `Tools > Claude Creator Tools > ワールドギミック (UdonSharp) > ClaudeWorldGimmicks にインポート (Assets 直下)`
 - **Package Manager の「Samples > Import」は使わないでください。** UdonSharp の有無を確かめず（アバタープロジェクトではコンパイルエラーになります）、Program Asset も作りません。既にそちらで取り込んでいる場合、上の方法はそのスクリプトを取り込まずに `SAMPLE_EXISTS_ELSEWHERE` で知らせ、足りない Program Asset だけをそのコピーの隣に作ります。同じスクリプトを手で別のフォルダーにもコピーすると、同じクラスが 2 つになりコンパイルエラー（CS0101）になります。
 
 ## 初回確認

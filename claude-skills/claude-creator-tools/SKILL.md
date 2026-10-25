@@ -13,7 +13,7 @@ Unity への接続確認、破壊的操作の前の確認、計画の提示、1�
 
 このスキルの作成・参照だけを頼まれた場合は、Unity を変更しない。スキルを読み込んだだけでは、Unity への接続や操作を許可したことにはならない。
 
-書き込みをする操作は3つだけ：`cct_snapshot` の `restore` と `delete`、`cct_world_gimmicks` の `import`。この3つはユーザーの依頼があるときだけ使う。まず `confirm` を付けずに呼んでドライランの結果を見せ、同意を得てから `confirm: true` で呼ぶ。Tools メニューの「ワールドギミック (UdonSharp)/Assets/ClaudeWorldGimmicks にインポート」は確認なしで書き込むので、`execute_menu_item` でドライランを飛ばさない。「元に戻して」と言われても、戻せるのは `cct_snapshot` で退避したものだけ。`list` に戻す元が無ければそう伝え、`unity-mcp-operations` の手順に従う（MCP の削除は Undo に載らない）。
+書き込みをする操作は3つだけ：`cct_snapshot` の `restore` と `delete`、`cct_world_gimmicks` の `import`。この3つはユーザーの依頼があるときだけ使う。まず `confirm` を付けずに呼んでドライランの結果を見せ、同意を得てから `confirm: true` で呼ぶ。Tools メニューの「ワールドギミック (UdonSharp)/ClaudeWorldGimmicks にインポート (Assets 直下)」は確認なしで書き込むので、`execute_menu_item` でドライランを飛ばさない。「元に戻して」と言われても、戻せるのは `cct_snapshot` で退避したものだけ。`list` に戻す元が無ければそう伝え、`unity-mcp-operations` の手順に従う（MCP の削除は Undo に載らない）。
 
 ほかの操作もファイルは書く。レポート JSON と撮影画像は `Library/ClaudeCreatorTools/` に、`cct_snapshot` の `create` は `<プロジェクト>/ClaudeCreatorTools/Snapshots/` に書く（未保存のシーンを写すときだけ `Assets/__ClaudeCreatorToolsTemp` に一時コピーを作り、消す）。シーンやアセットの中身は変えない。
 

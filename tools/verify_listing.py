@@ -122,6 +122,7 @@ import build_vpm_package as bvp  # noqa: E402
 # Pin every published zip here, exactly like PUBLISHED above.
 SRC_PUBLISHED = {
     "io.github.naoking1993.claude-creator-tools": {
+        "0.1.0": "8bacf727b9a3057f283b85b6d26a96233c0e60a0587b1f45e685dccb27736ea1",
     },
 }
 LISTING_KEYS_FROM_PJ = ("name", "displayName", "version", "unity", "description", "author", "license",
@@ -181,7 +182,9 @@ for name, releases in bvp.PACKAGES.items():
             if g in mcp_guids: fail(f"{tag}: guid {g.decode()} collides with com.coplaydev.unity-mcp")
             seen[g] = m
         for n in names:
-            if n.endswith((".cs", ".md", ".json", ".asmdef")) and z.read(n).startswith(b"\xef\xbb\xbf"):
+            # JSON (package.json, .asmdef) must not carry a BOM; C# sources may (the U# samples use one on purpose so
+            # Japanese comments open correctly in Windows editors).
+            if n.endswith((".json", ".asmdef")) and z.read(n).startswith(b"\xef\xbb\xbf"):
                 fail(f"{tag}: {n} has a UTF-8 BOM")
 
 print("OK" if not errors else f"{len(errors)} failure(s)")

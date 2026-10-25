@@ -5,49 +5,33 @@ using Newtonsoft.Json.Linq;
 namespace Naoking.ClaudeCreatorTools.Mcp
 {
     [McpForUnityTool(CctCaptureViews.ToolName,
-        Description = "Claude Creator Tools: render reproducible PNG images of an avatar or object from fixed angles relative to " +
-                      "its front (+Z of the target, or of the enclosing avatar root when the target is a part of an avatar), so you " +
-                      "can judge appearance and compare before/after changes under identical camera, pose and lighting. Use it " +
-                      "before and after material tuning / optimization / outfit or blend-shape edits: capture once, edit, then " +
-                      "capture again with compare_with = the first capture_dir (or 'latest'); omitted parameters are inherited from " +
-                      "that capture so camera, lighting and background match. To look at the result, Read the contact_sheet PNG " +
-                      "(one labelled grid of all views) first; open single view PNGs or compare images only when you need detail. " +
-                      "mode 'isolated' (default) renders a script-free clone in a hidden preview scene with neutral studio lighting " +
-                      "(reproducible; ignores the open scene's lights, skybox and other objects, and shows the edit-time hierarchy " +
-                      "without NDMF / Modular Avatar build or preview effects); 'scene' renders the real open scene with its own " +
-                      "lighting. Returns capture_dir, contact_sheet (absolute PNG path), manifest, views[] (file = absolute PNG " +
-                      "path, camera pose), params (effective, incl. inherited), target; with compare_with also comparisons[] per " +
-                      "view (changed_pct_foreground / mean_abs_diff_foreground exclude the background - prefer them; whole-image " +
-                      "changed_pct / mean_abs_diff; max_diff; changed_bbox; compare_image = before | after; diff_image) and " +
-                      "comparison_units (8-bit sRGB levels, not Delta E). Side effects: " +
-                      "writes only files under Library/ClaudeCreatorTools/Captures/<id>_<label>/ (PNGs, contact_sheet.png, " +
-                      "manifest.json with every parameter and camera pose); never modifies scenes or assets (reports SCENE_DIRTIED " +
-                      "if a scene unexpectedly became dirty). Parameters: target = GameObject spec: hierarchy path '/Avatar', unique " +
-                      "name, '#instanceId', prefab asset path 'Assets/....prefab', or empty / 'selection' (default); views = " +
-                      "comma-separated string of view names and/or presets: front, back, left, right, front_left, " +
-                      "front_right, back_left, back_right, top, face_front, face_left45, face_right45 (left/right = the target's own " +
-                      "sides; face_* always frame the humanoid head), preset 'turnaround' = front,front_right,right,back,left," +
-                      "front_left, preset 'face' = face_front,face_left45,face_right45 (default front,back,left,right); resolution = " +
-                      "square image size 256-2048 (default 768); mode = 'isolated' (default) or 'scene'; background = 'solid' " +
-                      "(default), 'transparent' (PNG with alpha) or 'skybox' (scene mode only); background_color = #RRGGBB sRGB " +
-                      "(default #808080); fov = vertical field of view 5-90 degrees (default 25); padding = margin fraction per side " +
-                      "0-0.4 (default 0.08); framing = 'auto' (default, whole body), 'upper' (hips to top) or 'face' (head) for " +
-                      "non-face views; contact_sheet = also write contact_sheet.png (default true); label = text for the folder " +
-                      "name, Japanese kept (default the target's name); compare_with = previous capture folder, its manifest.json, " +
-                      "a folder name under Library/ClaudeCreatorTools/Captures, or 'latest' (newest capture of the same target; " +
-                      "falls back to the newest capture of any object with COMPARE_TARGET_DIFFERS) - explicitly different " +
+        Description = "Claude Creator Tools: render reproducible PNG images of an avatar or object from fixed angles relative to its " +
+                      "front (+Z of the target, or of its avatar root) and optionally pixel-compare them with an earlier capture. Use " +
+                      "it before and after material tuning / optimisation / outfit or blend-shape edits: capture, edit, then capture " +
+                      "again with compare_with = the first capture_dir or 'latest'. Parameters: target = '' / 'selection' (default), " +
+                      "hierarchy path '/Avatar', unique name, '#instanceId' or 'Assets/....prefab'; views = comma-separated string of " +
+                      "front, back, left, right, front_left, front_right, back_left, back_right, top, face_front, face_left45, " +
+                      "face_right45 and/or presets 'turnaround' (6 around) and 'face' (3 face views) (default " +
+                      "'front,back,left,right'); resolution = square size 256-2048 (default 768); mode = 'isolated' (default: " +
+                      "script-free clone in a hidden preview scene with neutral lighting; edit-time hierarchy without NDMF/MA preview) " +
+                      "or 'scene' (the open scene with its own lighting); background = 'solid' (default), 'transparent' (PNG alpha) or " +
+                      "'skybox' (scene mode only); background_color = #RRGGBB sRGB (default #808080); fov = vertical degrees 5-90 " +
+                      "(default 25); padding = margin fraction per side 0-0.4 (default 0.08); framing = 'auto' (default, whole body), " +
+                      "'upper' (hips up) or 'face' for non-face views; contact_sheet = also write contact_sheet.png (default true); " +
+                      "label = folder name text, Japanese kept (default the target's name); compare_with = previous capture folder, " +
+                      "its manifest.json, a folder name under Library/ClaudeCreatorTools/Captures, or 'latest' (newest capture of the " +
+                      "same target); omitted parameters are inherited from it, and explicitly different " +
                       "resolution/mode/background/background_color/fov/padding/framing/light_follow_camera/keep_scripts give " +
-                      "COMPARE_MISMATCH and no comparison (the new capture is still written); reuse_cameras = with compare_with, " +
-                      "reuse the previous camera pose when the framing bounds changed (e.g. a mesh was removed) so pixels stay " +
-                      "aligned (default true); light_follow_camera = isolated mode: aim key/fill lights relative to each camera " +
-                      "instead of fixed to the target's front (default false: back views get only fill + ambient light); " +
-                      "keep_scripts = isolated mode: keep MonoBehaviours on the clone (default false; VRChat PhysBones/contacts/" +
-                      "constraints are always removed). Timing: one view is usually well under a second, but resolution > 1024 " +
-                      "with many views, background='transparent' (two renders per view), compare_with, or the first capture after " +
-                      "the Editor starts (shaders are compiled synchronously so no placeholder appears) can exceed 30 s - pass " +
-                      "timeout_seconds = 120 for those (it only raises the limit, so it is safe when unsure). If a call times out, " +
-                      "Unity may still finish it: look for the newest folder under Library/ClaudeCreatorTools/Captures before " +
-                      "retrying." + CctMcpBridge.CommonParamsDoc)]
+                      "COMPARE_MISMATCH and no comparison; reuse_cameras = with compare_with, reuse the previous camera pose when the " +
+                      "framing bounds changed (default true); light_follow_camera = isolated: aim the lights from each camera (default " +
+                      "false); keep_scripts = isolated: keep MonoBehaviours on the clone (default false; " +
+                      "PhysBones/contacts/constraints are always removed). Returns capture_dir, contact_sheet, manifest, views[] " +
+                      "(absolute PNG paths, camera pose), params and, with compare_with, comparisons[] (prefer changed_pct_foreground " +
+                      "/ mean_abs_diff_foreground; compare_image, diff_image). Read the contact_sheet PNG first. Writes only under " +
+                      "Library/ClaudeCreatorTools/Captures; never modifies scenes or assets. Pass timeout_seconds=120 for resolution > " +
+                      "1024 with many views, transparent, compare_with or the first capture after the Editor starts; after a timeout " +
+                      "look for the newest capture folder before retrying." +
+                      CctMcpBridge.CommonParamsDoc)]
     public static class CctCaptureViewsTool
     {
         // Parameters that compare_with can inherit have no DefaultValue on purpose: an omitted value must stay absent so

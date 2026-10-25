@@ -80,7 +80,7 @@
 | `cct_dependency_report` の走査は `timeout_seconds - 5` 秒（既定 25 秒）で止まり、`conclusive: false` を返す | 同上 | コード読解 2026-10-25 |
 | `cct_dependency_report` に存在しない `export_root`・`search_root` を渡すと `INVALID_ARGUMENT` で失敗する（内外の判定を省くのは、`export_root` も `assets` のフォルダーも無いときだけ：`NO_EXPORT_ROOT`） | `P/Editor/Tools/CctDependencyReport.Dependencies.cs`・`.Reverse.cs` | コード読解 2026-10-25（【訂正】それまで「フォルダーが無ければ判定しない」と書いていた） |
 | `cct_capture_views` と `cct_dependency_report` の `scene_references` は、`target` を省いて何も選んでいないと `TARGET_NOT_FOUND`（アバターを自動では選ばない。自動で選ぶのは `cct_avatar_audit`・`cct_animator_inspect` だけ） | `P/Editor/Core/CctTargets.cs`（Resolve）、`P/Editor/Tools/CctCaptureViews.cs`・`CctDependencyReport.SceneReferences.cs`、`CctAvatarAudit.cs`（ResolveAvatar）、`CctAnimatorInspect.Targets.cs` | コード読解 2026-10-25 |
-| Tools メニューの「Assets/ClaudeWorldGimmicks にインポート」は `confirm: true` で呼ぶ（ドライランなし） | `P/Editor/Menu/CctWorldGimmicksMenu.cs` | コード読解 2026-10-25 |
+| Tools メニューの「ClaudeWorldGimmicks にインポート (Assets 直下)」は `confirm: true` で呼ぶ（ドライランなし） | `P/Editor/Menu/CctWorldGimmicksMenu.cs` | コード読解 2026-10-25 |
 | メニューの名前は `Tools/Claude Creator Tools/<機能> (cct_…)/<項目>` の形（例「キャプチャ (cct_capture_views)/選択中を4方向」）。例外はワールドギミックで、`ワールドギミック (UdonSharp)/<項目>` | `P/Editor/Menu/*.cs` | コード読解 2026-10-25（同じ日に名前が変わった後の状態） |
 | `cct_avatar_audit`・`cct_world_audit` は `platform` が all・pc・android・ios 以外なら `INVALID_ARGUMENT` で失敗する（黙って all にしない） | `P/Editor/Tools/CctAvatarAudit.cs`・`CctWorldAudit.cs`（Run） | コード読解 2026-10-25 |
 | `cct_environment` は Editor.log のエラー、MCP サーバーの版、MCP for Unity の DLL を読まない | `P/Editor/Tools/CctEnvironment.cs` | コード読解 2026-10-25 |

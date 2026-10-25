@@ -5,41 +5,31 @@ using Newtonsoft.Json.Linq;
 namespace Naoking.ClaudeCreatorTools.Mcp
 {
     [McpForUnityTool(CctDependencyReport.ToolName,
-        Description = "Claude Creator Tools: read-only dependency/reference report (changes no asset or scene). " +
-                      "Use it before packaging a modified gimmick/outfit for another avatar or project, and before deleting or replacing assets " +
-                      "('who uses this?'). Packaging flow: mode=scene_references on the gimmick root in the scene, save a copy as an independent " +
-                      "prefab, then mode=dependencies on that prefab or its folder with export_root and declared_packages. " +
-                      "mode=dependencies (default): AssetDatabase.GetDependencies grouped as inside_export_root, assets_outside_root (by Assets/A/B " +
-                      "with MB and referenced_from; OUTSIDE_EXPORT_ROOT), required_packages {name, version_installed (verified here, not a minimum), " +
-                      "installed_via, depends_on, referenced_by} and builtin; errors MISSING_GUID (YAML/.meta 'guid:' that resolves to nothing, with " +
-                      "file:line and field), MISSING_SCRIPT, MISSING_PREFAB, MISSING_REFERENCE (also wrong fileIDs); dependency_list_path = TSV of " +
-                      "every dependency (group, input, path, guid, type, bytes) for the export list. Reads saved files (UNSAVED_CHANGES). " +
-                      "mode=reverse: files under search_root whose text or .meta contains the GUID of one of the assets (users, users_by_type, " +
-                      "per_target, unused_targets), plus in-memory scene_users in loaded scenes / Prefab Mode. Binary files and name-based use from " +
-                      "code (Shader.Find, Resources.Load) are never covered. " +
-                      "mode=scene_references: every component under target (SerializedObject, hidden fields too): EXTERNAL_SCENE_REFERENCE = scene " +
-                      "object outside target (None once saved as a prefab), PATH_RESOLVED_REFERENCE = Modular Avatar re-resolves it by path, " +
-                      "SCENE_ONLY_OBJECT, Missing references/scripts/prefabs, INBOUND_SCENE_REFERENCE, PREFAB_HAS_OVERRIDES (exporting the original " +
-                      "prefab drops the instance's changes); asset references and references inside target are only counted. " +
-                      "conclusive=false (any mode) = partial scan (SCAN_INCOMPLETE says why): never treat 0 missing / TARGET_UNUSED as final then. " +
-                      "Scans stop at timeout_seconds - 5 (25 s by default); for a whole-project reverse search or a big folder pass " +
-                      "timeout_seconds=240. Run in edit mode (PLAY_MODE warns). Writes only reports (Library/ClaudeCreatorTools). " +
-                      "Parameters: mode = 'dependencies' | 'reverse' | 'scene_references'; " +
-                      "assets = JSON array of asset paths, folders (= every file inside) or 32-hex GUIDs (default: Project-window selection); " +
-                      "export_root = dependencies: comma-separated export folder(s) (default: folders in assets, else no inside/outside verdict); " +
-                      "include_scripts = dependencies: false skips .cs/.dll under Assets/ (default true); " +
-                      "declared_packages = dependencies: JSON array of packages the destination already has (names or 'com.vrchat.*'), others become warnings; " +
-                      "target = scene_references: scene GameObject ('/Avatar/Gimmick', '#instanceId', unique name; default: Hierarchy selection); " +
-                      "dependencies: optional scene object or prefab asset added to the inputs; " +
-                      "search_root = reverse: comma-separated folder(s) to search (default 'Assets'); " +
-                      "scan_open_scenes = reverse: also check loaded scenes in memory (default true); " +
-                      "scan_code = reverse: also search .cs/.shader/.hlsl text (default false); " +
-                      "include_inbound = scene_references: also list references into target (default true); " +
-                      "max_components = scene components to scan (default 20000); " +
-                      "max_file_mb = skip non-input files above this size (default 50; 0 = no limit); " +
-                      "large_file_mb = LARGE_FILE info threshold (default 4); " +
-                      "max_entries = items per list (default 50; totals and *_omitted counts cover the rest); " +
-                      "time_budget_seconds = stop the scans sooner (default and maximum: timeout_seconds - 5)." +
+        Description = "Claude Creator Tools: read-only dependency / reference report. Use it before packaging a modified gimmick or " +
+                      "outfit for another avatar or project (mode=scene_references on its scene root, save it as an independent " +
+                      "prefab, then mode=dependencies on that prefab or folder with export_root and declared_packages) and before " +
+                      "deleting or replacing assets (mode=reverse: who uses this?). Parameters: mode = 'dependencies' (default: " +
+                      "dependencies grouped inside / outside export_root, required packages, Missing GUIDs/scripts/prefabs/references, " +
+                      "TSV of every dependency at dependency_list_path) | 'reverse' (files under search_root that contain the GUID of " +
+                      "one of the assets, plus in-memory users in loaded scenes) | 'scene_references' (references from components " +
+                      "under target to scene objects outside it, which become None in a prefab); assets = JSON array of asset paths, " +
+                      "folders (= every file inside) or 32-hex GUIDs (default: Project-window selection); export_root = dependencies: " +
+                      "comma-separated export folder(s) (default: folders in assets, else no inside/outside verdict); include_scripts " +
+                      "= dependencies: false skips .cs/.dll under Assets/ (default true); declared_packages = dependencies: JSON array " +
+                      "of packages the destination already has (names or 'com.vrchat.*'), others become warnings; target = " +
+                      "scene_references: scene GameObject ('/Avatar/Gimmick', '#instanceId', unique name; default: Hierarchy " +
+                      "selection); dependencies: optional scene object or prefab asset added to the inputs; search_root = reverse: " +
+                      "comma-separated folder(s) to search (default 'Assets'); scan_open_scenes = reverse: also check loaded scenes in " +
+                      "memory (default true); scan_code = reverse: also search .cs/.shader/.hlsl text (default false); include_inbound " +
+                      "= scene_references: also list references into target (default true); max_components = scene components to scan " +
+                      "(default 20000); max_file_mb = skip non-input files above this size (default 50; 0 = no limit); large_file_mb = " +
+                      "LARGE_FILE info threshold (default 4); max_entries = items per list (default 50; totals and *_omitted counts " +
+                      "cover the rest); time_budget_seconds = stop the scans sooner (default and maximum: timeout_seconds - 5). " +
+                      "conclusive=false (any mode) means a partial scan (SCAN_INCOMPLETE says why): never treat 0 missing / " +
+                      "TARGET_UNUSED as final then. Scans stop at timeout_seconds - 5 (25 s by default): pass timeout_seconds=240 for " +
+                      "a whole-project reverse search or a big folder. Reads saved files (UNSAVED_CHANGES); binary files and " +
+                      "name-based use from code (Shader.Find, Resources.Load) are not covered. Run in edit mode. Writes only the " +
+                      "report and TSV under Library/ClaudeCreatorTools." +
                       CctMcpBridge.CommonParamsDoc)]
     public static class CctDependencyReportTool
     {

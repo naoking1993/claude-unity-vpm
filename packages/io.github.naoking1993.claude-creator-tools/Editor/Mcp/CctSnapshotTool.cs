@@ -5,55 +5,32 @@ using Newtonsoft.Json.Linq;
 namespace Naoking.ClaudeCreatorTools.Mcp
 {
     [McpForUnityTool(CctSnapshot.ToolName,
-        Description = "Claude Creator Tools: file-level backup and restore for risky edits. MCP deletes are NOT on the editor Undo stack, and a " +
-                      "scene copy cannot bring back shared materials/meshes/AnimationClips changed later, so call action=create BEFORE destructive " +
-                      "or bulk changes (deleting objects/assets, editing shared materials/controllers/prefabs, optimizing, changing import " +
-                      "settings) and keep the returned id. Typical flow: create -> edit -> diff id=<id> to see what changed -> restore id=<id> (dry " +
-                      "run) -> show the user -> restore id=<id> confirm=true. " +
-                      "create: copies files byte-for-byte with their .meta (GUIDs and import settings kept) to " +
-                      "<project>/ClaudeCreatorTools/Snapshots/<id>/ (outside Assets/, never imported). Without assets it saves only the open scene " +
-                      "files; to make shared assets recoverable too, list the materials/prefabs/clips/controllers you will change in assets, or " +
-                      "pass include_dependencies=true. Open scenes with unsaved changes are captured from memory via a temporary copy in " +
-                      "Assets/__ClaudeCreatorToolsTemp (removed again; the open scene keeps its path and unsaved state; other packages' scene-save " +
-                      "hooks run as on Ctrl+S); in Play mode scenes come from disk. Other assets with unsaved in-memory changes are stored as on " +
-                      "disk (ASSET_HAS_UNSAVED_CHANGES). Packages/ is never copied (SKIPPED_PACKAGE). Aborts before copying if over max_total_mb " +
-                      "(SIZE_LIMIT; details.largest lists the biggest files). Returns id, file_count, file_types (count per extension), total_mb, " +
-                      "scenes (scene_state disk | in_memory), snapshot_dir. " +
-                      "list: snapshots newest first (id, label, created_at, kind manual | pre-restore, file_count, total_mb) and total_mb_all. " +
-                      "diff: per file unchanged/modified/deleted/meta_changed (GUID or import settings) with counts, changed-line counts for YAML " +
-                      "assets, snapshot_file (absolute path of the stored copy, readable with file tools), files added to snapshotted folders, " +
-                      "VRChat Blueprint ID differences (BLUEPRINT_ID_CHANGES), and unsaved scene/asset changes the files cannot show " +
-                      "(SCENE_HAS_UNSAVED_CHANGES). " +
-                      "restore: without confirm=true it is a dry run that lists exactly what would be overwritten/recreated/reimported and which " +
-                      "open scenes would be reloaded, changing nothing (CONFIRM_REQUIRED); show it to the user and pass confirm=true only after " +
-                      "they agree. A real restore first snapshots the current state (including unsaved open-scene changes) and returns " +
-                      "pre_restore_snapshot_id (restore that id to undo; files the restore recreated are not deleted by the undo, " +
-                      "RECREATED_FILES_REMAIN); then it unloads the affected open scenes, writes files + .meta, reimports them and reopens the " +
-                      "scenes in the same Hierarchy slots (in-memory scene and asset changes are discarded). An old scene/prefab can bring back an " +
-                      "old VRChat Blueprint ID (BLUEPRINT_ID_CHANGES: re-set it after the restore or leave that file out of assets). Refused in " +
-                      "Play mode, while compiling/importing/baking lighting (EDITOR_BUSY) or while an affected prefab has unsaved changes in " +
-                      "Prefab Mode (PREFAB_STAGE_UNSAVED). Added files are never deleted. Restoring scripts triggers a compile and domain reload " +
-                      "after the call (SCRIPTS_RESTORED): wait for MCP to reconnect before the next call. " +
-                      "delete: removes a snapshot folder (dry run unless confirm=true; ask the user first). " +
-                      "Response lists are capped at max_entries and report <key>_omitted; the complete lists are then under full_lists in the " +
-                      "saved report (report_path) or with detail='full'. Big snapshots/restores (hundreds of MB, dependency_filter='all', reimporting textures/models) can " +
-                      "exceed the 30 s default: pass timeout_seconds=240; a timed-out call keeps running in Unity, so check with action=list or " +
-                      "diff instead of repeating it. " +
-                      "Parameters: action (required) = 'create' | 'list' | 'diff' | 'restore' | 'delete'; " +
-                      "label = create: free-text label stored in the manifest, Japanese OK (default ''); " +
-                      "assets = create: JSON array of asset files and/or folders under Assets/ (folders recursive, 'Assets/...' paths only); " +
-                      "restore: optional subset of snapshot paths (a folder selects everything under it; omitted = all); " +
-                      "include_open_scenes = create: also snapshot every loaded scene that has a file (default true); " +
-                      "include_dependencies = create: also snapshot recursive dependencies under Assets/ (AssetDatabase.GetDependencies, " +
-                      "plus in-memory references of unsaved scenes; default false); " +
-                      "dependency_filter = create: 'editable' (default: .unity .prefab .mat .anim .controller .overrideController .mask " +
-                      ".asset .playable .physicMaterial .renderTexture .flare .signal .lighting) or 'all' (also textures, models, scripts, " +
-                      "audio); " +
-                      "max_total_mb = create: abort before copying if the estimate exceeds this (default 500); " +
-                      "id = diff / restore / delete: snapshot id from create or list (or a pre_restore_snapshot_id to undo a restore); " +
-                      "confirm = restore / delete: true to actually change files (default false = dry run); " +
-                      "limit = list: maximum snapshots returned (default 50); " +
-                      "max_entries = create / diff / restore: maximum entries per returned list (default 50; counts always cover everything)." +
+        Description = "Claude Creator Tools: file-level backup and restore for risky edits (MCP deletes are not on the editor Undo " +
+                      "stack). Call action=create BEFORE destructive or bulk changes (deleting objects/assets, editing shared " +
+                      "materials/controllers/prefabs, optimising, changing import settings) and keep the returned id. Flow: create -> " +
+                      "edit -> diff -> restore (dry run) -> show the user -> restore confirm=true. Parameters: action (required) = " +
+                      "'create' | 'list' | 'diff' | 'restore' | 'delete' (delete removes a stored snapshot, not project assets); " +
+                      "label = create: free-text label stored in the manifest, " +
+                      "Japanese OK (default ''); assets = create: JSON array of asset files and/or folders under Assets/ (folders " +
+                      "recursive; without assets only the open scene files are saved, so list the shared assets you will change or " +
+                      "pass include_dependencies=true); restore: optional subset of snapshot paths (a folder selects everything under " +
+                      "it; omitted = all); include_open_scenes = create: also snapshot every loaded scene that has a file, unsaved " +
+                      "changes captured from memory (default true); include_dependencies = create: also snapshot recursive " +
+                      "dependencies under Assets/ (default false); dependency_filter = create: 'editable' (default: .unity .prefab " +
+                      ".mat .anim .controller .overrideController .mask .asset .playable .physicMaterial .renderTexture .flare .signal " +
+                      ".lighting) or 'all' (also textures, models, scripts, audio); max_total_mb = create: abort before copying if the " +
+                      "estimate exceeds this (default 500); id = diff / restore / delete: snapshot id from create or list (or a " +
+                      "pre_restore_snapshot_id to undo a restore); confirm = restore / delete: true to actually change files (default " +
+                      "false = dry run; show it to the user and pass true only after they agree); limit = list: maximum snapshots " +
+                      "returned (default 50); max_entries = create / diff / restore: maximum entries per returned list (default 50; " +
+                      "complete lists in the report at report_path). Files are copied byte-for-byte with their .meta to " +
+                      "<project>/ClaudeCreatorTools/Snapshots/<id>/ (outside Assets/; Packages/ is never copied). A real restore first " +
+                      "snapshots the current state (pre_restore_snapshot_id), then writes files + .meta, reimports and reopens the " +
+                      "affected scenes (in-memory changes are discarded; added files are never deleted); it is refused in Play mode or " +
+                      "while the editor is busy (EDITOR_BUSY). Restoring scripts triggers a domain reload: wait for MCP to reconnect. " +
+                      "Check BLUEPRINT_ID_CHANGES before restoring scenes/prefabs (an old file brings back its old Blueprint ID, " +
+                      "which changes the upload target). Big snapshots/restores: pass timeout_seconds=240; " +
+                      "after a timeout check with action=list or diff instead of repeating the call." +
                       CctMcpBridge.CommonParamsDoc)]
     public static class CctSnapshotTool
     {

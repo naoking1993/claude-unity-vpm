@@ -6,43 +6,28 @@ namespace Naoking.ClaudeCreatorTools.Mcp
 {
     [McpForUnityTool(CctAnimatorInspect.ToolName,
         Description = "Claude Creator Tools: read-only dump and VRChat lint of AnimatorControllers, for tracing menu -> parameter -> " +
-                      "MA Merge Animator -> layer/state/transition/driver -> clip binding -> object. Resolves the controller from an " +
-                      "asset or from an avatar's VRCAvatarDescriptor playable layers (default layers are inspected via the SDK sample " +
-                      "controller and flagged) plus Modular Avatar Merge Animator components (listed with layer type, path mode, " +
-                      "relative root, WD matching, merge order; the ones merging into the requested layer are inspected too). Returns " +
-                      "controllers, parameters (with Expression Parameter / built-in types), a layer table (weight, blending, mask, sync, " +
-                      "WD on/off, states, MA WD forecast), graph_preview (whole graph when small, else an outline; the full graph with " +
-                      "states, motions incl. blend trees, VRChat behaviours such as Avatar Parameter Driver entries, Tracking / Layer / " +
-                      "Playable Layer / Locomotion Control, Temporary Pose Space, Play Audio, and transitions with conditions is in " +
-                      "the report file), bindings (missing paths / components / blend shapes under the avatar), and lint issues: " +
-                      "WD_MIXED (SDK rule), EMPTY_STATE_WD_OFF, DIRECT_BLENDTREE_WD_OFF, PARAM_UNDEFINED, PARAM_TYPE_MISMATCH (also " +
-                      "Expression / built-in type vs animator type, with VRChat's conversion rule), TRANSITION_NEVER_FIRES, " +
-                      "ANYSTATE_SELF_LOOP, UNREACHABLE_STATE, " +
-                      "LAYER_WEIGHT_ZERO, BINDING_PATH_MISSING, TRACKING_NOT_RESTORED / LOCOMOTION_NOT_RESTORED / " +
-                      "ACTION_WEIGHT_NOT_LOWERED (settings VRChat keeps until another state resets them; use layer='all' for " +
-                      "the whole avatar), driver / layer-control / MA checks. source.build_tools gives the installed MA / NDMF " +
-                      "versions; with MA installed, findings that MA/NDMF fix at build (parameter type harmonization) are info. " +
-                      "Static pre-build analysis only " +
-                      "(not runtime values; in Play mode an NDMF-processed avatar shows its merged controllers); nothing is " +
-                      "modified. The scan stops at about 60% of timeout_seconds and reports TRUNCATED, so pass timeout_seconds " +
-                      "(e.g. 120) for avatars with very large FX controllers, or narrow with layers. " +
+                      "MA Merge Animator -> layer/state/transition/driver -> clip binding -> object. Use it for broken " +
+                      "toggles/gestures/emotes, Write Defaults questions and to find what reads or writes a parameter or property. " +
                       "Parameters: controller = AnimatorController / AnimatorOverrideController asset path 'Assets/.../X.controller', " +
                       "GUID or unique asset name (optional; with target it is checked against that avatar); target = avatar or object: " +
-                      "'' / 'selection' (default; a controller selected in the Project window is used directly, a GameObject is moved up " +
-                      "to its VRCAvatarDescriptor; nothing selected = the only avatar in the loaded scenes), '/Root/Child', '#instanceId', " +
-                      "unique name or 'Assets/.../X.prefab'; objects without descriptor use their Animator controller or MA Merge " +
-                      "Animators; layer = playable layer when resolving from the avatar: 'fx' (default), 'gesture', 'action', 'base', " +
-                      "'additive', 'sitting', 'tpose', 'ikpose' or 'all'; include_ma = list MA Merge Animators and inspect those for " +
-                      "the layer (default true when an avatar/target is given); layers = JSON array of animator layer names or indices " +
-                      "to include (default all; WD controller totals still use every layer); include_transitions = put transitions in " +
-                      "the graph (default true; lints always run); check_bindings = check every clip curve path (incl. blend tree " +
-                      "children) under the avatar root, or under the MA relative root for Relative path mode (default true when a " +
-                      "target is given); max_states = states written to the graph before truncating (default 400, max 20000); " +
-                      "find_parameter = parameter name: list every declaration, condition, blend tree, speed/time parameter, driver " +
-                      "read/write and play-audio use; find_binding = case-insensitive text matched against curve paths and " +
-                      "'Component.property' ('path:property' requires both), returns the clips, constant values and states using them " +
-                      "(e.g. find_binding='Body:blendShape.smile' lists every writer of a face shape). Search results keep 50 rows " +
-                      "in the response; the report's find_all has up to 2000." +
+                      "'' / 'selection' (default; a controller selected in the Project window is used directly, a GameObject is moved " +
+                      "up to its VRCAvatarDescriptor, nothing selected = the only avatar in the loaded scenes), '/Root/Child', " +
+                      "'#instanceId', unique name or 'Assets/.../X.prefab'; layer = playable layer to resolve from the avatar: 'fx' " +
+                      "(default), 'gesture', 'action', 'base', 'additive', 'sitting', 'tpose', 'ikpose' or 'all'; include_ma = list MA " +
+                      "Merge Animators and inspect those merging into the layer (default true when a target is given); layers = JSON " +
+                      "array of animator layer names or indices to include (default all); include_transitions = put transitions in the " +
+                      "graph (default true; lints always run); check_bindings = check every clip curve path under the avatar root or " +
+                      "the MA relative root (default true when a target is given); max_states = states written to the graph before " +
+                      "truncating (default 400, max 20000); find_parameter = exact parameter name: list every declaration and use " +
+                      "(conditions, blend trees, speed/time, driver read/write, play audio); find_binding = case-insensitive text " +
+                      "matched against curve paths and 'Component.property' ('path:property' requires both, e.g. " +
+                      "'Body:blendShape.smile' lists every writer of a face shape). Returns source, playable_layers, controllers, " +
+                      "parameters, layers (weight, mask, sync, WD), graph_preview, bindings, ma_merge_animators, find (50 rows; up to " +
+                      "2000 in the report's find_all) and lint issues (WD_MIXED, PARAM_UNDEFINED, PARAM_TYPE_MISMATCH, " +
+                      "TRANSITION_NEVER_FIRES, BINDING_PATH_MISSING, TRACKING_NOT_RESTORED, ...; use layer='all' for the whole " +
+                      "avatar); the full graph is in the report at report_path. Static pre-build analysis; nothing is modified. The " +
+                      "scan stops at about 60% of timeout_seconds (TRUNCATED): pass timeout_seconds=120 for very large FX controllers, " +
+                      "or narrow with layers." +
                       CctMcpBridge.CommonParamsDoc)]
     public static class CctAnimatorInspectTool
     {
