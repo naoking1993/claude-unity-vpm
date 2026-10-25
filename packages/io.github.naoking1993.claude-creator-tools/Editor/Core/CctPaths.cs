@@ -38,6 +38,19 @@ namespace Naoking.ClaudeCreatorTools
             return string.IsNullOrEmpty(prefix) ? id : prefix + "-" + id;
         }
 
+        /// <summary>
+        /// &lt;dir&gt;/&lt;stem&gt;&lt;extension&gt;, or &lt;stem&gt;-2, -3, ... when that file exists. NewId's suffix comes from
+        /// Environment.TickCount, which on Windows only advances every ~15.6 ms, so two runs of the same tool in the same tick
+        /// (e.g. inside one batch_execute) would otherwise get the same name and the second would overwrite the first report.
+        /// </summary>
+        public static string UniqueFilePath(string dir, string stem, string extension)
+        {
+            var path = Combine(dir, stem + extension);
+            for (int n = 2; File.Exists(path) && n < 1000; n++)
+                path = Combine(dir, stem + "-" + n.ToString(System.Globalization.CultureInfo.InvariantCulture) + extension);
+            return path;
+        }
+
         /// <summary>Makes a file-name-safe token from arbitrary (possibly Japanese) text.</summary>
         public static string SafeName(string text, int maxLength = 40)
         {
@@ -79,8 +92,8 @@ namespace Naoking.ClaudeCreatorTools
         public static string Save(string toolName, CctResult result, string subject = null)
         {
             var dir = CctPaths.EnsureDir(CctPaths.ReportsDir);
-            var name = toolName + (string.IsNullOrEmpty(subject) ? "" : "-" + CctPaths.SafeName(subject)) + "-" + CctPaths.NewId() + ".json";
-            var path = CctPaths.Combine(dir, name);
+            var stem = toolName + (string.IsNullOrEmpty(subject) ? "" : "-" + CctPaths.SafeName(subject)) + "-" + CctPaths.NewId();
+            var path = CctPaths.UniqueFilePath(dir, stem, ".json");
             result.ReportPath = path;
             File.WriteAllText(path, result.ToJson(true), new UTF8Encoding(false));
             return path;

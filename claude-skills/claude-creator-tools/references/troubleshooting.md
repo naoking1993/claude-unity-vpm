@@ -50,7 +50,7 @@ MCP が使えない間の代わり：ユーザーに Unity の Tools > Claude Cr
 
 ## 3. タイムアウト
 
-- 1回の呼び出しは既定 30 秒で打ち切られる。`timeout_seconds`（最大 3600）で延ばせる。サーバーは送るコマンドの引数から `timeout_seconds` を読むので、`execute_custom_tool` でも `parameters` の中に入れればよい（コード読解）。
+- 1回の呼び出しは既定 30 秒で打ち切られる。`timeout_seconds` で延ばせる（サーバーの上限は 3600 だが、Claude Code 側の都合で 240 以下にする。目安はこの章の最後）。サーバーは送るコマンドの引数から `timeout_seconds` を読むので、`execute_custom_tool` でも `parameters` の中に入れればよい（コード読解）。
 - 打ち切られたとき、サーバーは `success: false` と `hint: "retry"` を返すことがある（コード読解。エラーの文面は環境で違いうる）。**cct ではこの hint に従って再送しない**。Unity 側では、まだ始まっていない呼び出しは取り消されるが、始まっていた呼び出しは最後まで動き、その間 Unity のメインスレッドを止める。終わったかどうかは結果では分からない。
 - 打ち切られた後の確かめ方：
   - 読み取り系（audit・inspect・report）：少し待って、範囲を絞るか `timeout_seconds` を上げて呼び直す。
@@ -127,4 +127,4 @@ MCP が使えない間の代わり：ユーザーに Unity の Tools > Claude Cr
 | 監査の値が Play 中と違う | Play 中は NDMF の Apply on Play で処理済みのことがある（`PLAY_MODE`）。Play を止めて比べる |
 | ブリッジが `no_unity_session` になった | cct はダイアログを出さない。SDK などのモーダルダイアログが開いていないかをユーザーに確かめてもらう（`unity-mcp-operations`） |
 | `SCENE_DIRTIED`・`ASSET_DIRTIED` が出た | 読み取り専用のはずのツールでシーン・アセットが変更扱いになった。保存せずにユーザーに伝え、内容を確かめてもらう。再現条件を [台帳](verified-facts.md) に記録する |
-| 書き込みの結果が `success: false, message: null` | MCP for Unity の既知の挙動で、ドメインリロードと重なると書き込みが成功していても失敗に見えることがある（`unity-mcp-operations`）。再送せず `list`・`diff` で確かめる |
+| 書き込みの結果が `success: false, message: null` | cct の失敗はふつうでも外側の `message` が null で、理由は `error` と `data.message`、コードは `data.code` にある（[ツールの仕様](tool-reference.md) 0.3）。`data.code` が無い失敗（`hint: "retry"` や接続エラーの文面だけ）は cct が結果を返す前に切れたもので、ドメインリロードと重なると書き込みが成功していることもある（MCP for Unity の既知の挙動、`unity-mcp-operations`）。再送せず `list`・`diff` で確かめる |

@@ -419,8 +419,8 @@ namespace Naoking.ClaudeCreatorTools
                     sb.Append(string.Join("\t", row)).Append('\n');
                 var dir = CctPaths.EnsureDir(CctPaths.ReportsDir);
                 var subject = args.GetString("report_name");
-                var file = CctPaths.Combine(dir, ToolName + (string.IsNullOrEmpty(subject) ? "" : "-" + CctPaths.SafeName(subject)) +
-                                                 "-files-" + CctPaths.NewId() + ".tsv");
+                var file = CctPaths.UniqueFilePath(dir, ToolName + (string.IsNullOrEmpty(subject) ? "" : "-" + CctPaths.SafeName(subject)) +
+                                                        "-files-" + CctPaths.NewId(), ".tsv");
                 File.WriteAllText(file, sb.ToString(), new UTF8Encoding(false));
                 ctx.R.Put("dependency_list_path", CctPaths.ToDisplayPath(file));
                 ctx.R.Put("dependency_list_rows", rows.Count);

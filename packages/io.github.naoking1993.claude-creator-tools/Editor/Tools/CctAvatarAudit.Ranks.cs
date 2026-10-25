@@ -7,7 +7,7 @@ namespace Naoking.ClaudeCreatorTools
     {
         /// <summary>
         /// VRChat avatar performance rank tables and rating rules as plain data (no Unity types, so it is unit-testable
-        /// outside Unity: scratchpad cct/RankTests.cs).
+        /// outside Unity: tests/dev/cct/RankTests.cs in the repository).
         ///
         /// Thresholds: VRChat SDK 3.10.5 assets com.vrchat.base/Runtime/VRCSDK/Dependencies/VRChat/Resources/Validation/
         /// Performance/StatsLevels/{Windows,Quest}/{Excellent,Good,Medium,Poor}_*.asset, identical to the docs tables in

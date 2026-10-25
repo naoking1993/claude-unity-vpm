@@ -41,7 +41,7 @@
 | 既存ツールの Description・引数を変えても、サーバーを再起動するまで古い定義が残る（ログ `already registered with a different schema; keeping existing definition.`） | MCP調査 §7、サーバーの `services/custom_tool_service.py` | コード読解 2026-10-25 |
 | ツールの有効・無効は EditorPrefs `MCPForUnity.ToolEnabled.<ツール名>` で、PC の全プロジェクトに共通。無効なツールを呼ぶと `Tool '<name>' is disabled in the Unity Editor.` | MCP調査 §7、Unity 側 `TransportCommandDispatcher.cs` | 資料読解 2026-10-24 |
 | カスタムツールの戻り値は JSON の文字列で、画像は返せない。cct は PNG を保存して絶対パスを返す | MCP調査 §5.4、`P/Editor/Tools/CctCaptureViews.cs` | 資料読解 2026-10-24 |
-| 失敗時、MCP for Unity の `ErrorResponse` は外側の `code` と `error` に同じ理由の文字列を入れる。cct の失敗コードは `data.code` | MCP調査 §5.1、`P/Editor/Mcp/CctMcpBridge.cs`、`P/Editor/Core/CctResult.cs` | コード読解 2026-10-25 |
+| 失敗時、MCP for Unity の `ErrorResponse` は外側の `code` と `error` に同じ理由の文字列を入れる。サーバー 9.7.1 は応答を `MCPResponse{success, message, error, data, hint}` に詰め替えるので、Claude に届く外側には `code` が無く、`message` は null。cct の失敗コードは `data.code`、理由は `error` と `data.message` | MCP調査 §5.1、サーバーの `services/custom_tool_service.py`（_normalize_response）・`models/models.py`（MCPResponse）・`models/unity_response.py`、`P/Editor/Mcp/CctMcpBridge.cs`、`P/Editor/Core/CctResult.cs` | コード読解 2026-10-25（改修版では**未実測**） |
 | Claude Code での tool 名が `mcp__UnityMCP__cct_*` になるか（サーバーの登録名 `UnityMCP` は記録から） | `S/unity-mcp-operations/references/verified-facts.md` | 推定・**未実測** |
 | 一覧の変更通知が改修版サーバーから Claude Code に届き、新しいツールが自動で出るか | — | **未実測** |
 
@@ -51,8 +51,10 @@
 | --- | --- | --- |
 | 要約（`detail: "summary"`）は success・message・code（失敗時）・issue_counts・issues（error→warning→info、既定30件）・issues_omitted・ツールの SummaryKeys のキー・report_path | `P/Editor/Core/CctResult.cs`（ToCompact）、`P/Editor/Mcp/*Tool.cs` | コード読解 2026-10-25 |
 | どのツールの要約にも `tool`・`tool_version`・`elapsed_ms`・`details`・`candidates` が残る（ツールの SummaryKeys に加えて）。候補は `cct_avatar_audit`・`cct_animator_inspect` が `candidates`、`cct_capture_views` が `details.candidates`、`cct_dependency_report` が `details` | `P/Editor/Mcp/CctMcpBridge.cs`（AlwaysKeptKeys）、各ツールの Fail の呼び出し | コード読解 2026-10-25（同じ日の途中まではこの2キーが一部のツールで要約から落ちていた。コミット 37dfab7 で直った後の状態） |
-| `cct_capture_views`・`cct_dependency_report` は、対象の指定に複数が当てはまると `AMBIGUOUS_TARGET` で失敗する（それ以前は `TARGET_NOT_FOUND`） | `P/Editor/Tools/CctCaptureViews.cs`、`CctDependencyReport.Dependencies.cs`・`.SceneReferences.cs` | コード読解 2026-10-25（作業ツリーの未コミットの変更。並行して編集中） |
-| レポートは `<プロジェクト>/Library/ClaudeCreatorTools/Reports/<ツール名>-<yyyyMMdd-HHmmss-xxxx>.json`、UTF-8（BOM なし）、整形 JSON。失敗した呼び出しでも保存する（save_report が true のとき） | `P/Editor/Core/CctPaths.cs`（CctReport.Save）、`P/Editor/Core/CctRunner.cs` | コード読解 2026-10-25 |
+| `cct_capture_views`・`cct_dependency_report` は、対象の指定に複数が当てはまると `AMBIGUOUS_TARGET` で失敗する（それ以前は `TARGET_NOT_FOUND`） | `P/Editor/Tools/CctCaptureViews.cs`、`CctDependencyReport.Dependencies.cs`・`.SceneReferences.cs` | コード読解 2026-10-25（コミット 52342d7 で確定） |
+| レポートは `<プロジェクト>/Library/ClaudeCreatorTools/Reports/<ツール名>-<yyyyMMdd-HHmmss-xxxx>.json`、UTF-8（BOM なし）、整形 JSON（数値・文字列だけの配列は1行）。失敗した呼び出しでも保存する（save_report が true のとき） | `P/Editor/Core/CctPaths.cs`（CctReport.Save）、`P/Editor/Core/CctRunner.cs`、`P/Editor/Core/CctJson.cs` | コード読解 2026-10-25 |
+| 同じ名前のレポート・TSV があると末尾に `-2` などを付けて上書きを避ける | `P/Editor/Core/CctPaths.cs`（UniqueFilePath） | コード読解 2026-10-25（同じ日の後半に足された変更。配布版に入っているかは `P/Editor/Core/CctPaths.cs` で確かめる） |
+| 1コードあたりの issue の上限と残りの出し方：avatar_audit・animator_inspect は25件＋同じコードの「ほかに N 件」、world_audit は20件＋`ISSUES_TRUNCATED`、dependency_report は100件＋`ISSUES_CAPPED` と `issues_capped` | `P/Editor/Tools/CctAvatarAudit.cs`（FlushSuppressed）、`CctAnimatorInspect.cs`（FlushOverflow）、`CctWorldAudit.cs`（FinishIssues）、`CctDependencyReport.cs`（FlushIssueCaps） | コード読解 2026-10-25 |
 | 撮影は `Library/ClaudeCreatorTools/Captures/<id>_<label>/`、スナップショットは `<プロジェクト>/ClaudeCreatorTools/Snapshots/<id>/`（Assets の外、Library の外） | `P/Editor/Core/CctPaths.cs` | コード読解 2026-10-25 |
 | 返すパスは絶対パスで区切りは `/`。撮影フォルダーの label は日本語を残し、使えない文字・空白・`%` を `_` にして40字で切る | `P/Editor/Core/CctPaths.cs`（Normalize・SafeName） | コード読解 2026-10-25 |
 | Claude Code の Read・Grep が、日本語を含む `/` 区切りの Windows パスのレポート・PNG を開けるか | — | **未実測** |
@@ -72,10 +74,14 @@
 | `cct_snapshot` の restore は書く前に今の状態を自動で退避する（pre-restore）。追加されたファイルは消さない | `P/Editor/Tools/CctSnapshot.cs` 冒頭コメント | コード読解 2026-10-25 |
 | `cct_animator_inspect` の走査は `timeout_seconds × 0.6`（最低 8 秒）で止まる | `P/Editor/Tools/CctAnimatorInspect.cs`（BudgetMs） | コード読解 2026-10-25 |
 | `cct_animator_inspect` に2つの Controller を直接比べるモードは無い | `P/Editor/Mcp/CctAnimatorInspectTool.cs`（引数に比較が無い） | コード読解 2026-10-25 |
+| `cct_animator_inspect` の検索結果は `find.parameter`（`declared_in`・`expression`・`builtin`・`uses`）と `find.binding`（`matches`）に分かれる。`find_parameter` は大文字小文字を区別し、`find_binding` は区別しない | `P/Editor/Tools/CctAnimatorInspect.Bindings.cs`（RunFind・FindParameter・FindBinding） | コード読解 2026-10-25（【訂正】それまで `find.uses` と書いていた） |
+| `cct_animator_inspect` のレポートの `graph` では、`speed` は 1 以外のときだけ、`speed_param`・`motion_time_param`・`mirror_param`・`cycle_offset_param` はパラメーターが有効なときだけキーが入る | `P/Editor/Tools/CctAnimatorInspect.Graph.cs` | コード読解 2026-10-25 |
 | `cct_dependency_report` は書き出し済みの `.unitypackage` の中身を読まない | `P/Editor/Tools/CctDependencyReport.cs` 冒頭コメント（3つの mode だけ） | コード読解 2026-10-25 |
 | `cct_dependency_report` の走査は `timeout_seconds - 5` 秒（既定 25 秒）で止まり、`conclusive: false` を返す | 同上 | コード読解 2026-10-25 |
+| `cct_dependency_report` に存在しない `export_root`・`search_root` を渡すと `INVALID_ARGUMENT` で失敗する（内外の判定を省くのは、`export_root` も `assets` のフォルダーも無いときだけ：`NO_EXPORT_ROOT`） | `P/Editor/Tools/CctDependencyReport.Dependencies.cs`・`.Reverse.cs` | コード読解 2026-10-25（【訂正】それまで「フォルダーが無ければ判定しない」と書いていた） |
+| `cct_capture_views` と `cct_dependency_report` の `scene_references` は、`target` を省いて何も選んでいないと `TARGET_NOT_FOUND`（アバターを自動では選ばない。自動で選ぶのは `cct_avatar_audit`・`cct_animator_inspect` だけ） | `P/Editor/Core/CctTargets.cs`（Resolve）、`P/Editor/Tools/CctCaptureViews.cs`・`CctDependencyReport.SceneReferences.cs`、`CctAvatarAudit.cs`（ResolveAvatar）、`CctAnimatorInspect.Targets.cs` | コード読解 2026-10-25 |
 | Tools メニューの「Assets/ClaudeWorldGimmicks にインポート」は `confirm: true` で呼ぶ（ドライランなし） | `P/Editor/Menu/CctWorldGimmicksMenu.cs` | コード読解 2026-10-25 |
-| メニューの名前は `Tools/Claude Creator Tools/<機能> (cct_…)/<項目>` の形（例「キャプチャ (cct_capture_views)/選択中を4方向」） | `P/Editor/Menu/*.cs` | コード読解 2026-10-25（同じ日に名前が変わった後の状態） |
+| メニューの名前は `Tools/Claude Creator Tools/<機能> (cct_…)/<項目>` の形（例「キャプチャ (cct_capture_views)/選択中を4方向」）。例外はワールドギミックで、`ワールドギミック (UdonSharp)/<項目>` | `P/Editor/Menu/*.cs` | コード読解 2026-10-25（同じ日に名前が変わった後の状態） |
 | `cct_avatar_audit`・`cct_world_audit` は `platform` が all・pc・android・ios 以外なら `INVALID_ARGUMENT` で失敗する（黙って all にしない） | `P/Editor/Tools/CctAvatarAudit.cs`・`CctWorldAudit.cs`（Run） | コード読解 2026-10-25 |
 | `cct_environment` は Editor.log のエラー、MCP サーバーの版、MCP for Unity の DLL を読まない | `P/Editor/Tools/CctEnvironment.cs` | コード読解 2026-10-25 |
 | 各ツールの1回の所要時間（ユーザーのアバター・ワールドで 30 秒に収まるか） | — | **未実測** |

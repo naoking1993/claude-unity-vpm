@@ -25,7 +25,7 @@ Claude に見えるのは戻り値と、ディスクから読んだファイル�
 
 1. **要約から読む**。`data.message` → `data.issue_counts` → `data.issues` の上から → ツールの要約キー。たいていはここで判断できる。
 2. **issue が多いとき**は `max_issues` を増やす前に、レポートを Grep する。`max_issues: 100` や `detail: "full"` で全部を会話に流さない。Claude Code は1回のツール結果が大きすぎると切り詰めたりファイルに退避したりする（既定の上限 25,000 トークン。Claude Code のドキュメントの記載を2026-10-24の調査で写したもの）ので、全文を流すより `report_path` を読む方が確実。
-3. **レポートを開くのは要約で足りないときだけ**。`report_path` は整形 JSON（キーごとに改行、数値の配列は1行）なので、Grep で絞れる。
+3. **レポートを開くのは要約で足りないときだけ**。`report_path` は整形 JSON（辞書はキーごとに改行、数値・文字列だけの配列は1行）なので、Grep で絞れる。
    - あるコードの issue だけ：Grep の pattern `"code": "MISSING_SCRIPT"`、`-B 1 -A 5`、path に `report_path`。
    - ある節だけ：Grep で `"breakdown":` の行番号を取り、Read の `offset` と `limit`（100〜200行）で読む。
    - Read で丸ごと開かない。`cct_avatar_audit` の `breakdown`・`rank_tables`、`cct_animator_inspect` の `graph`、`cct_world_audit` の `components`・`editor_log` は長い。
@@ -49,7 +49,7 @@ Claude に見えるのは戻り値と、ディスクから読んだファイル�
 2. 計画を示す（対象、何を変えるか、戻し方）。
 3. `cct_snapshot` の `create`：変える予定の Material・AnimationClip・プレハブを `assets` に入れ、`include_open_scenes: true`（既定）。どれが変わるか分からなければ `include_dependencies: true`。モデル（FBX）やテクスチャを変えるなら、そのファイルを `assets` に入れるか `dependency_filter: "all"`。`id` を控える。
 4. `cct_avatar_audit`：`target` と `platform` を決めて呼ぶ。MA・AAO がある（`PREBUILD_ESTIMATE`）なら、比較の段階を決めて `post_build: true` も呼ぶ（`timeout_seconds: 120`）。控えるもの：`ranks.<platform>.overall`、`limiting_stats`（どの項目が総合ランクを決めているか、次のランクに必要な値 `limit_for_better_rank`）、`upload.blocked`、`report_path`。
-5. `cct_capture_views`：全身は既定（4方向）か `views: "turnaround"`、`label: "作業前"`。指先・膝など問題の箇所は `framing: "upper"` や高い `resolution` で別に撮る。`contact_sheet` を見て、問題の箇所が写っているかを確かめる（撮れたことは写っている証明ではない）。`capture_dir` を控える。
+5. `cct_capture_views`：全身は既定（4方向）か `views: "turnaround"`、`label: "作業前"`。問題の箇所は別に撮る：指先・胸元は `framing: "upper"`（腰から上なので膝・足は入らない）、膝・足は既定の全身構図を高い `resolution` で。もっと寄るときは、その部位の Renderer を持つ物（服や靴のメッシュ）を `target` にして `mode: "scene"` で撮る（isolated で部品だけを対象にすると、クローンはその部品だけになり、体が写らないので貫通は見えない）。`contact_sheet` を見て、問題の箇所が写っているかを確かめる（撮れたことは写っている証明ではない）。`capture_dir` を控える。
 6. 専門スキルの手順で1つずつ直す。
 7. `cct_avatar_audit` を同じ引数で呼び、総合ランク・`limiting_stats`・値を前と比べる。三角形が減ったことを改善と決めつけない（外観が崩れていないかを次で見る）。
 8. `cct_capture_views` を `compare_with`＝手順5の `capture_dir`、`label: "作業後"` で呼ぶ。`comparisons[]` の `changed_pct_foreground` を見る。変えていない部位で差が大きいビューは、`compare_image` を開いて確かめる。
@@ -76,7 +76,7 @@ Claude に見えるのは戻り値と、ディスクから読んだファイル�
 
 ## 5. 表情・ジェスチャーの鎖（vrchat-expression-debugging）
 
-専門スキルの鎖：`menu/input -> parameter (default, saved, current) -> MA mapping -> merged playable controller -> transition/driver -> clip binding -> object/component -> visible result`。cct で読めるのは、このうちビルド前の静的な部分だけ。
+専門スキルの鎖：`menu/input -> parameter (default, saved, current) -> MA mapping -> merged playable controller -> transition/driver -> clip binding -> object/component -> visible or world-space result`。cct で読めるのは、このうちビルド前の静的な部分だけ。
 
 1. `cct_avatar_audit`（`target` 指定）の `expressions` を読む：
    - `parameters.items[]`：各パラメーターの `type`・`default`・`saved`・`synced`。`total_bits`／`limit`（256）。
@@ -89,14 +89,14 @@ Claude に見えるのは戻り値と、ディスクから読んだファイル�
    {"tool_name": "cct_animator_inspect", "parameters": {"target": "/Avatar", "layer": "all", "find_parameter": "VRCEmote", "timeout_seconds": 120}}
    ```
 
-   `find.uses` に、宣言・遷移の条件・BlendTree・speed/time・Parameter Driver の読み書きが並ぶ。
-3. 見た目を誰が書いているかを追う（「勝手に顔が変わる」）：`find_binding: "Body:blendShape.<シェイプ名>"` で、そのシェイプを書くクリップ・定数値・ステートが並ぶ。Tracking Control も書き込み元なので、`TRACKING_NOT_RESTORED` を見る。
+   `find.parameter` を読む：`declared_in`（どの Controller にどの型・既定値で宣言されているか）、`expression`（Expression Parameter の型・synced・saved・既定値）、`uses`（遷移の条件・BlendTree・speed/time・Parameter Driver の読み書き・Play Audio。各行に `controller`・`kind`・`at`）。名前は大文字小文字を区別する（綴りの揺れは `case_insensitive_matches`）。
+3. 見た目を誰が書いているかを追う（「勝手に顔が変わる」）：`find_binding: "Body:blendShape.<シェイプ名>"` で、`find.binding.matches` にそのシェイプを書くクリップ（`clip`・`asset`）・定数値（`constant`・`values`）・使っているステート（`used_by`）が並ぶ。Tracking Control も書き込み元なので、`TRACKING_NOT_RESTORED` を見る。
 4. `layers` の表で、レイヤーの重み・WD・同期を見る。`ma_merge_animators` で、MA が統合する Controller・レイヤーの種類・パスのモード・relative root・統合の順を見る。
 5. 結論の分類：ここで得たものは「Observed（静的な構成）」。症状の再現（Reproduced）や修正の確認（Verified fix）にはならない。
 
 読めないもの：統合後の Controller（ビルド前には無い）、実行時の値（current）、保存された値（LocalAvatarData）、Gesture Manager・エミュレーター・実機での挙動。Play 中で NDMF の Apply on Play が有効なら、シーンのアバターは処理済みで、`cct_animator_inspect` は統合後の Controller を見る（`source.stage: "play_mode"`、`PLAY_MODE`）。そのときは「Play 中の処理済みアバターを静的に読んだ」と書く。
 
-`TRACKING_NOT_RESTORED`・`LOCOMOTION_NOT_RESTORED`・`ACTION_WEIGHT_NOT_LOWERED`・`POSE_SPACE_NOT_RESTORED` が warning になるのは、アバター全体を見たとき（`layer: "all"`、`layers` で絞らない、`include_ma` が有効、時間切れなし）だけ。部分的に見たときの info は、別の Controller が戻している可能性がある。
+`TRACKING_NOT_RESTORED`・`LOCOMOTION_NOT_RESTORED`・`ACTION_WEIGHT_NOT_LOWERED`・`POSE_SPACE_NOT_RESTORED` が warning になるのは、アバター全体を見たとき（`layer: "all"`、`layers` で絞らない、`include_ma` が有効、時間切れなし）だけ。部分的に見たときの info は、別の Controller が戻している可能性がある。`TRACKING_NOT_RESTORED` の目・口・指は、意図して Animation のままにする仕組みが多いので常に info。
 
 ## 6. ギミックの移植（vrchat-gimmick-packaging）
 
@@ -121,10 +121,11 @@ Claude に見えるのは戻り値と、ディスクから読んだファイル�
    {"tool_name": "cct_dependency_report", "parameters": {"mode": "dependencies", "assets": ["Assets/MyGimmick"], "export_root": "Assets/MyGimmick", "declared_packages": ["com.vrchat.*", "nadena.dev.*"]}}
    ```
 
+   - `export_root` は存在するフォルダーにする（無いフォルダーは `INVALID_ARGUMENT` で失敗する）。
    - `OUTSIDE_EXPORT_ROOT`：書き出す範囲の外の依存（`assets_outside_root` にフォルダーごとの MB と参照元）。範囲に入れるか、外部依存として明示するかを決める。
    - `required_packages[]`：必要なパッケージと、この PC で入っている版（`version_installed`）。これは検証した版で、最低対応版ではない。
    - `MISSING_GUID`（ファイルと行と欄）、`ASMDEF_REQUIRED`、`LARGE_FILE`、`SCENE_IN_DEPENDENCIES`。
-   - `dependency_list_path` の TSV は全依存の一覧。④で、書き出したアーカイブの中身と突き合わせる想定一覧に使う。
+   - `dependency_list_path` の TSV は全依存の一覧（列は group・input・path・guid・type・bytes。group が `inside` の行が同梱、`outside` が範囲外の `Assets/`、`package:<名前>` が外部依存、`builtin` が Unity 組み込み、`include_scripts: false` で外したスクリプトは `excluded_script`）。④で、書き出したアーカイブの中身と突き合わせる想定一覧に使う。
    - `conclusive: false` なら途中まで（`SCAN_INCOMPLETE` が理由）。`timeout_seconds` を上げて呼び直すまで「欠落なし」としない。
 4. コードからの名前・固定 GUID での参照（導入補助、`Shader.Find`、`Resources.Load`）は依存一覧に出ない。専門スキルの手順で別に確かめる。
 5. **④**：書き出した `.unitypackage` の中身は cct では読めない。専門スキルの方法で中身の一覧を取り、TSV と突き合わせる。
@@ -137,7 +138,7 @@ Claude に見えるのは戻り値と、ディスクから読んだファイル�
 
 1. 導入の前に `cct_snapshot create`（開いているシーンと、変更するプレハブ）。
 2. 導入の後、`cct_avatar_audit`：
-   - `MISSING_SCRIPT`（GameObject のパスと数）と `MISSING_SCRIPT_GUID`（保存済みの YAML の m_Script GUID と、`script_not_found`・`class_not_loadable`・`class_not_in_dll` の別）。`missing_scripts.guids[]` に GUID とファイル。script_not_found なら、その GUID のスクリプトを含むパッケージが入っていない。
+   - `MISSING_SCRIPT`（GameObject のパスと数）と `MISSING_SCRIPT_GUID`（保存済みの YAML の m_Script GUID と、`script_not_found`・`class_not_loadable`・`class_not_in_dll`・`unknown` の別）。`missing_scripts.guids[]` に GUID とファイル。script_not_found なら、その GUID のスクリプトを含むパッケージが入っていない。
    - `HUMANOID_OPTIONAL_BONES_MISSING`（指などの任意ボーン）。必要な指のアニメーションに効くかは専門スキルで判断する。
    - `post_build.missing_scripts_after` が0でも、上の判定の代わりにしない（NDMF は Missing Script を黙って消す。ツールの注記もそう書く）。
 3. 製品のプレハブ自体の欠落を見るなら、`cct_dependency_report` の `dependencies` をそのプレハブに（`MISSING_GUID` のファイルと行）。
@@ -163,7 +164,7 @@ Claude に見えるのは戻り値と、ディスクから読んだファイル�
    1. `restore` を `confirm` なしで呼ぶ（ドライラン）。`would_overwrite`・`would_recreate`・`would_reimport`・`would_reload_scenes` と、メモリ上の未保存の変更が捨てられること、追加されたファイルは消えないこと、を見せる。
    2. ユーザーが同意したら `confirm: true`。`assets` で範囲を絞れる。
    3. 結果：`pre_restore_snapshot_id`（取り消し用）、`restored`・`recreated`・`failed`、`RESTORE_VERIFY_FAILED`・`SCENE_REOPEN_FAILED` の有無。`SCRIPTS_RESTORED` ならコンパイルとドメインリロードが続くので、MCP がつながり直すまで次を呼ばない。
-   4. 同じ id で `diff` を呼び、戻した範囲が unchanged になったかを確かめる。`BLUEPRINT_ID_CHANGES` が出ていたら、アップロード先が変わっていないかをユーザーと確かめる。
+   4. 同じ id で `diff` を呼び、戻した範囲が変更なしになったかを確かめる（`changes` には変わったファイルだけが載るので、戻したパスが `changes` に無く、`counts.modified`・`deleted`・`meta_changed` が想定どおり減ったことを見る）。`BLUEPRINT_ID_CHANGES` が出ていたら、アップロード先が変わっていないかをユーザーと確かめる。
 7. restore の取り消しは `pre_restore_snapshot_id` を restore する（これもドライランから）。restore が作り直したファイルは消えない（`RECREATED_FILES_REMAIN`）。
 8. 不要になったスナップショットは `list` で見せ、同意を得て `delete`（ドライラン → `confirm: true`）。
 
@@ -188,7 +189,7 @@ Claude に見えるのは戻り値と、ディスクから読んだファイル�
 ## 10. BPM・State の速度（vrchat-bpm-controls）
 
 1. `cct_animator_inspect` を対象のレイヤーで呼ぶ（`layer: "action"` や `"fx"`、`layers` で絞る）。
-2. `report_path` を Grep：State の名前（`"name": "<State名>"`、`-A 20`）で、`speed`・`speed_param`・`motion_time_param`・`motion` を読む。
+2. `report_path` を Grep：State の名前（`"name": "<State名>"`、`-A 20`）で、`speed`・`speed_param`・`motion_time_param`・`motion` を読む。既定値のキーは省かれる：`speed` が無ければ speed 1、`speed_param`・`motion_time_param` が無ければその State ではパラメーターが無効（Inspector の Parameter のチェックが外れている）。
 3. 2つの Controller を比べる機能は無い。それぞれで呼び、レポートの同じ State を見比べる。
 4. 同期ビットの使用量は `cct_avatar_audit` の `expressions.parameters.total_bits`（ビルド前）と `post_build.expressions_after.total_bits`（NDMF 処理後）。
 5. 実際の再生速度（観測した倍率）は静的解析では分からない。専門スキルの実行時の手順で測る。

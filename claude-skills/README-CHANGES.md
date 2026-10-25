@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | `vrchat-world-creation` | 新規（v0） | VRChat のワールドを Unity 2022.3.22f1 と Worlds SDK 3.10.5 で作る・直す・アップロード前に点検する。Scene Descriptor・スポーン・レイヤー、ライトベイク、ミラー・動画・音、UdonSharp と同期、Quest/Android/iOS、ClientSim と Build & Test、アップロードが止まる原因。一次資料は VRChat 公式ドキュメント（2026-10-20 時点）と SDK 3.10.5。Unity 実機・VRChat 実機では未検証 |
 | `claude-creator-tools` | 新規（v0） | 自作パッケージ Claude Creator Tools 0.1.0 の MCP ツール `cct_*` 8種を、どの工程で、どの引数で呼び、結果・レポート・画像をどう読むか。各 vrchat-* スキルと unity-mcp-operations の工程との組み合わせ。引数・出力・issue コードはパッケージのコードから写した。Unity 実機では未検証 |
-| `avatar-world-skill-guide` | 改訂 | 表に `vrchat-world-creation` と `claude-creator-tools` の2行を足し、「ワールド制作専用のスキルはない」という最終段落を書き換えた。ほかの行は変えていない |
+| `avatar-world-skill-guide` | 改訂 | 冒頭の注記の後に改訂の注記（2026-10-25）を1段落足し、表に `vrchat-world-creation` と `claude-creator-tools` の2行を足し、「ワールド制作専用のスキルはない」という最終段落を書き換えた。ほかの行は変えていない |
 
 `unity-mcp-operations` は変えていない（写しも作っていない）。足すとよい文は下の「unity-mcp-operations への追記案」にある。本人が今登録されている版に足して、同じ手順で登録し直す。
 
@@ -42,7 +42,7 @@
 
 今登録されている `unity-mcp-operations` の版に、次の3か所を足す。追記したら `skill-registration-workflow` の手順で zip にして差し替える（このフォルダーには写しを置いていない）。
 
-**1) SKILL.md の原則1（「VRChat作業でSDK/Unityバージョン適合が絡む場合は vrchat-unity-version-check を併用する」の次の行）**
+**1) SKILL.md の原則1の最後の項目の次**（「VRChat作業でSDK/Unityバージョン適合が絡む場合は `vrchat-unity-version-check` を併用する（あちらが正）。」という2行の項目）
 
 ```markdown
 - Claude Creator Tools（`cct_*`）がプロジェクトに入っている場合、引数・出力の読み方・各工程での使い方は
@@ -56,7 +56,7 @@
 | cct_environment / cct_avatar_audit / cct_world_audit / cct_capture_views / cct_snapshot / cct_animator_inspect / cct_dependency_report / cct_world_gimmicks | read（write は cct_snapshot の restore・delete と cct_world_gimmicks の import だけ、confirm=true のとき） | Claude Creator Tools 0.1.0 のカスタムツール | **未実測**。Python 3.14 のサーバーでは単独 tool として登録されず execute_custom_tool 経由になる可能性（MCP for Unity 9.7.1 のソース調査 2026-10-24）。使い方は claude-creator-tools |
 ```
 
-**3) SKILL.md のステータス行の末尾**
+**3) SKILL.md のステータス行の末尾**（行の最後の `…霧島での実機確認）。**` の、閉じ括弧「）」の直前に足す）
 
 ```markdown
  / 2026-10-25 Claude Creator Tools（cct_*）への案内を原則1に、tool一覧に未実測の行を追記

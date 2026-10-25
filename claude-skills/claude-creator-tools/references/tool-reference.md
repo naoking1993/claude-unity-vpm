@@ -62,9 +62,9 @@
 
 - `issues` の `path`・`asset`・`value`・`limit` は、そのコードで意味があるときだけ入る。
 - 要約に残るキーはツールごとに決まっている（各章の「要約に残るキー」）。どのツールでも、それに加えて `tool`・`tool_version`（`0.1.0`）・`elapsed_ms` と、失敗の補足の `details`・`candidates` は要約に残る（`CctMcpBridge` の AlwaysKeptKeys）。`cct_environment` は全キーを要約に残す。
-- 同じコードの issue が多いときは、ツールが件数を絞って「ほかに N 件」の issue を1つ足す（`cct_avatar_audit`・`cct_animator_inspect` は1コード25件、`cct_world_audit` は20件、`cct_dependency_report` は100件まで）。
+- 同じコードの issue が多いときは、ツールが1コードあたりの件数を絞る。残りの数の出し方はツールで違う：`cct_avatar_audit`・`cct_animator_inspect` は25件まで載せ、同じコードで「ほかに N 件」の issue を1つ足す（`value` が残りの数）。`cct_world_audit` は20件まで載せ、`ISSUES_TRUNCATED`（info、`value` に `code`・`total`・`omitted`）を足す。`cct_dependency_report` は100件まで載せ、`ISSUES_CAPPED`（info）を足し、コードごとの省いた数を `issues_capped` に入れる。
 
-失敗：`success: false`。外側の `error` に日本語の理由、`data.code` に失敗コード（`TARGET_NOT_FOUND` など）が入る。MCP for Unity の `ErrorResponse` は外側の `code` にも理由の文字列を入れるので、コードは `data.code` で見る。
+失敗：`success: false`。日本語の理由は外側の `error` と `data.message` に、失敗コード（`TARGET_NOT_FOUND` など）は `data.code` に入る。外側の `message` は null になる。Unity 側の `ErrorResponse` は外側の `code` にも理由の文字列を入れるが、サーバー 9.7.1 は応答を `{success, message, error, data, hint}` に詰め替えるときにそれを捨てる（`services/custom_tool_service.py` の `_normalize_response`。ユーザーの改修版では未実測）。コードは必ず `data.code` で見る。
 対象の候補は `data.candidates`（`cct_avatar_audit`・`cct_animator_inspect`）か `data.details`（`cct_capture_views` は `details.candidates`、`cct_dependency_report` は `details` そのもの）に並ぶ。`cct_world_audit` は `SCENE_NOT_LOADED` のとき `loaded_scenes`、`WORLDS_SDK_MISSING` のとき `avatars_sdk_present`、`cct_world_gimmicks` は `SAMPLES_NOT_FOUND` のとき `package_root` を返す。
 
 どのツールでも起こる失敗（`CctRunner`）：
@@ -80,10 +80,10 @@
 
 | 種類 | 場所 | 中身 |
 | --- | --- | --- |
-| レポート | `<プロジェクト>/Library/ClaudeCreatorTools/Reports/<ツール名>-<yyyyMMdd-HHmmss-xxxx>.json` | 全キーと全 issue。UTF-8（BOM なし）、キーごとに改行した整形 JSON。失敗した呼び出しでも書く |
+| レポート | `<プロジェクト>/Library/ClaudeCreatorTools/Reports/<ツール名>-<yyyyMMdd-HHmmss-xxxx>.json`（`xxxx` は16進4桁。同じ名前があれば末尾に `-2` などが付く。ワールド監査と依存関係のメニューから呼ぶと `cct_world_audit-world-pc-…`・`cct_dependency_report-deps-…` のように間に識別語が入る） | 全キーと全 issue。UTF-8（BOM なし）の整形 JSON：辞書はキーごとに改行し、数値・文字列だけの配列は1行に並べる。`save_report` が true（既定）なら失敗した呼び出しでも書く |
 | 撮影 | `<プロジェクト>/Library/ClaudeCreatorTools/Captures/<id>_<label>/` | `<view>.png`、`contact_sheet.png`、`manifest.json`、比較時は `compare_<view>.png`・`diff_<view>.png` |
 | スナップショット | `<プロジェクト>/ClaudeCreatorTools/Snapshots/<id>/` | `manifest.json`、`files/`、`folders/`。Assets の外なのでインポートされない。Library を消しても残る |
-| 依存一覧 | Reports と同じフォルダーの TSV | `cct_dependency_report` の `dependencies` の全依存 |
+| 依存一覧 | Reports と同じフォルダーの `cct_dependency_report-files-<yyyyMMdd-HHmmss-xxxx>.tsv`（メニューからは `cct_dependency_report-deps-files-…`） | `cct_dependency_report` の `dependencies` の全依存（`save_report: false` のときは書かない） |
 | 一時コピー | `Assets/__ClaudeCreatorToolsTemp` | `cct_snapshot create` が未保存のシーンを写すときだけ作り、消す |
 | 取り込み先 | 既定 `Assets/ClaudeWorldGimmicks` | `cct_world_gimmicks import` |
 
@@ -95,7 +95,7 @@
 
 | 書き方 | 意味 |
 | --- | --- |
-| `""` または `"selection"` | Hierarchy で選択中のもの（アバター系のツールは、何も選んでいないとき読み込み中のシーンの唯一のアバター） |
+| `""` または `"selection"` | 選択中の GameObject（`Selection.activeGameObject`。Project で選んだプレハブも入る）。何も選んでいないとき：`cct_avatar_audit`・`cct_animator_inspect` は読み込み中のシーンの唯一のアバターを使う（`TARGET_ADJUSTED`。0体なら `NO_AVATAR`／`NO_TARGET`、複数なら `AMBIGUOUS_TARGET`。`cct_animator_inspect` は Project で選んだ Controller があればそれを使う）。`cct_capture_views` と `cct_dependency_report` の `scene_references` は `TARGET_NOT_FOUND` で失敗する |
 | `"#12345"` または `"12345"` | instance ID。ドメインリロードで変わるので、使い回さない |
 | `"/Root/Child"`（`/` を含む） | 読み込み中の全シーンの階層パス。同名の兄弟が複数あると失敗して候補を返す |
 | `"Assets/x.unity:/Root/Child"` | 読み込み中の特定のシーンの中の階層パス |
@@ -146,7 +146,7 @@ restore と delete はメニューに無い（id と確認が要るため）。�
 | `platform` | アクティブなビルドターゲット（`StandaloneWindows64`・`Android`・`iOS` など） |
 | `color_space` | `Linear` / `Gamma` |
 | `play_mode` | `edit` / `playing` / `paused` |
-| `is_compiling` | bool |
+| `is_compiling` | bool。コンパイル中はどのツールも `EDITOR_BUSY` で失敗するので、成功した結果ではふつう false |
 | `scenes[]` | `name`・`path`・`is_dirty`・`root_count`・`active` |
 | `packages` | `{パッケージ名: 版}`。既定は次の名前だけ：`com.vrchat.base`・`com.vrchat.avatars`・`com.vrchat.worlds`・`com.vrchat.udonsharp`・`com.vrchat.clientsim`・`nadena.dev.modular-avatar`・`nadena.dev.ndmf`・`com.anatawa12.avatar-optimizer`・`jp.lilxyzw.liltoon`・`com.poiyomi.toon`・`com.coplaydev.unity-mcp`・`io.github.naoking1993.claude-creator-tools`・`vrchat.blackstartx.gesture-manager`・`com.vrcfury.vrcfury`・`jp.lilxyzw.lilavatarutils` |
 | `project_kind` | `avatar` / `world` / `avatar+world` / `no_vrchat_sdk`（Avatars SDK・Worlds SDK の型が読み込まれているか） |
@@ -206,7 +206,7 @@ restore と delete はメニューに無い（id と確認が要るため）。�
 | `stats.<項目>` | `value`・`unit`（count 以外）・`pc`・`android` のランク・`estimate`・`note`。項目は `triangles`・`bounds_size`・`texture_memory`・`skinned_meshes`・`basic_meshes`・`material_slots`・`physbone_components`・`physbone_transforms`・`physbone_colliders`・`physbone_collision_checks`・`contacts`・`constraints`・`constraint_depth`・`animators`・`bones`・`lights`・`particle_systems`・`total_particles`・`mesh_particle_polys`・`particle_trails_enabled`・`particle_collision_enabled`・`trail_renderers`・`line_renderers`・`raycasts`・`cloths`・`cloth_vertices`・`physics_colliders`・`physics_rigidbodies`・`audio_sources` |
 | `upload` | `build_target`・`platform`・`blocked`（アクティブなビルドターゲットで SDK のビルダーが止める error があるか）・`blocking[{code, count}]`・`errors_not_blocking`（MISSING_SCRIPT など止まらない error）・`may_block`・`note`。Descriptor が無ければ `applicable: false` |
 | `expressions` | `custom_expressions`・`menu_asset`・`parameters_asset`・`parameters`（`total_bits`／`limit` 256・`count`・`synced`・`local_only`・`by_type`・`items[]`＝`name`・`type`・`saved`・`synced`・`default`、64件まで）・`menu`（メニューの木、各メニューの項目数、深さ）・`modular_avatar`（Menu Installer・Menu Item・Parameters・Merge Animator の数と注記） |
-| `missing_scripts` | `total`・`objects`・`items[{path, count}]`（50件まで）・`guids[{guid, file_id, status, components, files, game_objects, script_asset}]`。`status` は script_not_found / class_not_loadable / class_not_in_dll |
+| `missing_scripts` | `total`・`objects`・`items[{path, count}]`（50件まで）・`guids[{guid, file_id, status, components, files, game_objects, script_asset}]`。`status` は script_not_found / class_not_loadable / class_not_in_dll / unknown |
 | `missing_references` | 削除済みの物を指す参照（上限あり） |
 | `notes` | `stage`・`caveat`・`build_tools`（MA・NDMF・AAO・VRCFury などの有無）・`not_checked`・`ndmf_apply_on_build` |
 | `post_build` | `status`（ok / unavailable / failed）・`ndmf_version`・`ndmf.errors[]`・`method`・`ranks`・`changes{項目: {pre, post}}`・`unchanged_stats`・`missing_scripts_after`・`expressions_after`（`total_bits`・`added`・`type_changed`＝Bool が Float になった等）・`cleanup` |
@@ -218,7 +218,7 @@ restore と delete はメニューに無い（id と確認が要るため）。�
 | コード | 重大度 | 意味 |
 | --- | --- | --- |
 | `DESCRIPTOR_MISSING` | warning | 指定した対象に Descriptor が無い。部品として調べた（ランクは参考値） |
-| `TARGET_ADJUSTED` | info | 選択・指定をアバターのルートへ移した |
+| `TARGET_ADJUSTED` | info | 選択・指定をアバターのルート（親、または子に1体だけあるアバター）へ移した。対象未指定で、読み込み中のシーンの唯一のアバターを選んだときも出る |
 | `PLAY_MODE` | info | Play 中。SDK の計算を使わず推定値。NDMF 処理済みの可能性 |
 | `SDK_CALCULATOR_UNAVAILABLE` | info | SDK の計算が無いか例外。推定値を使った |
 | `SDK_IGNORE_RULE_REPLACED` | info | 別ツールが SDK の除外規則を差し替えている（SDK 値はそれに従う） |
@@ -479,7 +479,7 @@ restore と delete はメニューに無い（id と確認が要るため）。�
 
 | 引数 | 型 | 既定 | 意味 |
 | --- | --- | --- | --- |
-| `target` | string | `""`（選択中） | 撮る GameObject（0.5） |
+| `target` | string | `""`（選択中） | 撮る GameObject（0.5）。何も選んでいなければ `TARGET_NOT_FOUND`（アバターを自動では選ばない） |
 | `views` | string | `"front,back,left,right"` | カンマ区切り。front、back、left、right、front_left、front_right、back_left、back_right、top、face_front、face_left45、face_right45（left/right は対象自身の左右、face_* は常に頭部の構図）。プリセット `turnaround`＝front,front_right,right,back,left,front_left、`face`＝face_front,face_left45,face_right45 |
 | `resolution` | int | 768 | 正方形の一辺（256〜2048） |
 | `mode` | string | `"isolated"` | `isolated`：スクリプトを外したクローンを非表示のプレビューシーンで中立の照明（キー＋フィル＋環境光）で描く。開いているシーンのライト・スカイボックス・他の物・ライトマップ・ポストプロセスは写らない。NDMF/MA のプレビューも写らない（編集時の階層）。`scene`：開いているシーンをそのまま一時カメラで描く |
@@ -506,7 +506,7 @@ restore と delete はメニューに無い（id と確認が要るため）。�
 | `capture_dir` / `contact_sheet` / `manifest` | 出力フォルダー、一覧画像、manifest の絶対パス |
 | `views[]` | `view`・`file`（PNG の絶対パス）・`framing`・`camera_source`・`camera`（`position`・`euler`・`fov`・`distance`） |
 | `params` | 実際に使った引数（引き継いだ値を含む） |
-| `comparisons[]` | ビューごと：`changed_pct_foreground`・`mean_abs_diff_foreground`（背景を除いた値。こちらを優先）、`foreground_pct`、`changed_pct`・`mean_abs_diff`（画面全体）、`changed_pixels`、`max_diff`、`changed_bbox`（[x0, y0, x1, y1]、左上原点）、`compare_image`（左が前・右が後）、`diff_image`（変化を赤で示す）、`previous_file` |
+| `comparisons[]` | ビューごと：`view`、`changed_pct_foreground`・`mean_abs_diff_foreground`（背景色から2階調以内の画素を両方の画像で除いた値。こちらを優先。`background: "skybox"` では null）、`foreground_pct`、`changed_pct`・`mean_abs_diff`（画面全体）、`changed_pixels`、`max_diff`、`changed_bbox`（[x0, y0, x1, y1]、画素単位・左上原点・x1 と y1 は含まない。変化が無ければ null）、`compare_image`（左が前・右が後）、`diff_image`（後の画像を暗くし、変化を赤で示す）、`previous_file` |
 | `comparison_units` | 8 bit sRGB の階調（0〜255）で、知覚的な色差（ΔE）ではない。「変化」はどれかのチャンネルが 8 を超えて違う画素 |
 | `manifest.json` | 全引数、各ビューのカメラ（ワールドと対象基準の両方）、Unity の版、色空間、グラフィックス API。次の `compare_with` が読む |
 
@@ -602,7 +602,7 @@ FBX の中のメッシュや画像を変えるときは、`dependency_filter: "a
 | --- | --- |
 | create | `id`・`label`・`created_at`・`snapshot_dir`・`manifest_path`・`file_count`・`folder_count`・`total_bytes`・`total_mb`・`incomplete`・`scenes[]`（`scene_state`: disk / in_memory）・`file_types`（拡張子ごとの数）・`skipped` |
 | list | `snapshots_dir`・`snapshots[]`（`id`・`label`・`created_at`・`kind`: manual / pre-restore・`file_count`・`total_mb`）・`total_count`・`total_mb_all`・`omitted` |
-| diff | `counts`（unchanged・modified・deleted・meta_changed・error）・`changes[]`（ファイルごとの状態、YAML の変更行数、`snapshot_file`＝退避したコピーの絶対パス）・`added`（退避したフォルダーに増えたファイル） |
+| diff | `counts`（unchanged・modified・deleted・meta_changed・error・added）・`changes[]`（変わったファイルだけ。unchanged は載らない。未保存の変更があるシーンは unchanged でも載る。`status`、YAML の `lines_added`・`lines_removed`、`snapshot_file`＝退避したコピーの絶対パス）・`added`（退避したフォルダーに増えたファイル） |
 | restore（ドライラン） | `dry_run: true`・`would_overwrite`・`would_recreate`・`would_restore_meta`・`would_reimport`・`would_reload_scenes`・`would_create_folders`・`unchanged_count` |
 | restore（confirm） | `dry_run: false`・`pre_restore_snapshot_id`・`restored`・`recreated`・`meta_restored`・`reimported`・`reloaded_scenes`・`created_folders`・`failed`・`created_by_original_restore` |
 | delete | `dry_run`・`deleted`・`label`・`file_count`・`total_mb` |
@@ -694,12 +694,12 @@ restore の動き：まず今の状態（未保存のシーンを含む）を自
 | `include_transitions` | bool | true | graph に遷移を入れる（検査は常に行う） |
 | `check_bindings` | bool | target があれば true | クリップのカーブのパスをアバターのルート（Relative の MA は relative root）から確かめる |
 | `max_states` | int | 400 | graph に書くステートの上限（0〜20000） |
-| `find_parameter` | string | `""` | パラメーター名：宣言、条件、BlendTree、speed/time、Driver の読み書き、Play Audio をすべて列挙 |
+| `find_parameter` | string | `""` | パラメーター名（大文字小文字を区別する。一致が無く大文字小文字だけ違う名前があれば `case_insensitive_matches` に出る）：宣言、条件、BlendTree、speed/time、Driver の読み書き、Play Audio をすべて列挙 |
 | `find_binding` | string | `""` | カーブのパスと `Component.property` に対する部分一致（大文字小文字を区別しない）。`path:property` で両方。例 `Body:blendShape.smile` で顔のシェイプを書くクリップとステートを列挙 |
 
 走査は `timeout_seconds × 0.6`（最低8秒）で止まり `TRUNCATED` を出す。大きい FX では `timeout_seconds: 120` を渡すか `layers` で絞る。検索結果は要約に50行、レポートの `find_all` に最大2000行。
 
-**要約に残るキー**：`source`、`playable_layers`、`controllers`、`layers`、`parameters`、`graph_preview`、`bindings`、`ma_merge_animators`、`find`、`notes`（と各 `_omitted`・`_total`）。レポートにだけ：`graph`（全ステート・Motion・Behaviour・遷移）、`controllers_all`・`layers_all`・`parameters_all`・`ma_merge_animators_all`、`ma_merge_blend_trees`、`find_all`。
+**要約に残るキー**：`source`、`playable_layers`、`controllers`、`layers`、`parameters`、`graph_preview`、`bindings`、`ma_merge_animators`、`find`、`notes`（と各 `_omitted`・`_total`）。レポートにだけ：`graph`（全ステート・Motion・Behaviour・遷移）、`clips`（クリップの一覧）、`controllers_all`・`layers_all`・`parameters_all`・`ma_merge_animators_all`（要約の上限を超えたときだけ）、`ma_merge_blend_trees`、`find_all`（検索結果が要約の50行を超えたときだけ）。
 
 | キー | 中身 |
 | --- | --- |
@@ -708,8 +708,8 @@ restore の動き：まず今の状態（未保存のシーンを含む）を自
 | `controllers[]` | 調べた Controller（id は fx・gesture…、MA は ma1…） |
 | `layers[]` | 重み・ブレンド・マスク・同期・WD の ON/OFF・ステート数・MA の WD 予測 |
 | `parameters[]` | Controller のパラメーターと、Expression Parameter・組み込みの型 |
-| `graph` のステート | `name`・`path`・`default`・`motion`・`speed`・`speed_param`・`motion_time_param`・`mirror`・`mirror_param`・`cycle_offset`・`wd`・`tag`・`behaviours`（Parameter Driver、Tracking・Layer・Playable Layer・Locomotion Control、Temporary Pose Space、Play Audio）・`transitions`（条件付き） |
-| `find` | find_parameter / find_binding の結果（`uses`・`matches`） |
+| `graph` のステート | `name`・`path`・`default`・`motion`・`speed`・`speed_param`・`motion_time_param`・`mirror`・`mirror_param`・`cycle_offset`・`cycle_offset_param`・`wd`・`tag`・`behaviours`（Parameter Driver、Tracking・Layer・Playable Layer・Locomotion Control、Temporary Pose Space、Play Audio）・`transitions`（条件付き）。既定値のキーは省かれる：`speed` は 1 以外のときだけ（無ければ speed 1）、`speed_param`・`motion_time_param`・`mirror_param`・`cycle_offset_param` は Inspector でパラメーターを有効にしたときだけ入る |
+| `find` | `find.parameter`（find_parameter）：`declared_in[]`（どの Controller に `type`・`default` で宣言されているか）、`expression`（Expression Parameter の `type`・`synced`・`saved`・`default`）、`builtin`（組み込みなら型）、`uses_total`、`uses[]`（`controller`・`kind`・`at`・`detail`）。`find.binding`（find_binding）：`matches_total`、`matches[]`（`clip`・`asset`・`path`・`component`・`property`・`constant`・`values`・`exists`・`used_by`）、`clips_searched`。どちらも要約は50行まで（超えると `full_list` の案内が付き、全件はレポートの `find_all`） |
 
 issue の `path` は `<controller id>:<レイヤー>/<ステートのパス>`（遷移は ` -> <行き先>`、`[AnyState]`・`[Entry]`・`[Exit]`）か、MA の部品なら階層パス。`asset` は Controller（Binding の issue はクリップ）。
 
@@ -739,7 +739,7 @@ issue の `path` は `<controller id>:<レイヤー>/<ステートのパス>`（
 | `UNREACHABLE_STATE` | info | どこからも来ないステート |
 | `LAYER_WEIGHT_ZERO` / `LAYER_EMPTY` | info | 重み0で上げる Layer Control が無い / ステートの無いレイヤー |
 | `ACTION_WEIGHT_NEVER_RAISED` / `ACTION_WEIGHT_NOT_LOWERED` | info / warning/info | Action を上げる・下げる Playable Layer Control が無い |
-| `TRACKING_NOT_RESTORED` / `LOCOMOTION_NOT_RESTORED` / `POSE_SPACE_NOT_RESTORED` | warning/info | Animation にした部位を Tracking に戻すステートが無い / 移動を戻さない / Pose Space を抜けない（warning になるのは layer=all・layers 無し・include_ma・時間切れ無しのときだけ） |
+| `TRACKING_NOT_RESTORED` / `LOCOMOTION_NOT_RESTORED` / `POSE_SPACE_NOT_RESTORED` | warning/info | Animation にした部位を Tracking に戻すステートが無い / 移動を戻さない / Pose Space を抜けない（warning になるのはアバターを layer=all・layers 無し・include_ma・時間切れ無しで調べたときだけ。目・口・指は意図して Animation のままにする仕組みが多いので常に info） |
 | `DRIVER_BUILTIN_DESTINATION` / `DRIVER_COPY_BUILTIN_SOURCE` / `DRIVER_ADD_ON_BOOL` | warning | Driver が組み込みに書く / 組み込みから Copy / Bool に Add |
 | `DRIVER_IN_NON_LOCAL` / `DRIVER_VALUE_OUT_OF_RANGE` / `DRIVER_COPY_TYPE_CONVERSION` | info | Local Only でない Add・Random / 範囲外の値 / 型の違う Copy |
 | `LAYER_CONTROL_BASE_LAYER` / `LAYER_CONTROL_INDEX_OUT_OF_RANGE` | warning | Layer Control がレイヤー0 / 範囲外 |
@@ -791,11 +791,11 @@ issue の `path` は `<controller id>:<レイヤー>/<ステートのパス>`（
 | --- | --- | --- | --- | --- |
 | `mode` | string | `"dependencies"` | — | `dependencies`・`reverse`・`scene_references` |
 | `assets` | string[] | Project の選択 | dependencies / reverse | `Assets/...`・`Packages/...` のパス、フォルダー（中の全ファイル）、32桁の GUID |
-| `export_root` | string | `assets` のフォルダー | dependencies | 書き出す範囲のフォルダー（カンマ区切り）。外の `Assets/` の依存は `OUTSIDE_EXPORT_ROOT`。フォルダーが無ければ内外の判定をしない |
+| `export_root` | string | `assets` に入れたフォルダー | dependencies | 書き出す範囲のフォルダー（カンマ区切り）。外の `Assets/` の依存は `OUTSIDE_EXPORT_ROOT`。存在しないフォルダーを渡すと `INVALID_ARGUMENT` で失敗する。`export_root` を渡さず `assets` にもフォルダーが無ければ、内外の判定をしない（`NO_EXPORT_ROOT`） |
 | `include_scripts` | bool | true | dependencies | false で `Assets/` の .cs/.dll を外す（スクリプトが要るパッケージは常に出す） |
 | `declared_packages` | string[] | — | dependencies | 移す先にあると分かっているパッケージ（名前か `com.vrchat.*` のような前方一致）。ほかは `PACKAGE_DEPENDENCY` の warning |
-| `target` | string | 選択中 | scene_references / dependencies | scene_references：調べるシーンの GameObject。dependencies：直接参照するアセットを足すシーンの物か、プレハブのパス |
-| `search_root` | string | `"Assets"` | reverse | 探すフォルダー（カンマ区切り、例 `Assets,Packages/com.example`） |
+| `target` | string | scene_references では選択中 | scene_references / dependencies | scene_references：調べるシーンの GameObject（省くと Hierarchy の選択。何も選んでいなければ `TARGET_NOT_FOUND`）。dependencies：任意。直接参照するアセットを入力に足すシーンの物か、プレハブのパス（`target` を渡すと Project の選択は使わない） |
+| `search_root` | string | `"Assets"` | reverse | 探すフォルダー（カンマ区切り、例 `Assets,Packages/com.example`）。存在しないフォルダーは `INVALID_ARGUMENT` |
 | `scan_open_scenes` | bool | true | reverse | 読み込み中のシーンと Prefab Mode のメモリ上の参照も探す |
 | `scan_code` | bool | false | reverse | .cs/.shader/.hlsl/.cginc/.compute の中の GUID 文字列も探す |
 | `include_inbound` | bool | true | scene_references | 対象の外から対象の中を指す参照も出す |
@@ -812,7 +812,7 @@ issue の `path` は `<controller id>:<レイヤー>/<ステートのパス>`（
 | mode | キー |
 | --- | --- |
 | 共通 | `mode`・`asset_serialization`・`time_budget`・`issues_capped`・`conclusive`（false＝どこかの走査が途中まで。「Missing 0」「使われていない」を確定扱いしない）・`scan` |
-| dependencies | `inputs`・`target_assets`・`export_roots`・`totals`・`by_type`・`inside_export_root`・`assets_outside_root`（`Assets/A/B` ごとの MB と `referenced_from`）・`required_packages[]`（`name`・`version_installed`＝この PC で入っている版で最低版ではない・`installed_via`＝vpm など・`depends_on`・`referenced_by`）・`builtin`・`missing_guids`（ファイルと行と欄）・`missing_scripts`・`missing_prefabs`・`missing_references`・`asmdefs`・`large_files`・`unsaved`・`dependency_list_path`（TSV：group, input, path, guid, type, bytes）・`dependency_list_rows` |
+| dependencies | `inputs`・`target_assets`・`export_roots`・`totals`・`by_type`・`inside_export_root`・`assets_outside_root`（`Assets/A/B` ごとの MB と `referenced_from`）・`required_packages[]`（`name`・`version_installed`＝この PC で入っている版で最低版ではない・`installed_via`＝vpm など・`depends_on`・`referenced_by`）・`builtin`・`missing_guids`（ファイルと行と欄）・`missing_scripts`・`missing_prefabs`・`missing_references`・`asmdefs`・`large_files`・`unsaved`・`dependency_list_path`（TSV：group, input, path, guid, type, bytes。group は inside / outside / package:<名前> / builtin / excluded_script、input は入力なら 1）・`dependency_list_rows` |
 | reverse | `targets`・`search_roots`・`user_count`・`users`・`users_by_type`・`internal_reference_count`・`per_target`・`unused_targets`・`scene_user_count`・`scene_users`・`scenes_scanned` |
 | scene_references | `target`・`is_prefab_asset`・`components_scanned`・`asset_reference_count`・`external_reference_count`・`external_references`・`path_resolved_references`・`scene_only_objects`・`missing_reference_count`・`missing_script_count`・`missing_prefab_count`・`inbound_reference_count`・`inbound_references`・`prefab`（オーバーライドの状態） |
 
@@ -833,7 +833,7 @@ reverse で拾えないもの：バイナリのファイル、コードからの
 | `PREFAB_HAS_OVERRIDES` / `PART_OF_PREFAB_INSTANCE` | info | オーバーライドのあるプレハブのインスタンス（元のプレハブを書き出すと変更が落ちる） / インスタンスの中の子（新しいプレハブとして保存する） |
 | `OUTSIDE_EXPORT_ROOT` | warning | export_root の外の `Assets/` の依存 |
 | `ASMDEF_REQUIRED` | warning | 書き出す範囲の外の .asmdef でコンパイルされるスクリプト |
-| `PACKAGE_DEPENDENCY` | info / warning | パッケージへの依存（declared_packages に無い、VPM 管理でないなら warning） |
+| `PACKAGE_DEPENDENCY` | info / warning | パッケージへの依存（`declared_packages` を渡していてそこに無い、または VPM 管理外の埋め込み・ローカルのパッケージなら warning。Unity 組み込みのモジュールは出さない） |
 | `SCENE_IN_DEPENDENCIES` | warning | .unity が依存に入った |
 | `NO_EXPORT_ROOT` | info | export_root もフォルダーの入力も無く、内外の判定を省いた |
 | `LARGE_FILE` | info | large_file_mb より大きい依存 |
@@ -846,7 +846,7 @@ reverse で拾えないもの：バイナリのファイル、コードからの
 | `ISSUES_CAPPED` | info | 1コード100件を超えた分は `issues_capped` に数だけ |
 | `SCENE_DIRTIED` / `PLAY_MODE` | warning | 実行中にシーンが変更扱い / Play 中（実行時のコピーを見ている） |
 
-失敗コード：`INVALID_ARGUMENT`、`NO_INPUT`、`TARGET_NOT_FOUND`、`AMBIGUOUS_TARGET`（`details` に候補）、`DEPENDENCIES_FAILED`。
+失敗コード：`INVALID_ARGUMENT`（mode の綴り違い、存在しない `export_root`・`search_root`）、`NO_INPUT`、`TARGET_NOT_FOUND`、`AMBIGUOUS_TARGET`（`details` に候補）、`DEPENDENCIES_FAILED`。
 
 **副作用**：Assets・Packages・シーンは変えない。レポートと、dependencies では TSV を Reports に書く。Missing の走査はプレハブ・アセットを最大1000個エディタのメモリに読み込む（次のアンロードで解放）。
 

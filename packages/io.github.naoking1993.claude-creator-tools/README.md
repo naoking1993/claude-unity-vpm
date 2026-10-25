@@ -54,7 +54,7 @@ MCP for Unity が入っているプロジェクトでは、追加・更新した
 | `cct_snapshot` | 危ない編集の前のファイル単位のバックアップ（`.meta` 込み）、差分、復元、削除 | `action`（**必須**: create / list / diff / restore / delete）, `assets`, `include_dependencies`, `label`, `id`, `confirm` | create はスナップショットフォルダーにコピー。restore / delete は `confirm: true` のときだけ |
 | `cct_animator_inspect` | AnimatorController のダンプと VRChat 向けの検査（WD 混在、未定義パラメーター、型の不一致、届かない遷移、Binding のパス切れ）。パラメーターの使用箇所や、あるプロパティを書くクリップの検索 | `target`, `controller`, `layer`（fx / gesture / … / all）, `layers`, `find_parameter`, `find_binding`, `check_bindings`, `max_states` | なし |
 | `cct_dependency_report` | 依存関係（同梱すべきもの・外部パッケージ・未解決 GUID）、使用元の逆引き、シーン外への参照（プレハブ化すると切れる参照） | `mode`（dependencies / reverse / scene_references）, `assets`, `export_root`, `declared_packages`, `target`, `search_root` | なし（レポートと TSV だけ） |
-| `cct_world_gimmicks` | UdonSharp ギミック 8 種の一覧と取り込み。UdonSharp・必要パッケージ・取り込み先を確かめてから、`.meta` ごとコピーし Program Asset も作る | `action`（list / import）, `confirm`, `dest`, `only`, `overwrite`, `create_program_assets` | import + `confirm: true` のときだけ `Assets/ClaudeWorldGimmicks` に書き込む |
+| `cct_world_gimmicks` | UdonSharp ギミック 8 種の一覧と取り込み。UdonSharp・必要パッケージ・取り込み先を確かめてから、`.meta` ごとコピーし Program Asset も作る | `action`（list / import）, `confirm`, `dest`, `only`, `overwrite`, `create_program_assets` | import + `confirm: true` のときだけ `dest`（既定 `Assets/ClaudeWorldGimmicks`）に書き込む |
 
 各ツールの引数の全部と既定値は、MCP の Description（`Editor/Mcp/<クラス名>Tool.cs`）に書いてあります。Issue コードの一覧は `Editor/Tools/<クラス名>.cs` の先頭のコメントにあります。
 
@@ -86,8 +86,8 @@ Claude Code では、MCP サーバー名が `UnityMCP` なので、ツール名�
 ### ツールのオン・オフは全プロジェクト共通
 
 - **Window > MCP for Unity > Tools** のトグルは EditorPrefs（`MCPForUnity.ToolEnabled.<ツール名>`）に保存されます。EditorPrefs は PC のユーザー単位なので、**あるプロジェクトで切ると、他のプロジェクトでも切れます**。
-- 切ったツールを呼ぶと Unity が `Tool 'cct_…' is disabled in the Unity Editor.` を返します。単独ツールとして登録済みのものは、サーバーを再起動するまで一覧に残ります。
-- 各ツールの説明文は長めで、会話のたびにトークンを使います。アバターしか作らない時期にワールド用（`cct_world_audit`・`cct_world_gimmicks`）を切る、という使い方はできますが、上のとおりワールドプロジェクトでも切れます。
+- 切ったツールを呼ぶと Unity が `Tool 'cct_…' is disabled in the Unity Editor.` を返します。単独ツールとして登録済みのものは、サーバーを再起動するまで一覧に残ります。単独ツールとして登録されていないものを `execute_custom_tool` で呼ぶと、サーバーが `Tool 'cct_…' not found for project …` を返します（パッケージが入っていない・コンパイルが止まっている・再接続前のときも同じ表示です）。
+- 各ツールの説明文は長めで、単独ツールとして一覧に出ていると会話のたびにトークンを使います（`execute_custom_tool` 経由だけのときは、リソース `mcpforunity://custom-tools` を読んだときだけ使います）。アバターしか作らない時期にワールド用（`cct_world_audit`・`cct_world_gimmicks`）を切る、という使い方はできますが、上のとおりワールドプロジェクトでも切れます。
 
 ### 時間の上限（30 秒）
 
@@ -114,7 +114,7 @@ Claude Code では、MCP サーバー名が `UnityMCP` なので、ツール名�
 
 | 書き方 | 意味 |
 | --- | --- |
-| 空 / `selection` | Hierarchy で選択中の GameObject。`cct_avatar_audit` と `cct_animator_inspect` は、選択から上にたどって VRCAvatarDescriptor のあるルートを対象にし、何も選択していなければ読み込み中のシーンにいる唯一のアバターを対象にします（`TARGET_ADJUSTED` で知らせます） |
+| 空 / `selection` | Hierarchy で選択中の GameObject。`cct_avatar_audit` と `cct_animator_inspect` は、選択から上にたどって VRCAvatarDescriptor のあるルートを対象にし、何も選択していなければ読み込み中のシーンにいる唯一のアバターを対象にします（`TARGET_ADJUSTED` で知らせます）。`cct_animator_inspect` は、Hierarchy で何も選択せず Project でコントローラを選択しているときは、そのコントローラを解析します |
 | `/Root/Child` | 読み込み中のシーンの階層パス（`Assets/X.unity:/Root/Child` でシーンを指定できます） |
 | `#12345` | インスタンス ID。ドメインリロード（コンパイル）で変わるので使い捨てです |
 | `名前` | 読み込み中のシーンで一意な GameObject 名 |
@@ -156,12 +156,12 @@ issue は `{severity, code, message, path?, asset?, value?, limit?}` です。`c
 | メニュー | 中身 |
 | --- | --- |
 | 環境情報を出力 (cct_environment) | `cct_environment` |
-| アバター監査 (cct_avatar_audit) > 選択中のアバターを監査 (PC + モバイル) / 選択中のアバターを監査 + NDMF 処理後の値 | `target=selection` |
-| アニメーター解析 (cct_animator_inspect) > 選択中のアバターの FX / Gesture / 全レイヤー (+ MA Merge Animator)、Project で選択中のコントローラ | |
-| キャプチャ (cct_capture_views) > 選択中を4方向 / 選択中を顔3方向 / 選択中をシーン照明で4方向 | |
-| ワールド監査 (cct_world_audit) > アクティブシーン (全プラットフォーム / PC / Android / iOS) | メニューからは `timeout_seconds=300` 相当まで走査します |
-| 依存関係 (cct_dependency_report) > 選択アセットの依存関係 / 選択アセットの使用元を検索 / 選択オブジェクトのシーン外参照 | |
-| スナップショット (cct_snapshot) > 開いているシーンと依存アセットを保存 / 選択アセットを保存 / 一覧をログ出力 | 復元と削除はメニューに置いていません（確認なしに実行できないため） |
+| アバター監査 (cct_avatar_audit) > 選択中のアバターを監査 (PC + モバイル) / 選択中のアバターを監査 + NDMF 処理後の値 | `target=selection`、`platform=all`（2 つ目は `post_build=true`。Play 中は押せません） |
+| アニメーター解析 (cct_animator_inspect) > 選択中のアバターの FX / 選択中のアバターの Gesture / 選択中のアバターの全レイヤー (+ MA Merge Animator) / Project で選択中のコントローラ | `layer=fx` / `gesture` / `all`、最後は `controller=<選択したコントローラ>` |
+| キャプチャ (cct_capture_views) > 選択中を4方向 / 選択中を顔3方向 / 選択中をシーン照明で4方向 | `views=front,back,left,right` / `face`（`mode=isolated`）、最後は `mode=scene`。撮影フォルダーのパスも Console に出します |
+| ワールド監査 (cct_world_audit) > アクティブシーン (全プラットフォーム) / アクティブシーン (PC) / アクティブシーン (Android) / アクティブシーン (iOS) | `scene=active`、`platform=all` / `pc` / `android` / `ios`。メニューからは `timeout_seconds=300` 相当まで走査します |
+| 依存関係 (cct_dependency_report) > 選択アセットの依存関係 / 選択アセットの使用元を検索 / 選択オブジェクトのシーン外参照 | `mode=dependencies` / `reverse`（Project の選択）/ `scene_references`（Hierarchy の選択） |
+| スナップショット (cct_snapshot) > 開いているシーンと依存アセットを保存 / 選択アセットを保存 / 一覧をログ出力 | `action=create`（開いているシーン + 編集可能な依存アセット）/ `create`（選択アセットだけ）/ `list`。復元と削除はメニューに置いていません（確認なしに実行できないため） |
 | ワールドギミック (UdonSharp) > 一覧と導入状況をログ出力 / Assets/ClaudeWorldGimmicks にインポート | クリックが同意の代わりなので、インポートは `confirm=true` で実行します（既存ファイルは上書きしません） |
 | レポートフォルダを開く / キャプチャフォルダを開く / スナップショットフォルダを開く | そのフォルダーをエクスプローラーで表示（無ければ作ってから） |
 
@@ -169,7 +169,7 @@ issue は `{severity, code, message, path?, asset?, value?, limit?}` です。`c
 
 | 種類 | 場所 | 消してよいか |
 | --- | --- | --- |
-| レポート（JSON、依存関係の TSV） | `<プロジェクト>/Library/ClaudeCreatorTools/Reports/<ツール名>-<日時>-<英数字4文字>.json`（メニューから実行したものは `cct_world_audit-world-pc-…` のように間に名前が入ります。依存関係の一覧は `cct_dependency_report-…-files-<日時>-<英数字4文字>.tsv`） | いつでも消せます。溜まる一方なので、ときどき「レポートフォルダを開く」から整理してください |
+| レポート（JSON、依存関係の TSV） | `<プロジェクト>/Library/ClaudeCreatorTools/Reports/<ツール名>-<日時>-<英数字4文字>.json`（ワールド監査と依存関係のメニューから実行したものは、`cct_world_audit-world-pc-…`・`cct_dependency_report-deps-…`（`users` / `scene-refs`）のように間に名前が入ります。依存関係の一覧は `cct_dependency_report-files-<日時>-<英数字4文字>.tsv`、メニューからは `cct_dependency_report-deps-files-…tsv`。同じ名前があれば末尾に `-2` などを付けます） | いつでも消せます。溜まる一方なので、ときどき「レポートフォルダを開く」から整理してください |
 | キャプチャ | `<プロジェクト>/Library/ClaudeCreatorTools/Captures/<日時>-<英数字4文字>_<ラベル>/`（`<view>.png`、`contact_sheet.png`、`manifest.json`、比較時は `compare_<view>.png`・`diff_<view>.png`） | 消せます。ただし `compare_with` で比べる元になる撮影は残してください |
 | スナップショット | `<プロジェクト>/ClaudeCreatorTools/Snapshots/<id>/`（コピーしたファイル + `manifest.json`） | `cct_snapshot action=delete id=… confirm=true` か、フォルダーごと削除 |
 | 一時フォルダー | `Assets/__ClaudeCreatorToolsTemp`（未保存のシーンをスナップショットする間だけ作り、すぐ消します） | 残っていたら消して構いません |
@@ -184,7 +184,7 @@ issue は `{severity, code, message, path?, asset?, value?, limit?}` です。`c
 ## 安全の考え方
 
 - **読み取り専用のツール**: `cct_environment`, `cct_avatar_audit`, `cct_world_audit`, `cct_capture_views`, `cct_animator_inspect`, `cct_dependency_report`。シーンにもアセットにも書き込みません（`SetDirty`・保存・Undo 登録をしません）。一時物は、撮影用のクローン・カメラ・ライトと `post_build` のクローンなら見えない一時シーン（プレビューシーン）に、`cct_capture_views` の `mode=scene` の撮影用カメラなら保存されない非表示のオブジェクト（`HideAndDontSave`）として作り、`finally` で消します。シーンが意図せず変更済みになったときは `SCENE_DIRTIED` で知らせます。書くのはレポートとキャプチャのファイルだけです（例外: `post_build` の処理中に NDMF のプラグインが一時アセットを書いた場合は、その呼び出しの間に増えたものだけを消して `POST_BUILD_CLEANUP_FAILED` で知らせます）。
-- **書き込むツール**は `cct_snapshot` と `cct_world_gimmicks` だけです。プロジェクトのファイルを変える操作（復元・削除・取り込み）は、どちらも既定がドライラン（予定の一覧だけを返す）です。`cct_snapshot action=create` は確認なしで実行しますが、書くのはスナップショットフォルダー（と未保存シーン用の一時フォルダー）だけです。
+- **書き込むツール**は `cct_snapshot` と `cct_world_gimmicks` だけです。プロジェクトのファイルを変える操作（復元・削除・取り込み）は、どちらも既定がドライラン（予定の一覧だけを返す）です。`cct_snapshot action=create` は確認なしで実行しますが、書くのはスナップショットフォルダー（と未保存シーン用の一時フォルダー）だけです（未保存のシーンは一時フォルダーへのコピー保存で取り出すので、他のパッケージのシーン保存時の処理は Ctrl+S のときと同じように動きます）。
   - `cct_snapshot action=restore` / `delete` と `cct_world_gimmicks action=import` は、`confirm: true` を付けたときだけ実行します。付けないと `CONFIRM_REQUIRED` と予定の一覧を返します。Claude は**予定を本人に見せて、同意をもらってから** `confirm: true` で呼び直します。
   - 復元の前には、そのときの状態（未保存のシーンの変更も含む）を自動でスナップショットし、`pre_restore_snapshot_id` を返します。それを復元すれば元に戻せます（復元で新しく作られたファイルは消えません）。
   - `cct_world_gimmicks` は、UdonSharp が無いプロジェクトでは取り込みを拒否します（`NO_UDONSHARP`）。既存ファイルは `overwrite: true` が無い限り上書きせず、既存の `.meta` は常に残します。
@@ -219,7 +219,7 @@ issue は `{severity, code, message, path?, asset?, value?, limit?}` です。`c
    - 合格: `success: true`、`tool_version: "0.1.0"`、`project_root` が開いているプロジェクトと同じであること。
    - そのとき Claude が `mcp__UnityMCP__cct_environment` を直接呼べたか、`execute_custom_tool` 経由だったかを記録しておいてください（サーバーの Python 3.14 の問題が起きているかが分かります）。
 5. **撮影（アバタープロジェクト）**: Hierarchy でアバターのルートを選び、Claude に「cct_capture_views で撮って、一覧画像を見て」と頼みます（メニューなら **キャプチャ (cct_capture_views) > 選択中を4方向**）。
-   - 合格: `Library/ClaudeCreatorTools/Captures/<日時>_<アバター名>/contact_sheet.png` に、front / back / left / right の 4 枚が名前付きで並び、アバター全身が切れずに中央にあり、背景が灰色（#808080）であること。Claude がその PNG を読んで見た目を説明できること。
+   - 合格: `Library/ClaudeCreatorTools/Captures/<日時>-<英数字4文字>_<アバター名>/contact_sheet.png` に、front / back / left / right の 4 枚が名前付きで並び、アバター全身が切れずに中央にあり、背景が灰色（#808080）であること。Claude がその PNG を読んで見た目を説明できること。
    - シーンのタブに未保存の印（`*`）が新しく付いていないこと（読み取り専用の確認）。
 6. **監査（アバタープロジェクト）**: **アバター監査 (cct_avatar_audit) > 選択中のアバターを監査 (PC + モバイル)**。
    - 合格: Console が `OK` で、メッセージに `[推定値]` が付いていないこと（付いていれば SDK の計算器を使えていません）。今のビルドターゲット（PC なら PC）の総合ランクが、VRChat SDK の Control Panel（Builder タブ）の表示と同じであること。
