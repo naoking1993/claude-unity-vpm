@@ -14,6 +14,7 @@
 //   2. 切り替えボタン役の GameObject に Collider を付け、CctMirrorSwitcher を Add Component。
 //      (Interact すると OFF → 0 → 1 → … → OFF の順に巡回)
 //   3. Mirrors に順番どおりに登録 (最大 4 個までは _Select0〜_Select3 で直接選べる)。
+//      スイッチ自身の GameObject を Mirrors に入れても無視されます (ミラー本体には付けず、別のボタンに付ける)。
 //   4. (任意) Label に TextMeshPro のテキストを入れ、Mode Names に表示名 (例: "HQ", "LQ") を入れる。
 //   UI ボタンから: 各ボタンの On Click () → この GameObject → UdonBehaviour.SendCustomEvent →
 //     _Next / _Off / _Select0 / _Select1 / _Select2 / _Select3 を入力。
@@ -93,7 +94,8 @@ namespace Naoking.ClaudeWorldGimmicks
             _current = index;
             for (int i = 0; i < count; i++)
             {
-                if (mirrors[i] != null) mirrors[i].SetActive(i == index);
+                // スイッチ自身は切り替えない (ミラーと同じ GameObject に付けると、OFF にした時に二度と押せなくなるため)。
+                if (mirrors[i] != null && mirrors[i] != gameObject) mirrors[i].SetActive(i == index);
             }
             UpdateLabel();
         }

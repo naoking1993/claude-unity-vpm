@@ -25,6 +25,8 @@
 //   - 自分が参加した時は、既にいる全員分の OnPlayerJoined が届きます (公式ドキュメント)。
 //     そのためログには既存メンバーの「参加」も並びます。
 //   - ログは各自が見たものだけです (後から来た人には過去のログはありません)。
+//   - 人数は毎回 GetPlayers() から数え直すので、この GameObject が途中まで非表示だった場合も
+//     表示された時 (Start / OnEnable) に正しい人数になります (その間のログは残りません)。
 //
 // テスト手順:
 //   ClientSim: Play → 「現在 1 人」。ClientSim の設定ウィンドウでリモートプレイヤーを
@@ -77,6 +79,13 @@ namespace Naoking.ClaudeWorldGimmicks
             RefreshLog();
         }
 
+        private void OnEnable()
+        {
+            // 非表示の間に人数が変わっていても、表示し直した時に正しい人数にする
+            // (人数は毎回プレイヤー一覧から数え直すので、イベントを取りこぼしても合う)。
+            RefreshCount(-1);
+        }
+
         public override void OnPlayerJoined(VRCPlayerApi player)
         {
             AddLog(NameOf(player) + joinedText);
@@ -93,9 +102,11 @@ namespace Naoking.ClaudeWorldGimmicks
         private void RefreshCount(int excludePlayerId)
         {
             int total = VRCPlayerApi.GetPlayerCount();
-            int capacity = _players == null ? 0 : _players.Length;
-            if (capacity < total)
+            // 配列は最初に必ず確保する (人数 0 でも null のままにしない。Udon では null 参照で
+            // このスクリプト全体が止まるため)。足りなくなったら倍々で作り直す。
+            if (_players == null || _players.Length < total)
             {
+                int capacity = _players == null ? 16 : _players.Length;
                 if (capacity < 16) capacity = 16;
                 while (capacity < total) capacity *= 2;
                 _players = new VRCPlayerApi[capacity];

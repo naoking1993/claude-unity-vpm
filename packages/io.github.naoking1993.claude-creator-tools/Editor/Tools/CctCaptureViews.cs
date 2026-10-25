@@ -14,8 +14,8 @@ namespace Naoking.ClaudeCreatorTools
 {
     /// <summary>
     /// cct_capture_views: renders reproducible PNG images of a GameObject (usually a VRChat avatar) from fixed angles
-    /// relative to its forward (+Z), so Claude can judge appearance and compare before/after edits under identical
-    /// camera / pose / lighting. Nothing in the user's scenes or assets is modified: "isolated" renders a script-free
+    /// relative to its forward (+Z; for a part of an avatar, the avatar root's forward), so Claude can judge appearance and
+    /// compare before/after edits under identical camera / pose / lighting. Nothing in the user's scenes or assets is modified: "isolated" renders a script-free
     /// clone inside a temporary preview scene with neutral studio lighting, "scene" renders the real scene with a
     /// temporary HideAndDontSave camera. Everything temporary is destroyed in finally.
     ///
@@ -31,7 +31,13 @@ namespace Naoking.ClaudeCreatorTools
     /// cubemap, key + fill directional lights living only in the preview scene (camera.scene limits culling to it).
     /// Known limits: OnValidate / ISerializationCallbackReceiver of scripts can run during Instantiate; shaders animated
     /// by _Time (lilToon scroll/blink etc.) differ between captures; no post-processing; NDMF/MA edit-mode previews are
-    /// not reproduced in isolated mode; scene mode shows whatever stands between camera and target.
+    /// not reproduced in isolated mode; scene mode shows whatever stands between camera and target. Async shader
+    /// compilation is disabled around each render (no cyan placeholders), so a first capture may compile variants
+    /// synchronously. With mipmap streaming on, the disabled capture camera does not drive mip selection (TEXTURE_STREAMING
+    /// reports textures that are loaded below their top mip at capture time). Global shader
+    /// properties set by scene scripts (e.g. VRC Light Volumes, AudioLink) also reach the isolated clone; they are not reset.
+    /// compare_with=latest picks the newest capture of the same target (scene/asset path + hierarchy path), else the newest
+    /// capture overall with COMPARE_TARGET_DIFFERS.
     ///
     /// Issue codes:
     /// | code                      | severity | meaning |
@@ -48,12 +54,14 @@ namespace Naoking.ClaudeCreatorTools
     /// | SCRIPTS_STRIPPED          | info     | MonoBehaviours removed from the isolated clone before it was activated |
     /// | SCRIPTS_KEPT              | warning  | keep_scripts=true: [ExecuteAlways] scripts on the clone may have run |
     /// | STRIP_INCOMPLETE          | warning  | some MonoBehaviours could not be removed from the clone |
-    /// | BAKE_FAILED               | warning  | a skinned mesh could not be baked; rendered as SkinnedMeshRenderer instead |
+    /// | BAKE_FAILED               | warning  | skinned meshes could not be baked (one issue for all); isolated: rendered as SkinnedMeshRenderer, scene: bind-pose framing |
     /// | TARGET_HAS_LIGHTS         | info     | the target contains enabled Lights that also light the capture |
     /// | EDITOR_ONLY_VISIBLE       | info     | renderers under EditorOnly-tagged objects are in the image (VRChat strips them on upload) |
     /// | LIGHTING_OVERRIDE_FAILED  | warning  | preview-scene lighting override failed; ambient/reflection may come from the open scene |
     /// | PLAY_MODE                 | info     | captured during Play mode (runtime state is captured) |
     /// | SRP_ACTIVE                | warning  | a scriptable render pipeline is active; this tool targets the Built-in pipeline |
+    /// | TEXTURE_STREAMING         | warning  | mipmap streaming currently holds some of the target's textures at reduced mips (blurry) |
+    /// | STATIC_BATCHED            | warning  | isolated clone contains static-batched renderers (Play mode); they may render wrongly |
     /// | MSAA_UNAVAILABLE          | info     | render texture MSAA not supported; edges are aliased |
     /// | RENDER_FAILED             | error    | setup or a view's render failed (result fails if nothing was captured) |
     /// | WRITE_FAILED              | error    | a PNG / manifest could not be written |
@@ -63,6 +71,7 @@ namespace Naoking.ClaudeCreatorTools
     /// | COMPARE_NOT_FOUND         | error    | compare_with did not resolve to a readable capture manifest; no comparison |
     /// | COMPARE_MISMATCH          | error    | compare_with used different resolution/framing/lighting params; no comparison |
     /// | COMPARE_MISSING_VIEW      | warning  | a view exists in only one of the two captures |
+    /// | COMPARE_TARGET_DIFFERS    | info/warn| the previous capture is of another object (warning when 'latest' had to fall back to it) |
     /// | COMPARE_FILE_MISSING      | warning  | the previous capture's PNG for a view is missing/unreadable/different size |
     /// | COMPARE_CAMERA_REUSED     | info     | framing changed since the previous capture; its camera pose was reused for alignment |
     /// | COMPARE_CAMERA_DIFFERS    | warning  | reuse_cameras=false and the camera moved: pixel differences include the framing change |
@@ -172,26 +181,30 @@ namespace Naoking.ClaudeCreatorTools
         {
             var r = CctResult.Ok("");
 
-            // compare_with first: unspecified parameters are inherited from the previous capture.
+            if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+                return FailWith(r, "グラフィックスデバイスが無い状態 (-nographics / batchmode) では描画できません", "RENDER_FAILED", null);
+
+            var resolved = CctTargets.Resolve(args.GetString("target"));
+            if (!resolved.Ok)
+                return FailWith(r, resolved.Error, "TARGET_NOT_FOUND", null,
+                    resolved.Candidates.Count > 0 ? resolved.Candidates.Cast<object>().ToList() : null);
+            var target = resolved.GameObject;
+            var targetInfo = CctTargets.Describe(target);
+
+            // compare_with before the options: unspecified parameters are inherited from the previous capture.
             PreviousCapture prev = null;
             var compareSpec = args.GetString("compare_with");
             if (!string.IsNullOrWhiteSpace(compareSpec))
             {
-                prev = PreviousCapture.Load(compareSpec, out var loadError);
+                prev = PreviousCapture.Load(compareSpec, TargetKey(targetInfo), out var loadError, out bool latestOfOtherTarget);
                 if (prev == null)
                     r.AddIssue(CctSeverity.Error, "COMPARE_NOT_FOUND", loadError + " (比較は行わず撮影のみ行います)", value: compareSpec);
+                else ReportTargetDifference(prev, targetInfo, latestOfOtherTarget, r);
             }
 
             var opt = ParseOptions(args, prev, r, out var optError);
-            if (opt == null) return CctResult.Fail(optError, "INVALID_ARGS");
+            if (opt == null) return FailWith(r, optError, "INVALID_ARGS", null);
 
-            if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
-                return CctResult.Fail("グラフィックスデバイスが無い状態 (-nographics / batchmode) では描画できません", "RENDER_FAILED");
-
-            var resolved = CctTargets.Resolve(args.GetString("target"));
-            if (!resolved.Ok)
-                return CctResult.Fail(resolved.Error, "TARGET_NOT_FOUND", resolved.Candidates.Count > 0 ? resolved.Candidates : null);
-            var target = resolved.GameObject;
             bool isAsset = resolved.IsPrefabAsset || EditorUtility.IsPersistent(target);
             bool inPreviewScene = !isAsset && target.scene.IsValid() && EditorSceneManager.IsPreviewScene(target.scene);
 
@@ -212,7 +225,7 @@ namespace Naoking.ClaudeCreatorTools
             if (!active)
             {
                 if (opt.Mode == "scene")
-                    return CctResult.Fail("対象が非アクティブなのでシーン上では写りません。mode=isolated (クローンをアクティブにして撮影) を使ってください", "TARGET_INACTIVE");
+                    return FailWith(r, "対象が非アクティブなのでシーン上では写りません。mode=isolated (クローンをアクティブにして撮影) を使ってください", "TARGET_INACTIVE", null);
                 r.AddIssue(CctSeverity.Warning, "TARGET_INACTIVE",
                     "対象が非アクティブです。isolated のクローン上でルートだけをアクティブにして撮影しました (非アクティブな子はそのまま)",
                     path: CctTargets.GetPath(target));
@@ -221,6 +234,16 @@ namespace Naoking.ClaudeCreatorTools
                 r.AddIssue(CctSeverity.Info, "PLAY_MODE", "Play モード中の状態を撮影しました (編集モードとは姿勢・表示が異なる場合があります)");
             if (GraphicsSettings.currentRenderPipeline != null)
                 r.AddIssue(CctSeverity.Warning, "SRP_ACTIVE", "スクリプタブルレンダーパイプラインが有効です。このツールは Built-in パイプライン前提のため照明が再現されない可能性があります");
+            if (QualitySettings.streamingMipmapsActive)
+            {
+                // The disabled capture camera does not drive mip streaming, so only what is loaded right now is drawn.
+                var reduced = FindReducedMipTextures(target, out int worstLevel);
+                if (reduced.Count > 0)
+                    r.AddIssue(CctSeverity.Warning, "TEXTURE_STREAMING",
+                        $"テクスチャストリーミングにより {reduced.Count} 枚のテクスチャが縮小したミップ (最大 1/{1 << Math.Min(worstLevel, 12)}) で読み込まれていて、画像がぼやける可能性があります: " +
+                        string.Join(", ", reduced.Take(5)) + (reduced.Count > 5 ? " ..." : "") +
+                        "。Scene ビューで対象を大きく表示してから撮り直すと改善します", value: reduced.Count);
+            }
 
             bool compareEnabled = prev != null;
             if (prev != null)
@@ -284,8 +307,8 @@ namespace Naoking.ClaudeCreatorTools
                 if (failure == null && session.FramingRenderers.Count == 0)
                 {
                     failure = FailWith(r, session.RenderedRenderers == 0
-                        ? "対象の下に有効な Renderer がありません (非アクティブ・無効を除く)"
-                        : "対象の下に MeshRenderer / SkinnedMeshRenderer がありません (パーティクル等だけでは構図を決められません)",
+                        ? "対象の下に有効な Renderer がありません (非アクティブ・無効を除く)。target がアバター / オブジェクトのルートか確認してください"
+                        : "対象の下に MeshRenderer / SkinnedMeshRenderer がありません (パーティクル等だけでは構図を決められません)。親オブジェクトを target にしてください",
                         "NO_RENDERERS", null);
                 }
 
@@ -386,14 +409,13 @@ namespace Naoking.ClaudeCreatorTools
                         ["file"] = CctPaths.ToDisplayPath(filePath),
                         ["framing"] = framingKind,
                         ["camera_source"] = cameraSource,
+                        // World pose for orientation; near/far and the frame-relative pose are in the manifest.
                         ["camera"] = new Dictionary<string, object>
                         {
                             ["position"] = Rounded(worldPos, 4),
                             ["euler"] = Rounded(worldRot.eulerAngles, 2),
                             ["fov"] = Math.Round(pose.Fov, 3),
                             ["distance"] = Math.Round(pose.Distance, 4),
-                            ["near"] = Math.Round(pose.Near, 4),
-                            ["far"] = Math.Round(pose.Far, 3),
                         },
                     });
 
@@ -433,7 +455,8 @@ namespace Naoking.ClaudeCreatorTools
                     "プレビューシーンの照明設定に切り替えられませんでした。環境光・反射が開いているシーンのものになっている可能性があります");
             if (reusedViews.Count > 0)
                 r.AddIssue(CctSeverity.Info, "COMPARE_CAMERA_REUSED",
-                    "比較元から構図 (境界) が変わったため、比較元のカメラ位置を再利用して位置を揃えました: " + string.Join(", ", reusedViews));
+                    "比較元から構図 (境界) が変わったため、比較元のカメラ位置を再利用して位置を揃えました: " + string.Join(", ", reusedViews) +
+                    " (大きくなった部分は画面外になることがあります。新しい全体像は compare_with なしで撮影してください)");
             if (movedViews.Count > 0)
                 r.AddIssue(CctSeverity.Warning, "COMPARE_CAMERA_DIFFERS",
                     "reuse_cameras=false でカメラ位置が比較元と異なります。差分には構図のずれが含まれます: " + string.Join(", ", movedViews));
@@ -460,7 +483,6 @@ namespace Naoking.ClaudeCreatorTools
             }
 
             var framingPlain = framing?.ToPlain();
-            var targetInfo = CctTargets.Describe(target);
             var manifestPath = CctPaths.Combine(dir, ManifestFileName);
             var manifest = new Dictionary<string, object>
             {
@@ -481,6 +503,7 @@ namespace Naoking.ClaudeCreatorTools
                 ["contact_sheet"] = sheetPath != null ? ContactSheetFileName : null,
                 ["compare_with"] = prev?.Dir,
                 ["comparisons"] = comparisons,
+                ["comparison_units"] = comparisons.Count > 0 ? ComparisonUnits : null,
                 ["files"] = files.Select(f => (object)Path.GetFileName(f)).Concat(new object[] { ManifestFileName }).ToList(),
             };
             if (TryWrite(manifestPath, Encoding.UTF8.GetBytes(CctJson.Serialize(manifest, true)), r)) files.Add(manifestPath);
@@ -492,6 +515,7 @@ namespace Naoking.ClaudeCreatorTools
             r.Put("views", viewResults);
             if (prev != null) r.Put("compare_with", prev.Dir);
             if (comparisons.Count > 0 || prev != null) r.Put("comparisons", comparisons);
+            if (comparisons.Count > 0) r.Put("comparison_units", ComparisonUnits);
             r.Put("target", targetInfo);
             r.Put("params", opt.ToPlain());
             r.Put("framing", framingPlain);
@@ -503,14 +527,20 @@ namespace Naoking.ClaudeCreatorTools
             msg.Append(sheetPath != null ? $"。一覧画像: {CctPaths.ToDisplayPath(sheetPath)}" : $"。保存先: {CctPaths.ToDisplayPath(dir)}");
             if (comparisons.Count > 0)
             {
-                msg.Append(" / 比較: ");
-                msg.Append(string.Join(", ", comparisons.Take(4).Select(c =>
+                // Background-excluded numbers where available: a whole-frame average mostly measures the empty backdrop.
+                bool fg = opt.Background != "skybox";
+                msg.Append(fg ? " / 比較 (背景を除く変化画素率・平均差): " : " / 比較 (画面全体の変化画素率・平均差): ");
+                msg.Append(string.Join("、", comparisons.Take(4).Select(c =>
                 {
                     var d = (Dictionary<string, object>)c;
-                    return $"{d["view"]} 平均差{Convert.ToDouble(d["mean_abs_diff"], CultureInfo.InvariantCulture):0.##} 変化{Convert.ToDouble(d["changed_pct"], CultureInfo.InvariantCulture):0.##}%";
+                    double pct = Convert.ToDouble(fg ? d["changed_pct_foreground"] : d["changed_pct"], CultureInfo.InvariantCulture);
+                    double mean = Convert.ToDouble(fg ? d["mean_abs_diff_foreground"] : d["mean_abs_diff"], CultureInfo.InvariantCulture);
+                    return $"{d["view"]} {pct:0.##}%・{mean:0.##}";
                 })));
                 if (comparisons.Count > 4) msg.Append($" ほか {comparisons.Count - 4} 件");
             }
+            else if (prev != null || !string.IsNullOrWhiteSpace(compareSpec))
+                msg.Append(" / 比較は行っていません (issues の COMPARE_* を参照)");
             r.Message = msg.ToString();
             return r;
         }
@@ -662,6 +692,32 @@ namespace Naoking.ClaudeCreatorTools
             return result;
         }
 
+        /// <summary>"&lt;scene or asset path&gt;|&lt;hierarchy path&gt;" of a CctTargets.Describe() dictionary (null when unknown).</summary>
+        static string TargetKey(Dictionary<string, object> d)
+        {
+            if (d == null) return null;
+            string Get(string k) => d.TryGetValue(k, out var v) && v is string s ? s : "";
+            var path = Get("path");
+            if (path.Length == 0) return null;
+            var where = Get("asset");
+            if (where.Length == 0) where = Get("scene");
+            return where + "|" + path;
+        }
+
+        static void ReportTargetDifference(PreviousCapture prev, Dictionary<string, object> current, bool latestOfOtherTarget, CctResult r)
+        {
+            var prevKey = TargetKey(prev.Target);
+            if (prevKey == null || prevKey == TargetKey(current)) return;
+            var prevName = prev.Target.TryGetValue("path", out var p) ? p as string : null;
+            if (latestOfOtherTarget)
+                r.AddIssue(CctSeverity.Warning, "COMPARE_TARGET_DIFFERS",
+                    $"compare_with=latest: この対象の過去のキャプチャが無いため、最新のキャプチャ (別の対象 '{prevName}') と比較しました。" +
+                    "意図した比較でなければ compare_with にキャプチャフォルダを指定してください", value: prev.Dir);
+            else
+                r.AddIssue(CctSeverity.Info, "COMPARE_TARGET_DIFFERS",
+                    $"比較元は別の対象 '{prevName}' の撮影です (元アバターと改変版の比較など、意図どおりなら問題ありません)", value: prev.Dir);
+        }
+
         static void ReportViewSetDifferences(Options o, PreviousCapture prev, CctResult r)
         {
             var current = o.Views.Select(v => v.Name).ToList();
@@ -697,9 +753,39 @@ namespace Naoking.ClaudeCreatorTools
 
         // ------------------------------------------------------------------ small helpers
 
-        static CctResult FailWith(CctResult collected, string message, string code, Exception e)
+        /// <summary>Names of streamed textures used by the target's enabled renderers that are loaded below their top mip.</summary>
+        static List<string> FindReducedMipTextures(GameObject target, out int worstLevel)
+        {
+            worstLevel = 0;
+            var names = new List<string>();
+            var seen = new HashSet<Texture2D>();
+            foreach (var rend in target.GetComponentsInChildren<Renderer>(true))
+            {
+                if (rend == null || !rend.enabled) continue;
+                foreach (var mat in rend.sharedMaterials)
+                {
+                    if (mat == null) continue;
+                    int[] ids;
+                    try { ids = mat.GetTexturePropertyNameIDs(); }
+                    catch (Exception) { continue; }
+                    foreach (var id in ids)
+                    {
+                        if (!(mat.GetTexture(id) is Texture2D tex) || !seen.Add(tex) || !tex.streamingMipmaps) continue;
+                        int level = tex.loadedMipmapLevel;
+                        if (level <= 0) continue;
+                        names.Add(tex.name);
+                        worstLevel = Math.Max(worstLevel, level);
+                    }
+                }
+            }
+            return names;
+        }
+
+        /// <summary>Failed result that keeps every issue collected so far (unknown views, compare problems ...).</summary>
+        static CctResult FailWith(CctResult collected, string message, string code, Exception e, List<object> candidates = null)
         {
             var details = new Dictionary<string, object>();
+            if (candidates != null) details["candidates"] = candidates;
             if (e != null) details["exception"] = e.GetType().FullName + ": " + e.Message;
             if (e?.StackTrace != null) details["stack"] = e.StackTrace.Length > 1500 ? e.StackTrace.Substring(0, 1500) + "..." : e.StackTrace;
             var fail = CctResult.Fail(message, code, details.Count > 0 ? details : null);

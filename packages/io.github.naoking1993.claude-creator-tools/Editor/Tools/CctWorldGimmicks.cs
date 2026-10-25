@@ -14,45 +14,68 @@ namespace Naoking.ClaudeCreatorTools
     /// Samples~/WorldGimmicks folder (Unity does not import "~" folders, so nothing compiles until imported).
     ///
     /// Actions:
-    ///   list   - read-only: available samples (name, sync mode, summary), whether UdonSharp / TextMeshPro / uGUI /
-    ///            the VRChat Worlds SDK are present, whether each sample is already imported at 'dest', and what the
-    ///            next steps are.
+    ///   list   - (default) read-only: available samples (name, sync mode, summary, required packages), whether
+    ///            UdonSharp / the VRChat Worlds SDK / each optional dependency is present, whether each sample is
+    ///            already imported at 'dest' (and has a U# program asset) or exists elsewhere in the project (and
+    ///            whether that copy has a program asset), whether 'dest' is usable, which samples an import would
+    ///            add ('importable', ready to pass as 'only'), and the next steps.
     ///   import - copies Samples~/WorldGimmicks (or the 'only' subset) into 'dest' (default Assets/ClaudeWorldGimmicks)
-    ///            ONLY when the UdonSharp runtime type exists (an avatar project would get compile errors), with
-    ///            confirm=true (otherwise a dry-run plan is returned). Existing files are never overwritten unless
-    ///            overwrite=true, and existing .meta files are never replaced (their GUIDs are what the project uses).
-    ///            Source .meta files are copied so GUIDs stay stable, unless that GUID is already used by another asset.
-    ///            Then AssetDatabase.Refresh(), and (create_program_assets, default true) one UdonSharpProgramAsset per
-    ///            script, created exactly like UdonSharp's own "Create > U# Script" does (CreateInstance +
-    ///            sourceCsScript + AssetDatabase.CreateAsset) - UdonSharp never creates them for copied scripts.
+    ///            ONLY when the UdonSharp runtime type exists (an avatar project would get compile errors) and every
+    ///            selected sample's dependencies exist, with confirm=true (otherwise a dry-run plan is returned).
+    ///            Existing files are never overwritten unless overwrite=true, existing .meta files are never replaced
+    ///            (their GUIDs are what the project uses), and a sample whose script already exists elsewhere in the
+    ///            project is skipped (a second copy of the class would not compile). Source .meta files are copied so
+    ///            GUIDs stay stable, unless that GUID is already used by another asset. Then AssetDatabase.Refresh(),
+    ///            and (create_program_assets, default true) one UdonSharpProgramAsset per script, created exactly like
+    ///            UdonSharp's own "Assets/Create/U# Script" does (CreateInstance + sourceCsScript +
+    ///            AssetDatabase.CreateAsset next to the script) - UdonSharp never creates them for copied scripts.
+    ///            A copy found elsewhere under Assets/ (e.g. a Package Manager Samples import) that has no program
+    ///            asset gets one next to it too, so a skipped sample is still usable; it is listed in the dry run.
+    ///            Paths are compared case-insensitively (the project is opened on Windows).
     ///
-    /// UdonSharp / TMP types are looked up by name only (no compile-time dependency).
+    /// UdonSharp / TMP / uGUI / VRChat types are looked up by full name only (no compile-time dependency).
+    /// A sample's optional dependencies are derived from its 'using' directives (see <see cref="Requirements"/>).
     ///
-    /// Issue codes:
-    /// | code                        | severity    | meaning                                                                    |
-    /// |-----------------------------|-------------|----------------------------------------------------------------------------|
-    /// | NO_UDONSHARP                | fail / info | UdonSharp.UdonSharpBehaviour not found (avatar project?); import refused   |
-    /// | MISSING_DEPENDENCY          | fail / warn | TextMeshPro, uGUI or VRChat Worlds SDK types missing; import refused       |
-    /// | SAMPLES_NOT_FOUND           | (fail code) | package folder or Samples~/WorldGimmicks not found                         |
-    /// | INVALID_DEST                | (fail code) | dest is not a folder path under Assets/ (or contains '..' / bad chars)     |
-    /// | DEST_HAS_ASMDEF             | (fail code) | an .asmdef in dest or a parent folder would capture the scripts            |
-    /// | UNKNOWN_SAMPLE              | (fail code) | a name in 'only' is not one of the samples                                 |
-    /// | PLAY_MODE                   | (fail code) | import refused in Play mode                                                |
-    /// | INVALID_ARGUMENT            | (fail code) | unknown action                                                             |
-    /// | CONFIRM_REQUIRED            | warning     | import dry run: nothing was written; call again with confirm=true          |
-    /// | FILE_EXISTS                 | info        | target file exists and overwrite=false; skipped                            |
-    /// | FILE_OVERWRITTEN            | warning     | target file existed and was overwritten (overwrite=true)                   |
-    /// | META_KEPT                   | info        | target .meta exists; kept as is (GUID preserved)                           |
-    /// | META_MISSING                | info        | the sample file has no .meta; Unity assigns a new GUID on import           |
-    /// | GUID_IN_USE                 | warning     | the sample's GUID already belongs to another asset; .meta not copied       |
-    /// | COPY_FAILED                 | error       | a file could not be copied                                                 |
-    /// | PROGRAM_ASSET_CREATED       | info        | UdonSharpProgramAsset created for a script                                 |
-    /// | PROGRAM_ASSET_EXISTS        | info        | a program asset already points at the script (or the .asset path exists)  |
-    /// | PROGRAM_ASSET_TYPE_MISSING  | warning     | UdonSharp.UdonSharpProgramAsset (editor) type not found; create manually  |
-    /// | PROGRAM_ASSET_FAILED        | warning     | program asset could not be created; create it manually (see next_steps)   |
-    /// | ALREADY_IMPORTED            | info        | list: every sample file already exists at dest                             |
-    /// | PARTIALLY_IMPORTED          | info        | list: some sample files exist at dest                                      |
-    /// | COMPILE_PENDING             | info        | import wrote scripts; Unity and then UdonSharp will compile them           |
+    /// Issue codes (fail = returned as the failure code of the result):
+    /// | code                        | severity     | meaning                                                                       |
+    /// |-----------------------------|--------------|-------------------------------------------------------------------------------|
+    /// | INVALID_ARGUMENT            | fail         | action is not 'list' or 'import'                                              |
+    /// | SAMPLES_NOT_FOUND           | fail         | package folder or Samples~/WorldGimmicks not found                            |
+    /// | INVALID_DEST                | fail         | dest is not a folder path under Assets/ (absolute, '..', hidden/'~', bad chars)|
+    /// | NO_UDONSHARP                | fail / info  | UdonSharp.UdonSharpBehaviour not found (avatar project?); import refused      |
+    /// | MISSING_DEPENDENCY          | fail / warn. | Worlds SDK, or a package a selected sample uses (TMP, uGUI, PlayerData,       |
+    /// |                             |              | NetworkCallable) is missing; import refused (exclude those samples via 'only')|
+    /// | PLAY_MODE                   | fail         | import refused in Play mode                                                   |
+    /// | DEST_HAS_ASMDEF             | fail / warn. | an .asmdef/.asmref in dest or a parent folder would capture the scripts       |
+    /// | DEST_SPECIAL_FOLDER         | fail / warn. | dest is inside an Editor folder or Assets/Plugins (or Standard Assets): those |
+    /// |                             |              | scripts are not in Assembly-CSharp, so UdonSharp would not compile them       |
+    /// | UNKNOWN_SAMPLE              | fail         | a name in 'only' is not one of the samples                                    |
+    /// | CONFIRM_REQUIRED            | warning      | import dry run: nothing was written; call again with confirm=true             |
+    /// | SAMPLE_EXISTS_ELSEWHERE     | warning      | the sample script already exists at another path (e.g. Package Manager        |
+    /// |                             |              | Samples import); list: reported, import: that sample is skipped               |
+    /// | FILE_EXISTS                 | info         | target files exist and overwrite=false; skipped (one issue, value = paths)    |
+    /// | FILE_OVERWRITTEN            | warning      | target file exists and is overwritten (overwrite=true)                        |
+    /// | META_KEPT                   | info         | target .meta files exist; kept as is (GUID preserved) (one issue, value=paths)|
+    /// | META_MISSING                | info         | sample files without .meta; Unity assigns new GUIDs (one issue, value = paths)|
+    /// | GUID_IN_USE                 | warning      | the sample's GUID already belongs to another asset; .meta not copied          |
+    /// | COPY_FAILED                 | error        | a file could not be copied                                                    |
+    /// | COMPILE_PENDING             | info         | import wrote files; Unity and then UdonSharp compile them after this call     |
+    /// | PROGRAM_ASSET_CREATED       | info         | UdonSharpProgramAssets created (one issue, value = paths)                     |
+    /// | PROGRAM_ASSET_EXISTS        | info         | a program asset already points at the script, or the .asset path exists       |
+    /// |                             |              | (one issue, value = paths)                                                    |
+    /// | PROGRAM_ASSET_TYPE_MISSING  | warning      | UdonSharp.UdonSharpProgramAsset (editor) type not found; create manually      |
+    /// | PROGRAM_ASSET_FAILED        | warning      | program asset could not be created; create it manually (see next_steps)       |
+    /// | ALREADY_IMPORTED            | info         | list: every sample script already exists at dest                              |
+    /// | PARTIALLY_IMPORTED          | info         | list: some sample scripts exist at dest                                       |
+    /// CctRunner may add EDITOR_BUSY / EXCEPTION (fail) and REPORT_WRITE_FAILED (warning) to any run.
+    ///
+    /// Data keys: action, package_root, package_version, sample_root, udonsharp_installed,
+    /// udonsharp_program_asset_type, vrchat_worlds_sdk, vrchat_worlds_sdk_version, requirements {name: bool}, dest,
+    /// dest_exists, dest_problem; list: samples [{name, summary, sync_mode, requires, missing_requirements, source,
+    /// target, imported, program_asset, found_elsewhere, found_elsewhere_program_asset}], sample_count, imported_count,
+    /// program_asset_count, importable, next_steps; import: overwrite, only, plan [{target, action}], dry_run,
+    /// program_assets_planned, files_written, files_failed, files_skipped [{target, reason}], program_assets_created,
+    /// next_steps; MISSING_DEPENDENCY failure: missing, importable.
     /// </summary>
     public static class CctWorldGimmicks
     {
@@ -61,14 +84,29 @@ namespace Naoking.ClaudeCreatorTools
         public const string SampleRelativePath = "Samples~/WorldGimmicks";
         public const string DefaultDestination = "Assets/ClaudeWorldGimmicks";
 
+        /// <summary>Namespace every sample script declares (used to recognise copies elsewhere in the project).</summary>
+        public const string SampleNamespace = "Naoking.ClaudeWorldGimmicks";
+
         const string UdonSharpBehaviourType = "UdonSharp.UdonSharpBehaviour";
         const string UdonSharpProgramAssetType = "UdonSharp.UdonSharpProgramAsset";
         const string ProgramAssetSourceField = "sourceCsScript";
-        const string TmpTextType = "TMPro.TMP_Text";
-        const string UiSliderType = "UnityEngine.UI.Slider";
         const string WorldsPickupType = "VRC.SDK3.Components.VRCPickup";
         const string WorldsObjectSyncType = "VRC.SDK3.Components.VRCObjectSync";
         const string ScriptsFolder = "Scripts";
+
+        /// <summary>A package a sample needs: required when the sample has 'using UsingNamespace;', present when ProbeType exists.</summary>
+        sealed class Requirement
+        {
+            public string Name, UsingNamespace, ProbeType;
+        }
+
+        static readonly Requirement[] Requirements =
+        {
+            new Requirement { Name = "TextMeshPro", UsingNamespace = "TMPro", ProbeType = "TMPro.TMP_Text" },
+            new Requirement { Name = "uGUI", UsingNamespace = "UnityEngine.UI", ProbeType = "UnityEngine.UI.Slider" },
+            new Requirement { Name = "PlayerData (VRChat Persistence)", UsingNamespace = "VRC.SDK3.Persistence", ProbeType = "VRC.SDK3.Persistence.PlayerData" },
+            new Requirement { Name = "NetworkCallable (VRChat SDK 3.8.1+)", UsingNamespace = "VRC.SDK3.UdonNetworkCalling", ProbeType = "VRC.SDK3.UdonNetworkCalling.NetworkCallableAttribute" },
+        };
 
         /// <summary>One-line Japanese summaries shown by 'list' (the script header comments hold the full setup).</summary>
         static readonly Dictionary<string, string> Summaries = new Dictionary<string, string>
@@ -77,23 +115,27 @@ namespace Naoking.ClaudeCreatorTools
             ["CctGlobalToggle"] = "全員で共有する ON/OFF。Manual 同期・Late Joiner 対応・マスター限定オプション",
             ["CctMirrorSwitcher"] = "複数ミラー (HQ/LQ/OFF) をローカルで切り替え。UI ボタン用 _Next/_Off/_Select0-3",
             ["CctTeleporter"] = "Interact / トリガー進入で自分を Target へテレポート (lerpOnRemote 対応)",
-            ["CctPickupResetter"] = "ピックアップを初期位置へ戻す。ObjectSync 付きは持ち主が Respawn、無しは各自ローカル",
+            ["CctPickupResetter"] = "ピックアップを初期位置へ戻す。置いてある ObjectSync 付きは押した人が持ち主になって Respawn、持たれている物は持っている人が Drop→Respawn、ObjectSync 無しは各自ローカル",
             ["CctAudioVolume"] = "UI スライダーで AudioSource 音量を自分だけ調整、% 表示、PlayerData で保存 (任意)",
-            ["CctAreaToggle"] = "自分がトリガーエリアにいる間だけ表示 (部屋 BGM/照明)。重なり・テレポート/リスポーン対策済み",
+            ["CctAreaToggle"] = "自分がトリガーエリアにいる間だけ表示 (部屋 BGM/照明)。重なり対応、Enter/Exit の取りこぼし (テレポート/リスポーン/エリア内スポーン) を位置の定期確認で補正",
             ["CctPlayerCounter"] = "現在人数と参加/退出ログ (直近 N 件) を TextMeshPro に表示",
         };
 
         // Rejected on every OS: the project is opened on Windows (Path.GetInvalidFileNameChars differs on Linux/macOS).
         static readonly char[] WindowsInvalidChars = { ':', '*', '?', '"', '<', '>', '|', '\\' };
 
+        // Top-level folders whose scripts go to Assembly-CSharp-firstpass (EditorBuildRules.FilterAssemblyInFirstpassFolder).
+        static readonly string[] FirstpassFolders = { "Plugins", "Standard Assets", "Pro Standard Assets", "iPhone Standard Assets" };
+
         static readonly Regex SyncModeRegex = new Regex(@"BehaviourSyncMode\.(\w+)", RegexOptions.Compiled);
+        static readonly Regex UsingRegex = new Regex(@"^\s*using\s+([A-Za-z0-9_.]+)\s*;", RegexOptions.Compiled | RegexOptions.Multiline);
         static readonly Regex GuidRegex = new Regex(@"^guid:\s*([0-9a-fA-F]{32})\s*$", RegexOptions.Compiled | RegexOptions.Multiline);
 
         public static CctResult Run(CctArgs args)
         {
-            var action = args.GetEnum("action", null, "list", "import");
+            var action = args.Has("action") ? args.GetEnum("action", null, "list", "import") : "list";
             if (action == null)
-                return CctResult.Fail("action は 'list' か 'import' を指定してください", "INVALID_ARGUMENT");
+                return CctResult.Fail($"action は 'list' か 'import' を指定してください (指定値: '{args.GetString("action")}')", "INVALID_ARGUMENT");
 
             var env = Inspect();
             if (env.SampleRoot == null)
@@ -112,13 +154,21 @@ namespace Naoking.ClaudeCreatorTools
 
         // ------------------------------------------------------------------ environment
 
+        sealed class Sample
+        {
+            public string Name;      // class name = file name without .cs
+            public string Source;    // absolute path in Samples~
+            public string SyncMode;  // from [UdonBehaviourSyncMode(BehaviourSyncMode.X)], null if not found
+            public List<string> Requires = new List<string>(); // Requirement.Name values
+        }
+
         sealed class Env
         {
-            public string PackageRoot, SampleRoot, PackageVersion;
-            public bool UdonSharp, ProgramAssetType, Tmp, Ugui, WorldsSdk;
+            public string PackageRoot, SampleRoot, PackageVersion, WorldsSdkVersion;
+            public bool UdonSharp, ProgramAssetType, WorldsSdk;
             public Type ProgramAsset;
-            public List<string> Samples = new List<string>();
-            public string WorldsSdkVersion;
+            public List<Sample> Samples = new List<Sample>();
+            public Dictionary<string, bool> Available = new Dictionary<string, bool>(StringComparer.Ordinal); // Requirement.Name -> present
         }
 
         static Env Inspect()
@@ -151,16 +201,18 @@ namespace Naoking.ClaudeCreatorTools
             {
                 var scripts = CctPaths.Combine(env.SampleRoot, ScriptsFolder);
                 if (Directory.Exists(scripts))
-                    env.Samples = Directory.GetFiles(scripts, "*.cs").Select(Path.GetFileNameWithoutExtension)
-                        .OrderBy(n => n, StringComparer.Ordinal).ToList();
+                {
+                    foreach (var file in Directory.GetFiles(scripts, "*.cs").Select(CctPaths.Normalize).OrderBy(f => f, StringComparer.Ordinal))
+                        env.Samples.Add(ReadSample(file));
+                }
             }
 
             env.UdonSharp = CctSerialized.FindType(UdonSharpBehaviourType) != null;
             env.ProgramAsset = CctSerialized.FindType(UdonSharpProgramAssetType);
             env.ProgramAssetType = env.ProgramAsset != null && typeof(ScriptableObject).IsAssignableFrom(env.ProgramAsset);
-            env.Tmp = CctSerialized.FindType(TmpTextType) != null;
-            env.Ugui = CctSerialized.FindType(UiSliderType) != null;
             env.WorldsSdk = CctSerialized.FindType(WorldsPickupType) != null && CctSerialized.FindType(WorldsObjectSyncType) != null;
+            foreach (var req in Requirements)
+                env.Available[req.Name] = CctSerialized.FindType(req.ProbeType) != null;
             try
             {
                 foreach (var p in UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackages())
@@ -173,6 +225,20 @@ namespace Naoking.ClaudeCreatorTools
             return env;
         }
 
+        static Sample ReadSample(string file)
+        {
+            var s = new Sample { Name = Path.GetFileNameWithoutExtension(file), Source = file };
+            string text;
+            try { text = File.ReadAllText(file); }
+            catch (Exception) { return s; } // unreadable sample: sync mode / requirements unknown
+            var m = SyncModeRegex.Match(text);
+            if (m.Success) s.SyncMode = m.Groups[1].Value;
+            var usings = new HashSet<string>(UsingRegex.Matches(text).Cast<Match>().Select(u => u.Groups[1].Value), StringComparer.Ordinal);
+            foreach (var req in Requirements)
+                if (usings.Contains(req.UsingNamespace)) s.Requires.Add(req.Name);
+            return s;
+        }
+
         static void PutEnvironment(CctResult r, Env env)
         {
             r.Put("package_root", env.PackageRoot);
@@ -180,20 +246,27 @@ namespace Naoking.ClaudeCreatorTools
             r.Put("sample_root", env.SampleRoot);
             r.Put("udonsharp_installed", env.UdonSharp);
             r.Put("udonsharp_program_asset_type", env.ProgramAssetType);
-            r.Put("textmeshpro_installed", env.Tmp);
-            r.Put("ugui_installed", env.Ugui);
             r.Put("vrchat_worlds_sdk", env.WorldsSdk);
             r.Put("vrchat_worlds_sdk_version", env.WorldsSdkVersion);
+            r.Put("requirements", env.Available.ToDictionary(kv => kv.Key, kv => (object)kv.Value));
         }
 
-        /// <summary>Missing pieces that would make the imported scripts fail to compile (empty = OK).</summary>
-        static List<string> MissingDependencies(Env env)
+        static List<string> MissingRequirements(Env env, Sample s) =>
+            s.Requires.Where(n => !env.Available.TryGetValue(n, out var ok) || !ok).ToList();
+
+        /// <summary>"TextMeshPro (TMPro.TMP_Text): CctA, CctB" per missing package (plus the Worlds SDK itself); empty = OK.</summary>
+        static List<string> DescribeMissing(Env env, IEnumerable<Sample> samples)
         {
-            var missing = new List<string>();
-            if (!env.WorldsSdk) missing.Add("VRChat Worlds SDK (" + WorldsPickupType + ")");
-            if (!env.Tmp) missing.Add("TextMeshPro (" + TmpTextType + ")");
-            if (!env.Ugui) missing.Add("uGUI (" + UiSliderType + ")");
-            return missing;
+            var lines = new List<string>();
+            if (!env.WorldsSdk) lines.Add($"VRChat Worlds SDK ({WorldsPickupType}): 全サンプル");
+            var list = samples.ToList();
+            foreach (var req in Requirements)
+            {
+                if (env.Available.TryGetValue(req.Name, out var ok) && ok) continue;
+                var users = list.Where(s => s.Requires.Contains(req.Name)).Select(s => s.Name).ToList();
+                if (users.Count > 0) lines.Add($"{req.Name} ({req.ProbeType}): {string.Join(", ", users)}");
+            }
+            return lines;
         }
 
         static string NormalizeDest(string raw, out string error)
@@ -203,14 +276,107 @@ namespace Naoking.ClaudeCreatorTools
             if (s.Length == 0) s = DefaultDestination;
             var segments = s.Split('/');
             bool bad = Path.IsPathRooted(s) || !s.StartsWith("Assets/", StringComparison.Ordinal) ||
-                       segments.Any(seg => seg.Length == 0 || seg == "." || seg == ".." || seg.EndsWith("~", StringComparison.Ordinal) ||
+                       segments.Any(seg => seg.Length == 0 || seg.Trim() != seg || seg.StartsWith(".", StringComparison.Ordinal) ||
+                                           seg.EndsWith(".", StringComparison.Ordinal) || seg.EndsWith("~", StringComparison.Ordinal) ||
                                            seg.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || seg.IndexOfAny(WindowsInvalidChars) >= 0);
             if (bad)
             {
-                error = $"dest は Assets/ 以下のフォルダパスで指定してください (例: {DefaultDestination})。指定値: '{raw}'";
+                error = $"dest は Assets/ 以下のフォルダパスで指定してください (例: {DefaultDestination}。'..'、'.' や '~' で始まる/終わるフォルダ、使えない文字は不可)。指定値: '{raw}'";
                 return null;
             }
             return s;
+        }
+
+        /// <summary>Why scripts under dest would not reach Assembly-CSharp (and so not be compiled by UdonSharp), or null.</summary>
+        static string SpecialFolderProblem(string dest)
+        {
+            var segments = dest.Split('/');
+            if (segments.Skip(1).Any(seg => string.Equals(seg, "Editor", StringComparison.OrdinalIgnoreCase)))
+                return $"{dest} は Editor フォルダの中です。中のスクリプトはエディタ専用アセンブリ (Assembly-CSharp-Editor) に入り、UdonSharp がコンパイルしません";
+            if (segments.Length > 1 && FirstpassFolders.Any(f => string.Equals(segments[1], f, StringComparison.OrdinalIgnoreCase)))
+                return $"{dest} は Assets/{segments[1]} の中です。中のスクリプトは Assembly-CSharp-firstpass に入り、UdonSharp がコンパイルしません";
+            return null;
+        }
+
+        /// <summary>Project-relative path of an .asmdef/.asmref in dest or any parent folder (Assets/ included), else null.</summary>
+        static string FindCapturingAssemblyFile(string dest)
+        {
+            var parts = dest.Split('/');
+            for (int n = parts.Length; n >= 1; n--)
+            {
+                var folder = string.Join("/", parts.Take(n));
+                var abs = CctPaths.AssetToAbsolute(folder);
+                if (!Directory.Exists(abs)) continue;
+                var found = Directory.GetFiles(abs, "*.asmdef", SearchOption.TopDirectoryOnly)
+                    .Concat(Directory.GetFiles(abs, "*.asmref", SearchOption.TopDirectoryOnly))
+                    .OrderBy(f => f, StringComparer.Ordinal).FirstOrDefault();
+                if (found != null) return folder + "/" + Path.GetFileName(found);
+            }
+            return null;
+        }
+
+        static string ScriptTarget(string dest, string name) => dest + "/" + ScriptsFolder + "/" + name + ".cs";
+
+        static string ProgramAssetTarget(string dest, string name) => dest + "/" + ScriptsFolder + "/" + name + ".asset";
+
+        /// <summary>
+        /// Sample name -> project-relative path of a copy of that script outside dest (a file &lt;Name&gt;.cs declaring
+        /// <see cref="SampleNamespace"/>, e.g. from Package Manager's Samples import). Importing a second copy would
+        /// declare the same class twice (CS0101) and stop all script compilation.
+        /// </summary>
+        static Dictionary<string, string> FindCopiesElsewhere(Env env, string dest)
+        {
+            var map = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var s in env.Samples)
+            {
+                var target = ScriptTarget(dest, s.Name);
+                foreach (var guid in AssetDatabase.FindAssets(s.Name + " t:MonoScript"))
+                {
+                    var path = AssetDatabase.GUIDToAssetPath(guid);
+                    // Windows paths are case-insensitive: dest typed as "Assets/claudeworldgimmicks" is the same folder.
+                    if (string.IsNullOrEmpty(path) || SamePath(path, target)) continue;
+                    if (!path.EndsWith("/" + s.Name + ".cs", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!DeclaresSampleNamespace(path)) continue;
+                    map[s.Name] = path;
+                    break;
+                }
+            }
+            return map;
+        }
+
+        static bool SamePath(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Where a program asset for a copy found elsewhere would go (next to it), or null when it cannot be
+        /// created there (outside Assets/: CreateAsset cannot write into Packages/).</summary>
+        static string ElsewhereProgramAssetTarget(string scriptPath) =>
+            scriptPath != null && scriptPath.StartsWith("Assets/", StringComparison.Ordinal) && scriptPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                ? scriptPath.Substring(0, scriptPath.Length - 3) + ".asset"
+                : null;
+
+        static bool DeclaresSampleNamespace(string assetPath)
+        {
+            try { return File.ReadAllText(CctPaths.AssetToAbsolute(assetPath)).Contains("namespace " + SampleNamespace); }
+            catch (Exception) { return false; }
+        }
+
+        /// <summary>Project-relative .cs path -> program asset path, for every UdonSharpProgramAsset in the project.</summary>
+        static Dictionary<string, string> FindProgramAssetScripts(Env env)
+        {
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (env.ProgramAsset == null) return map;
+            foreach (var guid in AssetDatabase.FindAssets("t:" + env.ProgramAsset.Name))
+            {
+                var path = AssetDatabase.GUIDToAssetPath(guid);
+                var asset = AssetDatabase.LoadAssetAtPath<Object>(path);
+                if (asset == null || asset.GetType() != env.ProgramAsset) continue;
+                using (var so = new SerializedObject(asset))
+                {
+                    var script = CctSerialized.GetObject(so.FindProperty(ProgramAssetSourceField));
+                    var scriptPath = script != null ? AssetDatabase.GetAssetPath(script) : null;
+                    if (!string.IsNullOrEmpty(scriptPath) && !map.ContainsKey(scriptPath)) map[scriptPath] = path;
+                }
+            }
+            return map;
         }
 
         // ------------------------------------------------------------------ list
@@ -221,93 +387,125 @@ namespace Naoking.ClaudeCreatorTools
             r.Put("action", "list");
             PutEnvironment(r, env);
             r.Put("dest", dest);
-            var destAbs = CctPaths.AssetToAbsolute(dest);
-            r.Put("dest_exists", Directory.Exists(destAbs));
+            r.Put("dest_exists", Directory.Exists(CctPaths.AssetToAbsolute(dest)));
+
+            var destProblem = SpecialFolderProblem(dest);
+            if (destProblem != null)
+                r.AddIssue(CctSeverity.Warning, "DEST_SPECIAL_FOLDER", destProblem + "。import は拒否されます", value: dest);
+            var asmFile = FindCapturingAssemblyFile(dest);
+            if (asmFile != null)
+            {
+                destProblem = destProblem ?? $"{asmFile} が {dest} を含みます";
+                r.AddIssue(CctSeverity.Warning, "DEST_HAS_ASMDEF", $"{asmFile} が {dest} を含むため import は拒否されます (asmdef の外を dest に指定)", value: asmFile);
+            }
+            r.Put("dest_problem", destProblem);
 
             var programAssets = FindProgramAssetScripts(env);
+            var elsewhere = FindCopiesElsewhere(env, dest);
             var samples = new List<object>();
+            var importable = new List<object>();
+            var blocked = new List<string>();
             int imported = 0, withProgramAsset = 0;
-            foreach (var name in env.Samples)
+            foreach (var s in env.Samples)
             {
-                var src = CctPaths.Combine(env.SampleRoot, ScriptsFolder, name + ".cs");
-                var target = dest + "/" + ScriptsFolder + "/" + name + ".cs";
+                var target = ScriptTarget(dest, s.Name);
                 bool exists = File.Exists(CctPaths.AssetToAbsolute(target));
                 string programAsset = exists && programAssets.TryGetValue(target, out var pa) ? pa : null;
                 if (exists) imported++;
                 if (programAsset != null) withProgramAsset++;
-                string syncMode = null;
-                try
+                var missing = MissingRequirements(env, s);
+                elsewhere.TryGetValue(s.Name, out var other);
+                string otherProgramAsset = other != null && programAssets.TryGetValue(other, out var opa) ? opa : null;
+                if (other != null)
                 {
-                    var m = SyncModeRegex.Match(File.ReadAllText(src));
-                    if (m.Success) syncMode = m.Groups[1].Value;
+                    var fix = otherProgramAsset != null ? ""
+                        : ElsewhereProgramAssetTarget(other) != null ? $"。そのコピーには Program Asset が無いため、import (create_program_assets=true) で {ElsewhereProgramAssetTarget(other)} を作ります"
+                        : "。そのコピーには Program Asset が無く、Assets/ の外なので自動では作れません";
+                    r.AddIssue(CctSeverity.Warning, "SAMPLE_EXISTS_ELSEWHERE",
+                        $"{s.Name} は既に {other} にあります。{dest} にも取り込むと同じクラスが 2 つになりコンパイルエラーになるため、import ではこのサンプルを飛ばします{fix}", value: other);
                 }
-                catch (Exception)
+                if (env.UdonSharp && !exists && other == null)
                 {
-                    // unreadable sample: leave sync mode unknown
+                    if (missing.Count == 0 && env.WorldsSdk) importable.Add(s.Name);
+                    else blocked.Add(s.Name);
                 }
                 samples.Add(new Dictionary<string, object>
                 {
-                    ["name"] = name,
-                    ["summary"] = Summaries.TryGetValue(name, out var sum) ? sum : null,
-                    ["sync_mode"] = syncMode,
-                    ["source"] = src,
+                    ["name"] = s.Name,
+                    ["summary"] = Summaries.TryGetValue(s.Name, out var sum) ? sum : null,
+                    ["sync_mode"] = s.SyncMode,
+                    ["requires"] = s.Requires.Cast<object>().ToList(),
+                    ["missing_requirements"] = missing.Cast<object>().ToList(),
+                    ["source"] = s.Source,
                     ["target"] = target,
                     ["imported"] = exists,
                     ["program_asset"] = programAsset,
+                    ["found_elsewhere"] = other,
+                    ["found_elsewhere_program_asset"] = otherProgramAsset,
                 });
             }
             r.Put("samples", samples);
             r.Put("sample_count", env.Samples.Count);
             r.Put("imported_count", imported);
             r.Put("program_asset_count", withProgramAsset);
+            r.Put("importable", importable);
 
             if (!env.UdonSharp)
                 r.AddIssue(CctSeverity.Info, "NO_UDONSHARP", "UdonSharp が見つかりません (アバタープロジェクト?)。ワールドギミックはインポートできません");
-            foreach (var m in MissingDependencies(env))
-                r.AddIssue(CctSeverity.Warning, "MISSING_DEPENDENCY", "必要なパッケージ/型が見つかりません: " + m);
+            foreach (var line in DescribeMissing(env, env.Samples))
+                r.AddIssue(CctSeverity.Warning, "MISSING_DEPENDENCY", "必要なパッケージ/型が見つかりません (使うサンプルはインポートできません): " + line);
             if (env.Samples.Count > 0 && imported == env.Samples.Count)
                 r.AddIssue(CctSeverity.Info, "ALREADY_IMPORTED", $"全サンプルが {dest} にインポート済みです");
             else if (imported > 0)
                 r.AddIssue(CctSeverity.Info, "PARTIALLY_IMPORTED", $"{imported}/{env.Samples.Count} 個のサンプルが {dest} にあります");
 
-            r.Put("next_steps", env.UdonSharp
-                ? (imported > 0 ? AfterImportSteps(dest, withProgramAsset == imported) : new List<object> { $"action=import, confirm=true で {dest} に取り込む (既存ファイルは上書きしない)" })
-                : new List<object> { "ワールドプロジェクト (VRChat Worlds SDK 3.4.0 以降は UdonSharp 同梱) で実行してください" });
-            r.Message = $"ワールドギミック {env.Samples.Count} 種 / UdonSharp {(env.UdonSharp ? "あり" : "なし")} / {dest} にインポート済み {imported} 個";
+            var steps = new List<object>();
+            if (!env.UdonSharp)
+                steps.Add("ワールドプロジェクト (VRChat Worlds SDK 3.4.0 以降は UdonSharp 同梱) で実行してください。アバタープロジェクトには入れないこと");
+            else
+            {
+                if (destProblem != null && importable.Count > 0)
+                    steps.Add($"dest ({dest}) には取り込めません ({destProblem})。asmdef / Editor / Plugins の外のフォルダ (例: {DefaultDestination}) を dest に指定する");
+                if (importable.Count > 0)
+                {
+                    var onlyHint = blocked.Count > 0 || imported > 0 || elsewhere.Count > 0
+                        ? $" (only=[{string.Join(", ", importable.Select(n => "\"" + n + "\""))}] で取り込めるものだけを指定)"
+                        : "";
+                    steps.Add($"action=import (confirm なし) で書き込み予定 (plan) を確認 → confirm=true で {dest} に取り込む{onlyHint}。既存ファイルは上書きしない");
+                }
+                if (blocked.Count > 0)
+                    steps.Add($"{string.Join(", ", blocked)} は必要なパッケージが無いため取り込めません (MISSING_DEPENDENCY の警告を参照。入れれば取り込める)");
+                if (imported > 0 || elsewhere.Count > 0)
+                    steps.AddRange(AfterImportSteps(dest,
+                        withProgramAsset == imported && elsewhere.Keys.All(n => programAssets.ContainsKey(elsewhere[n])),
+                        env.ProgramAssetType));
+            }
+            r.Put("next_steps", steps);
+            r.Message = $"ワールドギミック {env.Samples.Count} 種 / UdonSharp {(env.UdonSharp ? "あり" : "なし")} / {dest} にインポート済み {imported} 個" +
+                        (elsewhere.Count > 0 ? $" / 別の場所にあるもの {elsewhere.Count} 個" : "");
             return r;
         }
 
-        /// <summary>Project-relative .cs path -> program asset path, for every UdonSharpProgramAsset in the project.</summary>
-        static Dictionary<string, string> FindProgramAssetScripts(Env env)
+        /// <param name="programAssetsReady">every imported (or found elsewhere) script already has its program asset</param>
+        /// <param name="canAutoCreate">a (repeated) import with create_program_assets=true would create the missing ones</param>
+        static List<object> AfterImportSteps(string dest, bool programAssetsReady, bool canAutoCreate)
         {
-            var map = new Dictionary<string, string>(StringComparer.Ordinal);
-            if (env.ProgramAsset == null) return map;
-            foreach (var guid in AssetDatabase.FindAssets("t:" + env.ProgramAsset.Name))
-            {
-                var path = AssetDatabase.GUIDToAssetPath(guid);
-                var asset = AssetDatabase.LoadAssetAtPath<Object>(path);
-                if (asset == null || asset.GetType() != env.ProgramAsset) continue;
-                var so = new SerializedObject(asset);
-                var script = CctSerialized.GetObject(so.FindProperty(ProgramAssetSourceField));
-                var scriptPath = script != null ? AssetDatabase.GetAssetPath(script) : null;
-                if (!string.IsNullOrEmpty(scriptPath) && !map.ContainsKey(scriptPath)) map[scriptPath] = path;
-            }
-            return map;
-        }
-
-        static List<object> AfterImportSteps(string dest, bool programAssetsReady)
-        {
+            var scripts = dest + "/" + ScriptsFolder;
+            var manual = $"手動で作る場合: Project で .cs のあるフォルダ ({scripts} など) を右クリック → Create → VRChat → Udon → Udon C# Program Asset → " +
+                         "作った .asset の Inspector の Source Script に対応する .cs をドラッグ (1 スクリプトにつき 1 個だけ)";
             var steps = new List<object>
             {
                 "Unity のスクリプトコンパイル完了を待つ。続けて UdonSharp が U# プログラムを自動コンパイルする (Console に UdonSharp のエラーが無いこと)",
+                programAssetsReady
+                    ? $"各スクリプトと同じフォルダ ({scripts} など) に同名の .asset (UdonSharp Program Asset) があることを確認"
+                    : canAutoCreate
+                        ? "Program Asset が無いスクリプトがあります。action=import, confirm=true (create_program_assets は既定で true) をもう一度実行すると作成します (既存ファイルは上書きしない)。" + manual
+                        : "Program Asset が無いスクリプトがあります。" + manual,
+                "ギミックを置く GameObject を選び Add Component でスクリプト名 (例: CctLocalToggle) を追加。Inspector に表示された時点で UdonSharp が裏の UdonBehaviour を自動で用意する (MCP で追加した場合は、その GameObject を選択して Inspector を表示するか、Play に入る / シーンを開き直すと U# がセットアップする)",
+                $"各スクリプト冒頭のコメントと {dest}/README.md の手順で Collider・レイヤー・UI イベント (UdonBehaviour.SendCustomEvent) を設定",
+                "Play (ClientSim) でローカル動作を確認 → VRChat SDK > Show Control Panel > Builder > Build & Test (Number of Clients = 2) で同期を確認",
+                "U# が自動コンパイルされない場合: VRChat SDK > Udon Sharp > Refresh All UdonSharp Assets、または任意の Program Asset の Inspector > Utilities > Compile All UdonSharp Programs",
             };
-            steps.Add(programAssetsReady
-                ? $"{dest}/{ScriptsFolder} に各スクリプトと同名の .asset (UdonSharp Program Asset) があることを確認"
-                : $"Program Asset が無いスクリプトは手動で作る: Project で {dest}/{ScriptsFolder} を右クリック → Create → VRChat → Udon → Udon C# Program Asset → 作った .asset の Inspector の Source Script に対応する .cs をドラッグ");
-            steps.Add("ギミックを置く GameObject を選び Add Component でスクリプト名 (例: CctLocalToggle) を追加。Inspector に表示された時点で UdonSharp が裏の UdonBehaviour を自動で用意する (MCP で追加した場合はその GameObject を選択するか Play に入ると U# がセットアップする)");
-            steps.Add($"各スクリプト冒頭のコメントと {dest}/README.md の手順で Collider・レイヤー・UI イベント (UdonBehaviour.SendCustomEvent) を設定");
-            steps.Add("Play (ClientSim) でローカル動作を確認 → VRChat SDK > Build & Test (クライアント数 2) で同期を確認");
-            steps.Add("U# が自動コンパイルされない場合: VRChat SDK > Udon Sharp > Refresh All UdonSharp Assets、または任意の Program Asset の Inspector > Utilities > Compile All UdonSharp Programs");
             return steps;
         }
 
@@ -317,10 +515,10 @@ namespace Naoking.ClaudeCreatorTools
         {
             public string Source;      // absolute
             public string Target;      // project-relative
-            public bool IsMeta;
-            public string Action;      // write | overwrite | skip_exists | keep_meta | skip_guid_in_use
-            public string Guid;
+            public string Action;      // write | overwrite | skip_exists | keep_meta | skip_guid_in_use | skip_exists_elsewhere
         }
+
+        static bool IsWrite(PlanItem p) => p.Action == "write" || p.Action == "overwrite";
 
         static CctResult Import(CctArgs args, Env env, string dest)
         {
@@ -333,27 +531,47 @@ namespace Naoking.ClaudeCreatorTools
                 PutEnvironment(fail, env);
                 return fail;
             }
-            var missing = MissingDependencies(env);
+
+            var requested = args.GetStringList("only");
+            var selected = new List<Sample>();
+            var unknown = new List<string>();
+            foreach (var raw in requested)
+            {
+                var n = raw.Trim();
+                if (n.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) n = n.Substring(0, n.Length - 3);
+                var s = env.Samples.FirstOrDefault(x => string.Equals(x.Name, n, StringComparison.OrdinalIgnoreCase));
+                if (s == null) unknown.Add(raw);
+                else if (!selected.Contains(s)) selected.Add(s);
+            }
+            if (unknown.Count > 0)
+                return CctResult.Fail("不明なサンプル名: " + string.Join(", ", unknown) + " (有効: " + string.Join(", ", env.Samples.Select(s => s.Name)) + ")", "UNKNOWN_SAMPLE")
+                    .Put("action", "import");
+            if (requested.Count == 0) selected = env.Samples.ToList();
+
+            var missing = DescribeMissing(env, selected);
             if (missing.Count > 0)
             {
-                var fail = CctResult.Fail("必要なパッケージが見つからないためインポートしません (コンパイルエラーになるため): " + string.Join(", ", missing), "MISSING_DEPENDENCY");
+                var fail = CctResult.Fail("必要なパッケージが見つからないためインポートしません (コンパイルエラーになるため): " + string.Join(" / ", missing) +
+                                          "。そのサンプルを除いて only で指定すれば残りは取り込めます", "MISSING_DEPENDENCY");
                 fail.Put("action", "import");
+                fail.Put("missing", missing.Cast<object>().ToList());
+                fail.Put("importable", env.WorldsSdk
+                    ? selected.Where(s => MissingRequirements(env, s).Count == 0).Select(s => (object)s.Name).ToList()
+                    : new List<object>());
                 PutEnvironment(fail, env);
                 return fail;
             }
             if (EditorApplication.isPlaying)
                 return CctResult.Fail("Play モード中はインポートできません。Play を終了してから実行してください", "PLAY_MODE").Put("action", "import");
 
-            var asmdef = FindAsmdefCapturing(dest);
-            if (asmdef != null)
-                return CctResult.Fail($"{asmdef} が {dest} を含むため、スクリプトがその Assembly に入りコンパイルエラーになります (UdonSharp は U# Assembly Definition が必要)。asmdef の外を dest に指定してください", "DEST_HAS_ASMDEF")
-                    .Put("action", "import").Put("asmdef", asmdef);
-
-            var only = args.GetStringList("only");
-            var unknown = only.Where(n => !env.Samples.Contains(n)).ToList();
-            if (unknown.Count > 0)
-                return CctResult.Fail("不明なサンプル名: " + string.Join(", ", unknown) + " (有効: " + string.Join(", ", env.Samples) + ")", "UNKNOWN_SAMPLE")
-                    .Put("action", "import");
+            var special = SpecialFolderProblem(dest);
+            if (special != null)
+                return CctResult.Fail(special + "。Assets/ClaudeWorldGimmicks など通常のフォルダを dest に指定してください", "DEST_SPECIAL_FOLDER")
+                    .Put("action", "import").Put("dest", dest);
+            var asmFile = FindCapturingAssemblyFile(dest);
+            if (asmFile != null)
+                return CctResult.Fail($"{asmFile} が {dest} を含むため、スクリプトがその Assembly に入りコンパイルできません (UdonSharp は U# Assembly Definition が無い asmdef 内の U# を拒否します)。asmdef の外を dest に指定してください", "DEST_HAS_ASMDEF")
+                    .Put("action", "import").Put("dest", dest).Put("asmdef", asmFile);
 
             bool confirm = args.GetBool("confirm", false);
             bool overwrite = args.GetBool("overwrite", false);
@@ -364,9 +582,10 @@ namespace Naoking.ClaudeCreatorTools
             PutEnvironment(r, env);
             r.Put("dest", dest);
             r.Put("overwrite", overwrite);
-            r.Put("only", only.Cast<object>().ToList());
+            r.Put("only", selected.Count == env.Samples.Count ? new List<object>() : selected.Select(s => (object)s.Name).ToList());
 
-            var plan = BuildPlan(env, dest, only, overwrite, r);
+            var elsewhere = FindCopiesElsewhere(env, dest);
+            var plan = BuildPlan(env, dest, selected, elsewhere, overwrite, r);
             r.Put("plan", plan.Select(p => (object)new Dictionary<string, object>
             {
                 ["target"] = p.Target,
@@ -376,9 +595,29 @@ namespace Naoking.ClaudeCreatorTools
             if (!confirm)
             {
                 r.Put("dry_run", true);
+                var planned = new List<object>();
+                if (createProgramAssets && env.ProgramAssetType)
+                {
+                    var existingAssets = FindProgramAssetScripts(env);
+                    foreach (var s in selected)
+                    {
+                        var script = ScriptTarget(dest, s.Name);
+                        bool scriptWillExist = plan.Any(p => p.Target == script && (IsWrite(p) || p.Action == "skip_exists"));
+                        string assetPath = ProgramAssetTarget(dest, s.Name);
+                        if (!scriptWillExist && elsewhere.TryGetValue(s.Name, out var other))
+                        {
+                            script = other;
+                            assetPath = ElsewhereProgramAssetTarget(other);
+                            scriptWillExist = assetPath != null;
+                        }
+                        if (scriptWillExist && !existingAssets.ContainsKey(script) && !File.Exists(CctPaths.AssetToAbsolute(assetPath)))
+                            planned.Add(assetPath);
+                    }
+                }
+                r.Put("program_assets_planned", planned);
                 r.AddIssue(CctSeverity.Warning, "CONFIRM_REQUIRED", "ドライランです。何も書き込んでいません。confirm=true で実行します");
-                int writes = plan.Count(p => p.Action == "write" || p.Action == "overwrite");
-                r.Message = $"ドライラン: {dest} に {writes} ファイルを書き込み予定 / スキップ {plan.Count - writes} (confirm=true で実行)";
+                int writes = plan.Count(IsWrite);
+                r.Message = $"ドライラン: {dest} に {writes} ファイルを書き込み予定 / スキップ {plan.Count - writes} / Program Asset 作成予定 {planned.Count} (confirm=true で実行)";
                 return r;
             }
 
@@ -387,7 +626,7 @@ namespace Naoking.ClaudeCreatorTools
             var failed = new List<object>();
             foreach (var item in plan)
             {
-                if (item.Action != "write" && item.Action != "overwrite") continue;
+                if (!IsWrite(item)) continue;
                 var targetAbs = CctPaths.AssetToAbsolute(item.Target);
                 try
                 {
@@ -403,27 +642,28 @@ namespace Naoking.ClaudeCreatorTools
             }
             r.Put("files_written", written);
             r.Put("files_failed", failed);
-            r.Put("files_skipped", plan.Where(p => p.Action != "write" && p.Action != "overwrite")
+            r.Put("files_skipped", plan.Where(p => !IsWrite(p))
                 .Select(p => (object)new Dictionary<string, object> { ["target"] = p.Target, ["reason"] = p.Action }).ToList());
 
             if (written.Count > 0)
             {
                 AssetDatabase.Refresh();
-                r.AddIssue(CctSeverity.Info, "COMPILE_PENDING", "スクリプトを書き込みました。Unity のコンパイル → UdonSharp のコンパイルの順に自動で進みます");
+                r.AddIssue(CctSeverity.Info, "COMPILE_PENDING", "ファイルを書き込みました。この呼び出しの後、Unity のコンパイル → UdonSharp のコンパイルの順に自動で進みます。次の操作はコンパイル完了後に (EDITOR_BUSY が返ったら少し待って再実行)");
             }
 
             var created = new List<object>();
             if (createProgramAssets)
-                CreateProgramAssets(env, dest, only, created, r);
+                CreateProgramAssets(env, dest, selected, elsewhere, created, r);
             r.Put("program_assets_created", created);
 
-            bool programAssetsReady = createProgramAssets && env.ProgramAssetType;
-            r.Put("next_steps", AfterImportSteps(dest, programAssetsReady));
+            bool assetsReady = createProgramAssets && env.ProgramAssetType &&
+                               !r.Issues.Any(i => (i["code"] as string) == "PROGRAM_ASSET_FAILED");
+            r.Put("next_steps", AfterImportSteps(dest, assetsReady, !createProgramAssets && env.ProgramAssetType));
             r.Message = $"{dest} に {written.Count} ファイルを書き込みました (スキップ {plan.Count - written.Count - failed.Count}, 失敗 {failed.Count}) / Program Asset 作成 {created.Count}";
             return r;
         }
 
-        static List<PlanItem> BuildPlan(Env env, string dest, List<string> only, bool overwrite, CctResult r)
+        static List<PlanItem> BuildPlan(Env env, string dest, List<Sample> selected, Dictionary<string, string> elsewhere, bool overwrite, CctResult r)
         {
             var plan = new List<PlanItem>();
             var root = env.SampleRoot.TrimEnd('/') + "/";
@@ -433,54 +673,73 @@ namespace Naoking.ClaudeCreatorTools
                 .OrderBy(f => f, StringComparer.Ordinal)
                 .ToList();
             var fileSet = new HashSet<string>(files, StringComparer.Ordinal);
+            var selectedNames = new HashSet<string>(selected.Select(s => s.Name), StringComparer.Ordinal);
+            // Per-file info findings are reported as one issue per code (the paths are in value and in plan),
+            // so a re-import does not push the real warnings out of a max_issues-limited summary.
+            var existing = new List<object>();
+            var metaKept = new List<object>();
+            var metaMissing = new List<object>();
 
-            bool Included(string rel)
+            // Scripts/<Name>.cs(.meta) -> <Name>; anything else (README, folder metas, future extras) -> null = always included.
+            string SampleOf(string rel)
             {
-                if (only.Count == 0) return true;
                 var assetRel = rel.EndsWith(".meta", StringComparison.Ordinal) ? rel.Substring(0, rel.Length - 5) : rel;
-                if (!assetRel.StartsWith(ScriptsFolder + "/", StringComparison.Ordinal)) return true; // README, folder metas
-                return only.Contains(Path.GetFileNameWithoutExtension(assetRel));
+                if (!assetRel.StartsWith(ScriptsFolder + "/", StringComparison.Ordinal)) return null;
+                return Path.GetFileNameWithoutExtension(assetRel);
             }
 
             foreach (var f in files)
             {
                 var rel = f.Substring(root.Length);
-                if (!Included(rel)) continue;
+                var sample = SampleOf(rel);
+                if (sample != null && !selectedNames.Contains(sample)) continue;
                 var target = dest + "/" + rel;
                 var targetAbs = CctPaths.AssetToAbsolute(target);
                 bool isMeta = rel.EndsWith(".meta", StringComparison.Ordinal);
-                var item = new PlanItem { Source = f, Target = target, IsMeta = isMeta };
-                if (!isMeta)
+                var item = new PlanItem { Source = f, Target = target };
+                if (sample != null && elsewhere.TryGetValue(sample, out var other))
+                {
+                    item.Action = "skip_exists_elsewhere";
+                    if (!isMeta)
+                        r.AddIssue(CctSeverity.Warning, "SAMPLE_EXISTS_ELSEWHERE",
+                            $"{sample} は既に {other} にあるため取り込みません (同じクラスが 2 つになるとコンパイルエラー)。{dest} に置きたい場合は先に {other} を削除してください", value: other);
+                }
+                else if (!isMeta)
                 {
                     if (File.Exists(targetAbs))
                     {
                         item.Action = overwrite ? "overwrite" : "skip_exists";
-                        r.AddIssue(overwrite ? CctSeverity.Warning : CctSeverity.Info, overwrite ? "FILE_OVERWRITTEN" : "FILE_EXISTS",
-                            overwrite ? "既存ファイルを上書きします" : "既存ファイルがあるためスキップ (overwrite=true で上書き)", value: target);
+                        if (overwrite) r.AddIssue(CctSeverity.Warning, "FILE_OVERWRITTEN", "既存ファイルを上書きします", value: target);
+                        else existing.Add(target);
                     }
                     else item.Action = "write";
-                    if (!fileSet.Contains(f + ".meta"))
-                        r.AddIssue(CctSeverity.Info, "META_MISSING", ".meta が無いため Unity が新しい GUID を割り当てます", value: target);
+                    if (!fileSet.Contains(f + ".meta")) metaMissing.Add(target);
                 }
                 else
                 {
                     var assetTarget = target.Substring(0, target.Length - 5);
-                    item.Guid = ReadGuid(f);
-                    var usedBy = item.Guid != null ? AssetDatabase.GUIDToAssetPath(item.Guid) : null;
+                    var guid = ReadGuid(f);
+                    var usedBy = guid != null ? AssetDatabase.GUIDToAssetPath(guid) : null;
                     if (File.Exists(targetAbs))
                     {
                         item.Action = "keep_meta";
-                        r.AddIssue(CctSeverity.Info, "META_KEPT", "既存の .meta を保持します (GUID を変えないため)", value: target);
+                        metaKept.Add(target);
                     }
-                    else if (!string.IsNullOrEmpty(usedBy) && usedBy != assetTarget)
+                    else if (!string.IsNullOrEmpty(usedBy) && !SamePath(usedBy, assetTarget))
                     {
                         item.Action = "skip_guid_in_use";
-                        r.AddIssue(CctSeverity.Warning, "GUID_IN_USE", $"GUID {item.Guid} は既に {usedBy} が使っているため .meta をコピーしません (新しい GUID になります)", value: target);
+                        r.AddIssue(CctSeverity.Warning, "GUID_IN_USE", $"GUID {guid} は既に {usedBy} が使っているため .meta をコピーしません (新しい GUID になります)", value: target);
                     }
                     else item.Action = "write";
                 }
                 plan.Add(item);
             }
+            if (existing.Count > 0)
+                r.AddIssue(CctSeverity.Info, "FILE_EXISTS", $"既存ファイル {existing.Count} 個はスキップします (overwrite=true で上書き)", value: existing);
+            if (metaKept.Count > 0)
+                r.AddIssue(CctSeverity.Info, "META_KEPT", $"既存の .meta {metaKept.Count} 個はそのまま保持します (GUID を変えないため)", value: metaKept);
+            if (metaMissing.Count > 0)
+                r.AddIssue(CctSeverity.Info, "META_MISSING", $".meta の無いサンプルファイル {metaMissing.Count} 個は、Unity が新しい GUID を割り当てます", value: metaMissing);
             return plan;
         }
 
@@ -497,26 +756,13 @@ namespace Naoking.ClaudeCreatorTools
             }
         }
 
-        /// <summary>Returns the project-relative path of an .asmdef in dest or any parent folder under Assets/, else null.</summary>
-        static string FindAsmdefCapturing(string dest)
-        {
-            var parts = dest.Split('/');
-            for (int n = parts.Length; n >= 2; n--)
-            {
-                var folder = string.Join("/", parts.Take(n));
-                var abs = CctPaths.AssetToAbsolute(folder);
-                if (!Directory.Exists(abs)) continue;
-                var found = Directory.GetFiles(abs, "*.asmdef", SearchOption.TopDirectoryOnly).FirstOrDefault();
-                if (found != null) return folder + "/" + Path.GetFileName(found);
-            }
-            return null;
-        }
-
         /// <summary>
         /// Mirrors UdonSharp's UdonSharpBehaviourEditor.CreateUSharpScript: CreateInstance&lt;UdonSharpProgramAsset&gt;(),
         /// sourceCsScript = the MonoScript, AssetDatabase.CreateAsset next to the script as &lt;Name&gt;.asset.
+        /// The script is the copy at dest, or (when the sample was skipped) the copy found elsewhere under Assets/.
         /// </summary>
-        static void CreateProgramAssets(Env env, string dest, List<string> only, List<object> created, CctResult r)
+        static void CreateProgramAssets(Env env, string dest, List<Sample> selected, Dictionary<string, string> elsewhere,
+            List<object> created, CctResult r)
         {
             if (!env.ProgramAssetType)
             {
@@ -524,45 +770,51 @@ namespace Naoking.ClaudeCreatorTools
                 return;
             }
             var existing = FindProgramAssetScripts(env);
-            foreach (var name in env.Samples)
+            var alreadyThere = new List<object>();
+            foreach (var s in selected)
             {
-                if (only.Count > 0 && !only.Contains(name)) continue;
-                var scriptPath = dest + "/" + ScriptsFolder + "/" + name + ".cs";
-                var assetPath = dest + "/" + ScriptsFolder + "/" + name + ".asset";
-                if (!File.Exists(CctPaths.AssetToAbsolute(scriptPath))) continue;
+                var scriptPath = ScriptTarget(dest, s.Name);
+                var assetPath = ProgramAssetTarget(dest, s.Name);
+                if (!File.Exists(CctPaths.AssetToAbsolute(scriptPath)))
+                {
+                    if (!elsewhere.TryGetValue(s.Name, out var other) || ElsewhereProgramAssetTarget(other) == null) continue;
+                    scriptPath = other;
+                    assetPath = ElsewhereProgramAssetTarget(other);
+                }
                 if (existing.TryGetValue(scriptPath, out var already))
                 {
-                    r.AddIssue(CctSeverity.Info, "PROGRAM_ASSET_EXISTS", "このスクリプトの Program Asset は既にあります", value: already);
+                    alreadyThere.Add(already);
                     continue;
                 }
                 if (File.Exists(CctPaths.AssetToAbsolute(assetPath)))
                 {
-                    r.AddIssue(CctSeverity.Info, "PROGRAM_ASSET_EXISTS", "同名の .asset が既にあるため作成しません", value: assetPath);
+                    alreadyThere.Add(assetPath); // same-named .asset (maybe not a program asset): never overwritten
                     continue;
                 }
                 var script = AssetDatabase.LoadAssetAtPath<MonoScript>(scriptPath);
                 if (script == null)
                 {
-                    r.AddIssue(CctSeverity.Warning, "PROGRAM_ASSET_FAILED", "MonoScript を読み込めないため Program Asset を作れません (インポート完了後に手動で作成)", value: scriptPath);
+                    r.AddIssue(CctSeverity.Warning, "PROGRAM_ASSET_FAILED", "MonoScript を読み込めないため Program Asset を作れません。コンパイル完了後に action=import, confirm=true をもう一度実行すると作成します (または next_steps の手動手順)", value: scriptPath);
                     continue;
                 }
                 ScriptableObject asset = null;
                 try
                 {
                     asset = ScriptableObject.CreateInstance(env.ProgramAsset);
-                    var so = new SerializedObject(asset);
-                    var prop = so.FindProperty(ProgramAssetSourceField);
-                    if (prop == null || prop.propertyType != SerializedPropertyType.ObjectReference)
+                    using (var so = new SerializedObject(asset))
                     {
-                        r.AddIssue(CctSeverity.Warning, "PROGRAM_ASSET_FAILED", $"{UdonSharpProgramAssetType}.{ProgramAssetSourceField} が見つかりません (UdonSharp の仕様変更?)。手動で作成してください", value: scriptPath);
-                        Object.DestroyImmediate(asset);
-                        return;
+                        var prop = so.FindProperty(ProgramAssetSourceField);
+                        if (prop == null || prop.propertyType != SerializedPropertyType.ObjectReference)
+                        {
+                            r.AddIssue(CctSeverity.Warning, "PROGRAM_ASSET_FAILED", $"{UdonSharpProgramAssetType}.{ProgramAssetSourceField} が見つかりません (UdonSharp の仕様変更?)。手動で作成してください", value: scriptPath);
+                            Object.DestroyImmediate(asset);
+                            break; // same for every script
+                        }
+                        prop.objectReferenceValue = script;
+                        so.ApplyModifiedPropertiesWithoutUndo();
                     }
-                    prop.objectReferenceValue = script;
-                    so.ApplyModifiedPropertiesWithoutUndo();
                     AssetDatabase.CreateAsset(asset, assetPath);
                     created.Add(assetPath);
-                    r.AddIssue(CctSeverity.Info, "PROGRAM_ASSET_CREATED", "UdonSharp Program Asset を作成しました", value: assetPath);
                 }
                 catch (Exception e)
                 {
@@ -570,6 +822,10 @@ namespace Naoking.ClaudeCreatorTools
                     r.AddIssue(CctSeverity.Warning, "PROGRAM_ASSET_FAILED", "Program Asset の作成に失敗しました: " + e.Message, value: assetPath);
                 }
             }
+            if (alreadyThere.Count > 0)
+                r.AddIssue(CctSeverity.Info, "PROGRAM_ASSET_EXISTS", $"Program Asset (または同名の .asset) が既にある {alreadyThere.Count} 個は作成しません (上書きしない)", value: alreadyThere);
+            if (created.Count > 0)
+                r.AddIssue(CctSeverity.Info, "PROGRAM_ASSET_CREATED", $"UdonSharp Program Asset を {created.Count} 個作成しました", value: created.ToList());
         }
     }
 }

@@ -73,7 +73,7 @@ namespace Naoking.ClaudeCreatorTools
             }
             if (roots.Count == 0) roots.Add("Assets");
 
-            SerializationIsForceText(ctx);
+            bool forceText = SerializationIsForceText(ctx);
 
             // ---- text scan of every file (+ .meta) under the search roots
             var candidates = ctx.AllAssetPaths
@@ -102,6 +102,7 @@ namespace Naoking.ClaudeCreatorTools
             {
                 for (int i = 0; i < candidates.Count; i++)
                 {
+                    if (ctx.OutOfTime("file_scan")) break;
                     var path = candidates[i];
                     progress.Step(i, path);
                     var ext = Path.GetExtension(path);
@@ -114,6 +115,7 @@ namespace Naoking.ClaudeCreatorTools
                         var st = ScanFile(physical, ctx.MaxFileBytes, false, false, handler, out var len, out var err);
                         CountStatus(stats, st, path, ext, false, len, err);
                     }
+                    if (!MetaMayHoldReferences(ext)) continue;
                     currentIsMeta = true;
                     var mst = ScanFile(physical + ".meta", 0, false, false, handler, out var mlen, out var merr);
                     if (mst != ScanStatus.NotFound) CountStatus(stats, mst, path + ".meta", ".meta", true, mlen, merr);
@@ -129,14 +131,29 @@ namespace Naoking.ClaudeCreatorTools
             int componentsScanned = 0;
             bool componentsCapped = false;
             if (scanScenes)
-                ScanScenesForTargets(IsTarget, sceneHits, scenesScanned, maxComponents, ref componentsScanned, ref componentsCapped);
+                ScanScenesForTargets(ctx, IsTarget, sceneHits, scenesScanned, maxComponents, ref componentsScanned, ref componentsCapped);
+            // A partial scan cannot prove that nothing uses a target. Without the in-memory scene scan, an open scene with unsaved
+            // (or never saved) changes is only seen as its stale file on disk.
+            bool unsavedScenesUnchecked = !scanScenes &&
+                                          CctTargets.LoadedScenes().Any(s => !IsTransientScene(s) && (s.isDirty || string.IsNullOrEmpty(s.path)));
+            bool conclusive = ctx.Complete && forceText && !inputs.Truncated && stats.TooLarge.Count == 0 && stats.Failed.Count == 0 &&
+                              !componentsCapped && !unsavedScenesUnchecked;
+            var unsure = conclusive ? ""
+                : unsavedScenesUnchecked && ctx.Complete && forceText && stats.TooLarge.Count == 0 && stats.Failed.Count == 0
+                    ? "【未確定: 未保存のシーンがあり、scan_open_scenes=false のためメモリ上の参照を確認していません】"
+                    : "【未確定: 走査が不完全です (SCAN_INCOMPLETE / BINARY_SERIALIZATION 参照)】";
+            var sceneNote = scanScenes ? "と読み込み中シーン" : " (scan_open_scenes=false のためシーン内は未確認)";
 
-            // ---- per-target summary
-            var perTarget = new Dictionary<string, int[]>(StringComparer.Ordinal); // [asset users, scene refs]
-            foreach (var t in targets.Values) perTarget[t] = new int[2];
+            // ---- per-target summary. Users inside the target set are counted separately: they do not block deleting the whole
+            // set, but a target used only by another target (texture <- material in the same folder) is not "unused".
+            var perTarget = new Dictionary<string, int[]>(StringComparer.Ordinal); // [outside asset users, scene refs, users inside the set]
+            foreach (var t in targets.Values) perTarget[t] = new int[3];
             foreach (var u in external)
                 foreach (var t in u.Targets)
                     if (perTarget.TryGetValue(t, out var c)) c[0]++;
+            foreach (var u in internalUsers)
+                foreach (var t in u.Targets)
+                    if (t != u.Path && perTarget.TryGetValue(t, out var c)) c[2]++;
             foreach (var h in sceneHits.Values)
                 if (perTarget.TryGetValue(h.Target, out var c)) c[1] += h.Count;
                 else
@@ -145,8 +162,10 @@ namespace Naoking.ClaudeCreatorTools
                     if (owner != null && perTarget.TryGetValue(owner, out var fc)) fc[1] += h.Count;
                 }
             var fileTargets = perTarget.Where(kv => !AssetDatabase.IsValidFolder(kv.Key)).ToList();
-            var unused = fileTargets.Where(kv => kv.Value[0] == 0 && kv.Value[1] == 0).Select(kv => kv.Key)
+            var unused = fileTargets.Where(kv => kv.Value[0] == 0 && kv.Value[1] == 0 && kv.Value[2] == 0).Select(kv => kv.Key)
                 .OrderBy(p => p, StringComparer.Ordinal).ToList();
+            var notCovered = (stats.Binary.Count > 0 ? $"バイナリ形式の {stats.Binary.Count} ファイル (LightingData 等)、" : "バイナリ形式のファイル、") +
+                             "スキップしたファイル、コードからの名前参照、他プロジェクトは対象外です";
 
             if (fileTargets.Count <= MaxPerTargetIssues)
             {
@@ -156,21 +175,30 @@ namespace Naoking.ClaudeCreatorTools
                     if (kv.Value[0] > 0)
                         ctx.Issue(CctSeverity.Info, "TARGET_USED", $"{kv.Value[0]} 個のアセットから参照されています (例: {string.Join(", ", examples)})",
                             value: kv.Value[0], asset: kv.Key);
+                    else if (kv.Value[2] > 0)
+                    {
+                        var inner = internalUsers.Where(u => u.Targets.Contains(kv.Key) && u.Path != kv.Key).Take(3).Select(u => u.Path).ToList();
+                        ctx.Issue(CctSeverity.Info, "TARGET_USED",
+                            $"対象に含まれる {kv.Value[2]} 個のアセットからだけ参照されています (例: {string.Join(", ", inner)})。" +
+                            "対象をまとめて削除するなら問題ありませんが、これだけを削除すると参照元が Missing になります",
+                            value: kv.Value[2], asset: kv.Key);
+                    }
                     if (kv.Value[1] > 0)
                         ctx.Issue(CctSeverity.Info, "USED_IN_OPEN_SCENE", $"読み込み中のシーンのオブジェクトから {kv.Value[1]} 箇所で参照されています (scene_users 参照)",
                             value: kv.Value[1], asset: kv.Key);
-                    if (kv.Value[0] == 0 && kv.Value[1] == 0)
+                    if (kv.Value[0] == 0 && kv.Value[1] == 0 && kv.Value[2] == 0)
                         ctx.Issue(CctSeverity.Info, "TARGET_UNUSED",
-                            $"search_root ({string.Join(", ", roots)}) のテキスト/.meta と読み込み中シーンからの参照は見つかりませんでした。" +
-                            "バイナリ・スキップしたファイル、コードからの名前参照、他プロジェクトは対象外です", asset: kv.Key);
+                            unsure + $"search_root ({string.Join(", ", roots)}) のテキスト/.meta{sceneNote}からの参照は見つかりませんでした。" + notCovered,
+                            asset: kv.Key);
                 }
             }
             else
             {
                 int used = fileTargets.Count - unused.Count;
-                ctx.Issue(CctSeverity.Info, "TARGET_USED", $"対象 {fileTargets.Count} 個中 {used} 個が参照されています (外部の参照元 {external.Count} 件)", value: used);
+                ctx.Issue(CctSeverity.Info, "TARGET_USED", $"対象 {fileTargets.Count} 個中 {used} 個が参照されています (対象の外の参照元 {external.Count} 件、対象どうしの参照を含む)", value: used);
                 if (unused.Count > 0)
-                    ctx.Issue(CctSeverity.Info, "TARGET_UNUSED", $"対象 {fileTargets.Count} 個中 {unused.Count} 個は参照が見つかりませんでした (unused_targets 参照)", value: unused.Count);
+                    ctx.Issue(CctSeverity.Info, "TARGET_UNUSED",
+                        unsure + $"対象 {fileTargets.Count} 個中 {unused.Count} 個は参照が見つかりませんでした (unused_targets 参照)。" + notCovered, value: unused.Count);
                 if (sceneHits.Count > 0)
                     ctx.Issue(CctSeverity.Info, "USED_IN_OPEN_SCENE", $"読み込み中のシーンから {sceneHits.Values.Sum(h => h.Count)} 箇所で参照されています (scene_users 参照)",
                         value: sceneHits.Count);
@@ -196,11 +224,13 @@ namespace Naoking.ClaudeCreatorTools
                 ctx.Issue(CctSeverity.Warning, "SCAN_INCOMPLETE", $"シーン内の確認はコンポーネント {maxComponents} 個で打ち切りました (max_components で変更可)", value: maxComponents);
 
             // ---- output
-            r.Put("targets", Cap(targets.Select(kv => new Dictionary<string, object>
+            // What was asked for (files named directly + folders); every file found inside a folder is counted in target_count
+            // and listed in per_target.
+            r.Put("targets", Cap(inputs.ExplicitFiles.Concat(inputs.Folders).Distinct(StringComparer.Ordinal).Select(p => new Dictionary<string, object>
             {
-                ["path"] = kv.Value,
-                ["guid"] = kv.Key,
-                ["type"] = AssetDatabase.IsValidFolder(kv.Value) ? "Folder" : TypeNameOf(kv.Value),
+                ["path"] = p,
+                ["guid"] = AssetDatabase.AssetPathToGUID(p),
+                ["type"] = AssetDatabase.IsValidFolder(p) ? "Folder" : TypeNameOf(p),
             }).OrderBy(d => (string)d["path"], StringComparer.Ordinal), ctx.MaxEntries, out var tOmitted));
             r.Put("target_count", targets.Count);
             if (tOmitted > 0) r.Put("targets_omitted", tOmitted);
@@ -218,16 +248,17 @@ namespace Naoking.ClaudeCreatorTools
                     ["examples"] = g.Take(5).Select(u => (object)u.Path).ToList(),
                 }).ToList());
             r.Put("internal_reference_count", internalUsers.Count);
-            if (internalUsers.Count > 0) r.Put("internal_users", Cap(internalUsers.Select(u => (object)u.Path), Math.Min(20, ctx.MaxEntries), out _));
+            if (internalUsers.Count > 0) PutCapped(r, "internal_users", internalUsers.Select(u => u.Path), Math.Min(20, ctx.MaxEntries));
             if (perTarget.Count > 1)
-                r.Put("per_target", Cap(perTarget.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => new Dictionary<string, object>
+                PutCapped(r, "per_target", perTarget.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => new Dictionary<string, object>
                 {
                     ["path"] = kv.Key,
                     ["asset_users"] = kv.Value[0],
                     ["scene_references"] = kv.Value[1],
-                }), ctx.MaxEntries, out _));
-            r.Put("unused_targets", Cap(unused, ctx.MaxEntries, out var unOmitted));
-            if (unOmitted > 0) r.Put("unused_targets_omitted", unOmitted);
+                    ["users_inside_targets"] = kv.Value[2],
+                }), ctx.MaxEntries);
+            PutCapped(r, "unused_targets", unused, ctx.MaxEntries);
+            r.Put("conclusive", conclusive);
             r.Put("scene_user_count", sceneHits.Values.Sum(h => h.Count));
             r.Put("scene_users", Cap(sceneHits.Values.Select(h => new Dictionary<string, object>
             {
@@ -248,11 +279,13 @@ namespace Naoking.ClaudeCreatorTools
             scan["scan_code"] = scanCode;
             r.Put("scan", scan);
             ctx.FlushIssueCaps();
+            ctx.FlushTimeBudget();
 
             var subject = targets.Count == 1 ? targets.Values.First() : $"{targets.Count} 個のアセット";
             r.Message = $"{subject} の使用元: アセット {external.Count} 件 / シーン内参照 {sceneHits.Values.Sum(h => h.Count)} 箇所" +
                         (internalUsers.Count > 0 ? $" (対象同士の参照 {internalUsers.Count} 件は除外)" : "") +
-                        (unused.Count > 0 && fileTargets.Count > 1 ? $" / 参照なし {unused.Count} 個" : "");
+                        (unused.Count > 0 && fileTargets.Count > 1 ? $" / 参照なし {unused.Count} 個" : "") +
+                        (conclusive ? "" : " (走査が不完全なため未確定)");
             return r;
         }
 
@@ -272,21 +305,22 @@ namespace Naoking.ClaudeCreatorTools
             return d;
         }
 
-        static void ScanScenesForTargets(Func<string, bool> isTarget, Dictionary<string, SceneHit> hits, List<object> scenesScanned,
+        static void ScanScenesForTargets(Context ctx, Func<string, bool> isTarget, Dictionary<string, SceneHit> hits, List<object> scenesScanned,
             int maxComponents, ref int componentsScanned, ref bool capped)
         {
-            var scenes = ScenesToScan(out var stagePath);
+            var scenes = ScenesToScan(out var stagePath, out var stageScene);
             var pathCache = new Dictionary<int, string>();
             long visits = 0;
             var all = new List<KeyValuePair<UnityEngine.SceneManagement.Scene, GameObject>>();
             foreach (var scene in scenes)
             {
+                bool isStage = stagePath != null && scene == stageScene;
                 scenesScanned.Add(new Dictionary<string, object>
                 {
-                    ["name"] = scene.name,
-                    ["path"] = string.IsNullOrEmpty(scene.path) ? stagePath : scene.path,
+                    ["name"] = string.IsNullOrEmpty(scene.name) ? "Untitled" : scene.name,
+                    ["path"] = isStage ? stagePath : (string.IsNullOrEmpty(scene.path) ? "(未保存のシーン)" : scene.path),
                     ["is_dirty"] = scene.isDirty,
-                    ["prefab_stage"] = !string.IsNullOrEmpty(stagePath) && string.IsNullOrEmpty(scene.path) ? (object)true : null,
+                    ["prefab_stage"] = isStage ? (object)true : null,
                 });
                 foreach (var go in AllGameObjects(scene)) all.Add(new KeyValuePair<UnityEngine.SceneManagement.Scene, GameObject>(scene, go));
             }
@@ -307,11 +341,13 @@ namespace Naoking.ClaudeCreatorTools
             {
                 for (int i = 0; i < all.Count && !capped; i++)
                 {
+                    if (ctx.OutOfTime("scene_scan")) break;
                     var scene = all[i].Key;
                     var go = all[i].Value;
                     if (go == null) continue;
                     progress.Step(i, go.name);
-                    var sceneName = string.IsNullOrEmpty(scene.path) && !string.IsNullOrEmpty(stagePath) ? stagePath : scene.name;
+                    var sceneName = stagePath != null && scene == stageScene ? "Prefab Mode: " + stagePath
+                        : string.IsNullOrEmpty(scene.name) ? "Untitled" : scene.name;
                     bool dirty = scene.isDirty;
                     try
                     {

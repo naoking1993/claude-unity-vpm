@@ -1,0 +1,7 @@
+# CctCaptureViews (cct_capture_views): VRChat fields read through SerializedObject (read-only, for face framing).
+# ViewPosition is a Vector3 local to the descriptor's transform (declared on the base VRC_AvatarDescriptor).
+VRC.SDK3.Avatars.Components.VRCAvatarDescriptor|ViewPosition
+# Namespaces matched by prefix only (no fields read): components in "VRC.SDK3.Dynamics*" / "VRC.Dynamics*"
+# (PhysBone, PhysBoneCollider, Contacts, VRC constraints) are always removed from the isolated clone.
+VRC.SDK3.Dynamics.PhysBone.Components.VRCPhysBone
+VRC.SDK3.Dynamics.Contact.Components.VRCContactReceiver

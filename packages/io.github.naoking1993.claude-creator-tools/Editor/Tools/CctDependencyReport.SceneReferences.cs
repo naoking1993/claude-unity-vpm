@@ -9,10 +9,13 @@ namespace Naoking.ClaudeCreatorTools
 {
     public static partial class CctDependencyReport
     {
-        // Modular Avatar AvatarObjectReference: { string referencePath; [SerializeField] GameObject targetObject; }.
-        // targetObject is only a cache; MA re-resolves referencePath against the avatar it is installed on.
+        // Modular Avatar nadena.dev.modular_avatar.core.AvatarObjectReference: { string referencePath; [SerializeField] GameObject
+        // targetObject; }. MA uses targetObject only while it is inside the avatar and otherwise resolves referencePath (relative
+        // to the avatar root, or the AVATAR_ROOT sentinel) on the avatar the prefab is installed on (verified in MA's source).
+        const string MaReferenceTypeName = "AvatarObjectReference";
         const string MaReferencePathField = "referencePath";
         const string MaTargetObjectField = "targetObject";
+        const string MaAvatarRootPath = "$$$AVATAR_ROOT$$$";
 
         sealed class RefAggregate
         {
@@ -79,6 +82,9 @@ namespace Naoking.ClaudeCreatorTools
             if (!res.Ok)
                 return FailWith(r, res.Error, "TARGET_NOT_FOUND", res.Candidates.Count > 0 ? res.Candidates.Cast<object>().ToList() : null);
             var target = res.GameObject;
+            if (IsTransient(target))
+                return FailWith(r, $"'{target.name}' はプレビュー用の一時オブジェクト (NDMF / Modular Avatar のプレビュー等、保存されない) です。Hierarchy で元のオブジェクトを指定してください",
+                    "TARGET_NOT_FOUND");
             var root = target.transform;
             bool isAsset = EditorUtility.IsPersistent(target);
             r.Put("target", CctTargets.Describe(target));
@@ -91,7 +97,7 @@ namespace Naoking.ClaudeCreatorTools
             var missingRefs = new List<string>();
             var missingScripts = new List<string>();
             var missingPrefabs = new List<string>();
-            int missingRefCount = 0, missingScriptCount = 0, assetRefs = 0, internalRefs = 0, components = 0;
+            int missingRefCount = 0, missingScriptCount = 0, missingPrefabCount = 0, assetRefs = 0, internalRefs = 0, components = 0;
             long visits = 0;
             bool partial = false;
             var targetScene = target.scene;
@@ -102,8 +108,9 @@ namespace Naoking.ClaudeCreatorTools
             {
                 for (int i = 0; i < transforms.Length; i++)
                 {
+                    if (ctx.OutOfTime("outbound_scan")) break;
                     var t = transforms[i];
-                    if (t == null) continue;
+                    if (t == null || IsTransient(t.gameObject)) continue; // never saved, so never part of the export
                     var go = t.gameObject;
                     progress.Step(i, go.name);
                     int m = GameObjectUtility.GetMonoBehavioursWithMissingScriptCount(go);
@@ -112,11 +119,11 @@ namespace Naoking.ClaudeCreatorTools
                         missingScriptCount += m;
                         if (missingScripts.Count < ctx.MaxEntries) missingScripts.Add(m > 1 ? $"{CctTargets.GetPath(go)} ({m})" : CctTargets.GetPath(go));
                     }
-                    try
+                    if (IsMissingPrefabInstanceRoot(go))
                     {
-                        if (PrefabUtility.IsPrefabAssetMissing(go) && missingPrefabs.Count < ctx.MaxEntries) missingPrefabs.Add(CctTargets.GetPath(go));
+                        missingPrefabCount++;
+                        if (missingPrefabs.Count < ctx.MaxEntries) missingPrefabs.Add(CctTargets.GetPath(go));
                     }
-                    catch (Exception) { /* not a prefab instance */ }
                     foreach (var c in go.GetComponents<Component>())
                     {
                         if (c == null) continue;
@@ -132,14 +139,15 @@ namespace Naoking.ClaudeCreatorTools
                                 if (missingRefs.Count < ctx.MaxEntries) missingRefs.Add($"{ComponentLabel(comp)}.{PrettyPropertyPath(p.propertyPath)}");
                                 return;
                             }
-                            if (EditorUtility.IsPersistent(v)) { assetRefs++; return; }
                             var refGo = GameObjectOf(v);
+                            // Inside the target first: in a prefab asset target, internal references are persistent too.
+                            if (InHierarchy(refGo, root)) { internalRefs++; return; }
+                            if (EditorUtility.IsPersistent(v)) { assetRefs++; return; }
                             if (refGo == null)
                             {
                                 Aggregate(sceneOnly, comp, p.propertyPath, $"{v.GetType().Name} '{v.name}'");
                                 return;
                             }
-                            if (InHierarchy(refGo, root)) { internalRefs++; return; }
                             var described = DescribeSceneObject(v, targetScene);
                             var refPath = MaReferencePath(p);
                             if (refPath != null) Aggregate(pathResolved, comp, p.propertyPath, described, refPath);
@@ -160,6 +168,7 @@ namespace Naoking.ClaudeCreatorTools
                 {
                     for (int i = 0; i < others.Count && !inboundCapped; i++)
                     {
+                        if (ctx.OutOfTime("inbound_scan")) break;
                         var go = others[i];
                         if (go == null) continue;
                         progress.Step(i, go.name);
@@ -192,7 +201,8 @@ namespace Naoking.ClaudeCreatorTools
                     path: a.Object, value: a.Count);
             foreach (var a in pathResolved.Values)
                 ctx.Issue(CctSeverity.Info, "PATH_RESOLVED_REFERENCE",
-                    $"{a.Component}.{a.Property} は対象外の {a.Referenced.FirstOrDefault()} を指していますが、Modular Avatar がパス '{a.ReferencePath}' で再解決します。" +
+                    $"{a.Component}.{a.Property} は対象外の {a.Referenced.FirstOrDefault()} を指していますが、Modular Avatar が " +
+                    (a.ReferencePath == MaAvatarRootPath ? "アバターのルートとして" : $"アバタールートからのパス '{a.ReferencePath}' で") + "再解決します。" +
                     "導入先アバターに同じパスのオブジェクトがあることを確認してください",
                     path: a.Object, value: a.ReferencePath);
             foreach (var a in sceneOnly.Values)
@@ -200,13 +210,16 @@ namespace Naoking.ClaudeCreatorTools
                     $"{a.Component}.{a.Property} がアセットとして保存されていないオブジェクト ({a.Referenced.FirstOrDefault()}) を参照しています。プレハブ化すると失われるので、先にアセットとして保存してください",
                     path: a.Object, value: a.Count);
             if (missingScriptCount > 0)
-                ctx.Issue(CctSeverity.Error, "MISSING_SCRIPT", $"対象内に Missing Script が {missingScriptCount} 個あります (例: {string.Join(", ", missingScripts.Take(3))})",
+                ctx.Issue(CctSeverity.Error, "MISSING_SCRIPT", $"対象内に Missing Script が {missingScriptCount} 個あります (例: {string.Join(", ", missingScripts.Take(3))})。" +
+                                                              "必要なスクリプト/パッケージを導入するか、不要なら Missing のコンポーネントを削除してからプレハブにしてください",
                     path: CctTargets.GetPath(target), value: missingScriptCount);
-            if (missingPrefabs.Count > 0)
-                ctx.Issue(CctSeverity.Error, "MISSING_PREFAB", $"元プレハブが見つからないネストプレハブがあります (例: {string.Join(", ", missingPrefabs.Take(3))})",
-                    path: missingPrefabs[0], value: missingPrefabs.Count);
+            if (missingPrefabCount > 0)
+                ctx.Issue(CctSeverity.Error, "MISSING_PREFAB", $"元プレハブが見つからないネストプレハブが {missingPrefabCount} 個あります (例: {string.Join(", ", missingPrefabs.Take(3))})。" +
+                                                              "元プレハブ (またはそのパッケージ) を導入し直すか、そのインスタンスを削除してください",
+                    path: missingPrefabs[0], value: missingPrefabCount);
             if (missingRefCount > 0)
-                ctx.Issue(CctSeverity.Warning, "MISSING_REFERENCE", $"対象内に Missing 参照が {missingRefCount} 個あります (例: {string.Join(", ", missingRefs.Take(3))})",
+                ctx.Issue(CctSeverity.Warning, "MISSING_REFERENCE", $"対象内に Missing 参照が {missingRefCount} 個あります (例: {string.Join(", ", missingRefs.Take(3))})。" +
+                                                                   "参照を設定し直すか、不要なら None にしてください",
                     path: CctTargets.GetPath(target), value: missingRefCount);
             foreach (var a in inbound.Values)
                 ctx.Issue(CctSeverity.Info, "INBOUND_SCENE_REFERENCE",
@@ -222,18 +235,17 @@ namespace Naoking.ClaudeCreatorTools
             r.Put("asset_reference_count", assetRefs);
             r.Put("internal_reference_count", internalRefs);
             r.Put("external_reference_count", external.Values.Sum(a => a.Count));
-            r.Put("external_references", Cap(external.Values.Select(a => a.ToPlain()), ctx.MaxEntries, out var exOmitted));
-            if (exOmitted > 0) r.Put("external_references_omitted", exOmitted);
-            r.Put("path_resolved_references", Cap(pathResolved.Values.Select(a => a.ToPlain()), ctx.MaxEntries, out _));
-            r.Put("scene_only_objects", Cap(sceneOnly.Values.Select(a => a.ToPlain()), ctx.MaxEntries, out _));
+            PutCapped(r, "external_references", external.Values.Select(a => a.ToPlain()), ctx.MaxEntries);
+            PutCapped(r, "path_resolved_references", pathResolved.Values.Select(a => a.ToPlain()), ctx.MaxEntries);
+            PutCapped(r, "scene_only_objects", sceneOnly.Values.Select(a => a.ToPlain()), ctx.MaxEntries);
             r.Put("missing_reference_count", missingRefCount);
             r.Put("missing_references", missingRefs.Cast<object>().ToList());
             r.Put("missing_script_count", missingScriptCount);
             r.Put("missing_scripts", missingScripts.Cast<object>().ToList());
+            r.Put("missing_prefab_count", missingPrefabCount);
             r.Put("missing_prefabs", missingPrefabs.Cast<object>().ToList());
             r.Put("inbound_reference_count", inbound.Values.Sum(a => a.Count));
-            r.Put("inbound_references", Cap(inbound.Values.Select(a => a.ToPlain()), ctx.MaxEntries, out var inOmitted));
-            if (inOmitted > 0) r.Put("inbound_references_omitted", inOmitted);
+            PutCapped(r, "inbound_references", inbound.Values.Select(a => a.ToPlain()), ctx.MaxEntries);
             r.Put("prefab", prefab);
             r.Put("scan", new Dictionary<string, object>
             {
@@ -244,32 +256,52 @@ namespace Naoking.ClaudeCreatorTools
                 ["partial_objects"] = partial,
                 ["in_memory_state"] = true,
             });
+            r.Put("conclusive", ctx.Complete && !partial && !inboundCapped);
             ctx.FlushIssueCaps();
+            ctx.FlushTimeBudget();
 
             int ext = external.Values.Sum(a => a.Count);
             r.Message = $"{target.name}: シーン外参照 {ext} 件" +
                         (pathResolved.Count > 0 ? $" (MA パス解決 {pathResolved.Values.Sum(a => a.Count)} 件は別)" : "") +
                         $" / 未保存オブジェクト参照 {sceneOnly.Values.Sum(a => a.Count)} / Missing 参照 {missingRefCount} / Missing Script {missingScriptCount} / " +
                         $"外部からの参照 {inbound.Values.Sum(a => a.Count)}" +
-                        (prefab.TryGetValue("has_overrides", out var ho) && ho is bool b && b ? " / プレハブのオーバーライドあり" : "");
+                        (prefab.TryGetValue("has_overrides", out var ho) && ho is bool b && b ? " / プレハブのオーバーライドあり" : "") +
+                        (ctx.Complete && !partial && !inboundCapped ? "" : " (走査が途中までのため未確定: SCAN_INCOMPLETE 参照)");
             return r;
         }
 
         /// <summary>
-        /// For a Modular Avatar AvatarObjectReference ("...targetObject" next to a non-empty "...referencePath"), the path MA
-        /// will resolve at build time; null for any other reference. Reads a sibling property without moving the iterator.
+        /// For the targetObject of a Modular Avatar AvatarObjectReference with a non-empty referencePath, the path MA will resolve
+        /// at build time; null for any other reference. Looks up the parent/sibling properties without moving the iterator.
         /// </summary>
         static string MaReferencePath(SerializedProperty p)
         {
             var path = p.propertyPath;
-            if (path != MaTargetObjectField && !path.EndsWith("." + MaTargetObjectField, StringComparison.Ordinal)) return null;
-            var parent = path.Length > MaTargetObjectField.Length ? path.Substring(0, path.Length - MaTargetObjectField.Length - 1) : null;
+            if (!path.EndsWith("." + MaTargetObjectField, StringComparison.Ordinal)) return null;
+            var parent = path.Substring(0, path.Length - MaTargetObjectField.Length - 1);
             try
             {
-                var rp = p.serializedObject.FindProperty(parent == null ? MaReferencePathField : parent + "." + MaReferencePathField);
+                var so = p.serializedObject;
+                var holder = so.FindProperty(parent);
+                if (holder == null || holder.type != MaReferenceTypeName) return null;
+                var rp = so.FindProperty(parent + "." + MaReferencePathField);
                 if (rp == null || rp.propertyType != SerializedPropertyType.String) return null;
                 var s = rp.stringValue;
                 return string.IsNullOrEmpty(s) ? null : s;
+            }
+            catch (Exception) { return null; }
+        }
+
+        /// <summary>
+        /// PrefabStage.prefabContentsRoot of the open Prefab Mode stage, read by reflection because the PrefabStage type moved from
+        /// UnityEditor.Experimental.SceneManagement (2021.1) to UnityEditor.SceneManagement (2021.2+). Null when unavailable.
+        /// </summary>
+        static GameObject StageContentsRoot()
+        {
+            try
+            {
+                var stage = UnityEditor.SceneManagement.StageUtility.GetCurrentStage();
+                return stage?.GetType().GetProperty("prefabContentsRoot")?.GetValue(stage, null) as GameObject;
             }
             catch (Exception) { return null; }
         }
@@ -284,6 +316,27 @@ namespace Naoking.ClaudeCreatorTools
                     d["status"] = "prefab_asset";
                     d["asset"] = AssetDatabase.GetAssetPath(target);
                     return d;
+                }
+                // Prefab Mode: the root being edited is the prefab asset itself (for a variant it is also an instance of the base,
+                // but saving the stage keeps those overrides), so instance-override advice applies only below the root.
+                var stagePath = CurrentStageScene(out var stageScene);
+                if (stagePath != null && target.scene == stageScene)
+                {
+                    d["prefab_stage"] = stagePath;
+                    // A UI prefab sits under a "Canvas (Environment)" root in Prefab Mode, so ask the stage for its contents root.
+                    var contentsRoot = StageContentsRoot();
+                    if (contentsRoot != null ? contentsRoot == target : target.transform.parent == null)
+                    {
+                        d["status"] = "prefab_stage_root";
+                        d["asset"] = stagePath;
+                        d["has_overrides"] = false;
+                        d["stage_unsaved"] = stageScene.isDirty;
+                        if (stageScene.isDirty)
+                            ctx.Issue(CctSeverity.Warning, "UNSAVED_CHANGES",
+                                "Prefab Mode に未保存の変更があります。この結果は編集中の内容ですが、プレハブアセット (書き出される内容) にはまだ入っていません。保存してから書き出してください",
+                                asset: stagePath);
+                        return d;
+                    }
                 }
                 bool part = PrefabUtility.IsPartOfPrefabInstance(target);
                 if (!part)
@@ -333,12 +386,13 @@ namespace Naoking.ClaudeCreatorTools
                     ctx.Issue(CctSeverity.Info, "PREFAB_HAS_OVERRIDES",
                         $"対象はプレハブ {source} の{(isRoot ? "インスタンス" : "インスタンスの一部")}で、オーバーライドがあります " +
                         $"(変更オブジェクト {objectOverrides} / 追加コンポーネント {addedComponents} / 追加 GameObject {addedObjects} / 削除コンポーネント {removedComponents})。" +
-                        "元プレハブをそのまま書き出すとこの改変は含まれません。シーン上の現在の状態を新しいプレハブとして保存するか、意図した変更だけ Apply してから書き出してください",
+                        "元プレハブをそのまま書き出すとこの改変は含まれません。シーンの対象を複製し、その複製を新しいプレハブ (独立プレハブまたは Prefab Variant) として保存してから書き出してください" +
+                        " (元のプレハブへ Apply すると配布元の製品アセットを書き換えます)",
                         path: CctTargets.GetPath(target), value: total, asset: source);
                 else if (!isRoot)
-                    ctx.Issue(CctSeverity.Info, "PREFAB_HAS_OVERRIDES",
+                    ctx.Issue(CctSeverity.Info, "PART_OF_PREFAB_INSTANCE",
                         $"対象はプレハブ {source} の一部です (オーバーライドなし)。単独で書き出すには新しいプレハブとして保存する必要があります",
-                        path: CctTargets.GetPath(target), value: 0, asset: source);
+                        path: CctTargets.GetPath(target), asset: source);
             }
             catch (Exception e)
             {

@@ -12,26 +12,40 @@ namespace Naoking.ClaudeCreatorTools
 {
     public static partial class CctCaptureViews
     {
-        /// <summary>Yaw-only reference frame of the target: +Z = target forward, +Y = world up, origin = target pivot.</summary>
+        /// <summary>
+        /// Yaw-only reference frame: origin = target pivot, +Y = world up, +Z = forward of the orientation source (the target
+        /// itself, or the enclosing avatar root when the target is a part of an avatar; see FindOrientationSource).
+        /// </summary>
         sealed class CaptureFrame
         {
             public Vector3 Position;
             public Quaternion Rotation;
             public float Yaw;
+            public string OrientationSource;
 
-            public static CaptureFrame From(Transform t)
+            /// <param name="pivot">origin (the target, or its clone at the same world pose)</param>
+            /// <param name="orientation">transform whose forward is "front"; null = the pivot</param>
+            public static CaptureFrame From(Transform pivot, Transform orientation)
             {
+                var t = orientation != null ? orientation : pivot;
                 var f = t.forward;
                 f.y = 0f;
                 if (f.sqrMagnitude < 1e-6f)
                 {
-                    // Root pitched by +-90 degrees (e.g. an unapplied FBX rotation): its up axis points horizontally.
-                    f = t.up;
+                    // Root pitched by 90 degrees, typically the unapplied Blender FBX rotation (-90, 0, 0): its local -Y
+                    // (Blender's front) points to world +Z, so -up is the model's front (+up would capture its back).
+                    f = -t.up;
                     f.y = 0f;
                 }
                 if (f.sqrMagnitude < 1e-6f) f = Vector3.forward;
                 var yaw = Mathf.Atan2(f.x, f.z) * Mathf.Rad2Deg;
-                return new CaptureFrame { Position = t.position, Yaw = yaw, Rotation = Quaternion.Euler(0f, yaw, 0f) };
+                return new CaptureFrame
+                {
+                    Position = pivot.position,
+                    Yaw = yaw,
+                    Rotation = Quaternion.Euler(0f, yaw, 0f),
+                    OrientationSource = CctTargets.GetPath(t),
+                };
             }
 
             public Vector3 ToLocal(Vector3 world) => Quaternion.Inverse(Rotation) * (world - Position);
@@ -41,8 +55,25 @@ namespace Naoking.ClaudeCreatorTools
             {
                 ["position"] = Vec(Position),
                 ["yaw"] = (double)Yaw,
-                ["note"] = "camera local_* values are relative to this frame (+Z = target forward, +Y = world up)",
+                ["orientation_source"] = OrientationSource,
+                ["note"] = "camera local_* values are relative to this frame (origin = target pivot, +Z = forward of " +
+                           "orientation_source, +Y = world up)",
             };
+        }
+
+        /// <summary>
+        /// The transform whose forward defines "front": the nearest self-or-ancestor with a VRCAvatarDescriptor, else with a
+        /// humanoid Animator, else the target. Capturing a part of an avatar (outfit, hair, a mesh child with an unapplied
+        /// FBX rotation) therefore still uses the avatar's front, and before/after captures of that part line up.
+        /// </summary>
+        static Transform FindOrientationSource(Transform target)
+        {
+            for (var t = target; t != null; t = t.parent)
+                foreach (var c in t.GetComponents<Component>())
+                    if (c != null && CctSerialized.IsType(c, CctVrcTypes.AvatarDescriptor)) return t;
+            for (var t = target; t != null; t = t.parent)
+                if (IsHumanAnimator(t.GetComponent<Animator>())) return t;
+            return target;
         }
 
         /// <summary>World-space corner points of one renderer's geometry, used for framing.</summary>
@@ -85,8 +116,11 @@ namespace Naoking.ClaudeCreatorTools
             public int ScriptsRemaining;
             public int TargetLights;
             public int EditorOnlyRenderers;
+            public int StaticBatchedRenderers;
             public bool LightingOverrideFailed;
             public readonly List<string> CleanupErrors = new List<string>();
+            readonly List<string> _bakeFailedPaths = new List<string>();
+            string _bakeFailedReason;
 
             public Camera Camera;
             public int Resolution;
@@ -136,8 +170,11 @@ namespace Naoking.ClaudeCreatorTools
                 StripClone(opt.KeepScripts);
                 if (opt.KeepScripts)
                     r.AddIssue(CctSeverity.Warning, "SCRIPTS_KEPT",
-                        "keep_scripts=true: クローン上のスクリプトを残しました ([ExecuteAlways] 等が編集モードで動いた可能性があります)。" +
-                        $"VRChat の PhysBone / Contact / Constraint は元オブジェクトを動かさないよう常に除去します (除去 {ScriptsStripped} 個)");
+                        "keep_scripts=true: クローン上のスクリプトを残しました (" +
+                        (EditorApplication.isPlaying
+                            ? "Play モード中なので全スクリプトの Awake / OnEnable がクローン上で動きました。Udon 等が実行中の状態に影響した可能性があります"
+                            : "[ExecuteAlways] 等が編集モードで動いた可能性があります") +
+                        $")。VRChat の PhysBone / Contact / Constraint は元オブジェクトを動かさないよう常に除去します (除去 {ScriptsStripped} 個)");
                 else if (ScriptsStripped > 0)
                     r.AddIssue(CctSeverity.Info, "SCRIPTS_STRIPPED",
                         $"撮影用クローンからスクリプト {ScriptsStripped} 個を有効化前に取り除きました (PhysBone・Constraint・MA 等は動作しません。元のオブジェクトは無変更)",
@@ -147,11 +184,17 @@ namespace Naoking.ClaudeCreatorTools
                         $"クローンから取り除けなかったスクリプトが {ScriptsRemaining} 個あります (有効化時に動作した可能性があります)", value: ScriptsRemaining);
 
                 _holder.SetActive(true);
-                Frame = CaptureFrame.From(clone.transform);
+                // The clone sits at the source's world pose, so the source-side avatar root gives the same orientation.
+                Frame = CaptureFrame.From(clone.transform, FindOrientationSource(Source.transform));
                 Humanoid = FindHumanoid(Source, EditorUtility.IsPersistent(Source));
 
                 for (int i = 0; i < cloneRenderers.Length; i++)
                     CollectIsolatedRenderer(cloneRenderers[i], sameShape ? sourceRenderers[i] : null, r);
+                ReportBakeFailures(r);
+                if (StaticBatchedRenderers > 0)
+                    r.AddIssue(CctSeverity.Warning, "STATIC_BATCHED",
+                        $"静的バッチ済みの Renderer が {StaticBatchedRenderers} 個あります (Play モード)。isolated のクローンでは結合メッシュの都合で正しく描画されない場合があるため、mode=scene か編集モードで撮影してください",
+                        value: StaticBatchedRenderers);
 
                 TargetLights = clone.GetComponentsInChildren<Light>(false).Count(l => l != null && l.enabled);
                 if (TargetLights > 0)
@@ -165,10 +208,27 @@ namespace Naoking.ClaudeCreatorTools
             public void InitScene(CctResult r)
             {
                 Root = Source;
-                Frame = CaptureFrame.From(Source.transform);
+                Frame = CaptureFrame.From(Source.transform, FindOrientationSource(Source.transform));
                 Humanoid = FindHumanoid(Source, false);
                 foreach (var rend in Source.GetComponentsInChildren<Renderer>(false))
                     CollectSceneRenderer(rend, r);
+                ReportBakeFailures(r);
+            }
+
+            /// <summary>One BAKE_FAILED issue for all skinned meshes (Play mode can fail for every non-readable mesh at once).</summary>
+            void ReportBakeFailures(CctResult r)
+            {
+                if (_bakeFailedPaths.Count == 0) return;
+                var list = string.Join(", ", _bakeFailedPaths.Take(5)) + (_bakeFailedPaths.Count > 5 ? $" ほか {_bakeFailedPaths.Count - 5} 個" : "");
+                var effect = Isolated
+                    ? "SkinnedMeshRenderer のまま描画しました (同じ呼び出し内では姿勢や BlendShape が古い・写らない場合があります)"
+                    : "メッシュの元の境界で構図を決めました (描画はそのまま)";
+                var hint = EditorApplication.isPlaying
+                    ? "。Play モード中は Read/Write が無効なメッシュを焼き込めないため、編集モードで撮影してください"
+                    : "";
+                r.AddIssue(CctSeverity.Warning, "BAKE_FAILED",
+                    $"スキンメッシュ {_bakeFailedPaths.Count} 個の現在の形状を取得できず、{effect}: {list} (理由: {_bakeFailedReason}){hint}",
+                    path: _bakeFailedPaths[0], value: _bakeFailedPaths.Count);
             }
 
             T Own<T>(T o) where T : Object
@@ -334,7 +394,16 @@ namespace Naoking.ClaudeCreatorTools
                     var mf = rend.GetComponent<MeshFilter>();
                     if (mf == null || mf.sharedMesh == null) return;
                     CopyPropertyBlock(source, rend);
-                    FramingRenderers.Add(new FramingRenderer(path, Corners(mf.sharedMesh.bounds, rend.transform.localToWorldMatrix)));
+                    // Lightmap indices copied from a baked (world) object point into the open scene's lightmaps, which
+                    // the preview scene does not have; clear them so the clone is lit like everything else (clone only).
+                    rend.lightmapIndex = -1;
+                    rend.realtimeLightmapIndex = -1;
+                    if (rend.isPartOfStaticBatch || (source != null && source.isPartOfStaticBatch))
+                    {
+                        StaticBatchedRenderers++;
+                        FramingRenderers.Add(new FramingRenderer(path, Corners((source != null ? source : rend).bounds, Matrix4x4.identity)));
+                    }
+                    else FramingRenderers.Add(new FramingRenderer(path, Corners(mf.sharedMesh.bounds, rend.transform.localToWorldMatrix)));
                 }
             }
 
@@ -359,8 +428,8 @@ namespace Naoking.ClaudeCreatorTools
                     }
                     catch (Exception e)
                     {
-                        r.AddIssue(CctSeverity.Warning, "BAKE_FAILED",
-                            $"'{path}' の現在形状を取得できず、メッシュの元の境界で構図を決めました ({e.Message})", path: path);
+                        _bakeFailedPaths.Add(path);
+                        if (_bakeFailedReason == null) _bakeFailedReason = e.Message;
                         FramingRenderers.Add(new FramingRenderer(path, Corners(smr.sharedMesh.bounds, smr.transform.localToWorldMatrix)));
                     }
                     finally
@@ -376,7 +445,10 @@ namespace Naoking.ClaudeCreatorTools
                 {
                     var mf = rend.GetComponent<MeshFilter>();
                     if (mf == null || mf.sharedMesh == null) return;
-                    FramingRenderers.Add(new FramingRenderer(path, Corners(mf.sharedMesh.bounds, rend.transform.localToWorldMatrix)));
+                    // Static batching (Play mode) swaps in a world-space combined mesh; its renderer bounds stay correct.
+                    FramingRenderers.Add(new FramingRenderer(path, rend.isPartOfStaticBatch
+                        ? Corners(rend.bounds, Matrix4x4.identity)
+                        : Corners(mf.sharedMesh.bounds, rend.transform.localToWorldMatrix)));
                 }
             }
 
@@ -407,9 +479,8 @@ namespace Naoking.ClaudeCreatorTools
                 }
                 catch (Exception e)
                 {
-                    r.AddIssue(CctSeverity.Warning, "BAKE_FAILED",
-                        $"'{path}' のスキンメッシュを焼き込めず、SkinnedMeshRenderer のまま描画しました (同じ呼び出し内では姿勢や BlendShape が古い場合があります): {e.Message}",
-                        path: path);
+                    _bakeFailedPaths.Add(path);
+                    if (_bakeFailedReason == null) _bakeFailedReason = e.Message;
                     smr.updateWhenOffscreen = true; // clone only: never culled by stale bounds
                     return Corners(smr.sharedMesh.bounds, smr.transform.localToWorldMatrix);
                 }
@@ -650,6 +721,7 @@ namespace Naoking.ClaudeCreatorTools
                 {
                     GL.sRGBWrite = Linear;
                     RenderCameraWithLighting();
+                    GL.sRGBWrite = Linear; // Camera.Render may leave it changed; Blit relies on it for the linear -> sRGB write
                     Graphics.Blit(_rtMain, _rtResolve); // resolves MSAA, converts half-float linear -> sRGB bytes
                     RenderTexture.active = _rtResolve;
                     _readTex.ReadPixels(new Rect(0, 0, Resolution, Resolution), 0, 0, false);
@@ -666,12 +738,17 @@ namespace Naoking.ClaudeCreatorTools
             /// Preview scenes have their own lighting settings, but the renderer only uses them while the override is
             /// active (PreviewRenderUtility/SceneView do the same). Set right before Render and restored right after, so
             /// no repaint of the user's windows can happen in between. Never touches the user's scene settings.
+            /// Async shader compilation is switched off for this call site (as SceneView does around its own render):
+            /// otherwise a variant not compiled yet in this session (lilToon under the studio lights) is drawn with the
+            /// cyan placeholder shader and the PNG / comparison is wrong. The first capture can therefore take longer.
             /// </summary>
             void RenderCameraWithLighting()
             {
                 bool overridden = false;
+                bool oldAsync = ShaderUtil.allowAsyncCompilation;
                 try
                 {
+                    ShaderUtil.allowAsyncCompilation = false;
                     if (Isolated)
                     {
                         overridden = Unsupported.SetOverrideLightingSettings(PreviewScene);
@@ -687,6 +764,7 @@ namespace Naoking.ClaudeCreatorTools
                         try { Unsupported.RestoreOverrideLightingSettings(); }
                         catch (Exception e) { CleanupErrors.Add("RestoreOverrideLightingSettings: " + e.Message); }
                     }
+                    ShaderUtil.allowAsyncCompilation = oldAsync;
                 }
             }
 
@@ -739,10 +817,13 @@ namespace Naoking.ClaudeCreatorTools
                     ["renderers_drawn"] = RenderedRenderers,
                     ["renderers_for_framing"] = FramingRenderers.Count,
                     ["editor_only_renderers"] = EditorOnlyRenderers,
+                    ["texture_streaming"] = QualitySettings.streamingMipmapsActive,
+                    ["async_shader_compilation"] = "disabled during capture",
                 };
                 if (Isolated)
                 {
                     d["skinned_meshes_baked"] = BakedMeshes;
+                    d["static_batched_renderers"] = StaticBatchedRenderers;
                     d["scripts_stripped"] = ScriptsStripped;
                     d["target_lights"] = TargetLights;
                     d["lighting"] = new Dictionary<string, object>
@@ -813,11 +894,26 @@ namespace Naoking.ClaudeCreatorTools
 
         static float Lin(byte v, bool linear) => linear ? SrgbToLinearTable[v] : v / 255f;
 
+        // Linear 0..1 quantised to 1/65535 -> sRGB byte. Max slope is 12.92*255/65535 = 0.05 levels per step, so 8-bit values
+        // round-trip exactly; replaces ~12M Math.Pow calls per 2048px transparent view (about a second in Mono).
+        static byte[] _linearToSrgb8;
+
         static byte Enc(float v, bool linear)
         {
             v = Mathf.Clamp01(v);
-            double s = !linear ? v : v <= 0.0031308 ? v * 12.92 : 1.055 * Math.Pow(v, 1.0 / 2.4) - 0.055;
-            return (byte)Mathf.Clamp((int)Math.Round(s * 255.0), 0, 255);
+            if (!linear) return (byte)Mathf.Clamp((int)Math.Round(v * 255.0), 0, 255);
+            if (_linearToSrgb8 == null)
+            {
+                var t = new byte[65536];
+                for (int i = 0; i < t.Length; i++)
+                {
+                    double c = i / 65535.0;
+                    double s = c <= 0.0031308 ? c * 12.92 : 1.055 * Math.Pow(c, 1.0 / 2.4) - 0.055;
+                    t[i] = (byte)Math.Max(0, Math.Min(255, (int)Math.Round(s * 255.0)));
+                }
+                _linearToSrgb8 = t;
+            }
+            return _linearToSrgb8[(int)(v * 65535f + 0.5f)];
         }
 
         static string Hex(Color c) => Hex((Color32)c);

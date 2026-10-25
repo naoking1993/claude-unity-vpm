@@ -13,7 +13,7 @@ namespace Naoking.ClaudeCreatorTools
             var id = args.GetString("id");
             var m = LoadManifest(id, out var dir, out var failure);
             if (m == null) return failure;
-            int maxEntries = args.GetInt("max_entries", 200, 1, 5000);
+            int maxEntries = args.GetInt("max_entries", DefaultMaxEntries, 1, 5000);
 
             var r = CctResult.Ok("");
             r.Put("action", "diff");
@@ -28,8 +28,8 @@ namespace Naoking.ClaudeCreatorTools
                 ["unchanged"] = 0, ["modified"] = 0, ["deleted"] = 0, ["meta_changed"] = 0, ["error"] = 0,
             };
             var changes = new List<object>();
-            int omitted = 0;
             var scenes = LoadedScenesByPath();
+            int blueprintWarnings = 0;
             using (var progress = new Progress("Claude Creator Tools: スナップショット差分", m.Files.Count))
             {
                 int i = 0;
@@ -40,7 +40,18 @@ namespace Naoking.ClaudeCreatorTools
                     var status = (string)info["status"];
                     var bucket = counts.ContainsKey(status) ? status : "error";
                     counts[bucket] = (int)counts[bucket] + 1;
-                    if (e.SceneState != null) info["scene_was_dirty_at_snapshot"] = e.SceneWasDirty;
+                    if (e.SceneState != null)
+                    {
+                        info["scene_was_dirty_at_snapshot"] = e.SceneWasDirty;
+                        // "in_memory": the stored copy holds changes that were never saved, so the file on disk differs from it
+                        // even if nothing was touched since.
+                        info["snapshot_scene_state"] = e.SceneState;
+                    }
+                    if (status == "modified" && info.TryGetValue("snapshot_file", out var storedObj))
+                    {
+                        var bpMessage = CompareBlueprintIds(storedObj as string, AbsOf(e.AssetPath), e.AssetPath, info, false);
+                        if (bpMessage != null && blueprintWarnings++ < 30) r.AddIssue(CctSeverity.Warning, "BLUEPRINT_ID_CHANGES", bpMessage, asset: e.AssetPath);
+                    }
                     if (scenes.TryGetValue(e.AssetPath, out var scene) && scene.isDirty)
                     {
                         info["scene_has_unsaved_changes"] = true;
@@ -48,12 +59,11 @@ namespace Naoking.ClaudeCreatorTools
                             $"シーン '{e.AssetPath}' には未保存の変更があり、その内容はディスクに無いため比較できません (比較するには保存が必要です)", asset: e.AssetPath);
                     }
                     if (status == "unchanged" && !info.ContainsKey("scene_has_unsaved_changes")) continue;
-                    if (changes.Count < maxEntries) changes.Add(info);
-                    else omitted++;
+                    changes.Add(info);
                 }
             }
 
-            var added = FindAddedFiles(m, maxEntries, out var addedCount);
+            var added = FindAddedFiles(m, FullListMax, out var addedCount);
             counts["added"] = addedCount;
             if (addedCount > 0)
                 r.AddIssue(CctSeverity.Info, "FILES_ADDED",
@@ -68,10 +78,11 @@ namespace Naoking.ClaudeCreatorTools
                     $"'{stagePath}' は Prefab モードで未保存の変更があります。差分はディスク上の内容の比較です", asset: stagePath);
 
             r.Put("counts", counts);
-            r.Put("changes", changes);
-            if (omitted > 0) r.Put("changes_omitted", omitted);
-            r.Put("added", added);
-            if (addedCount > added.Count) r.Put("added_omitted", addedCount - added.Count);
+            var full = new Dictionary<string, object>();
+            PutList(r, "changes", changes, maxEntries, full);
+            PutList(r, "added", added, maxEntries, full);
+            if (addedCount > added.Count) r.Put("added_omitted", addedCount - Math.Min(maxEntries, added.Count));
+            PutFullLists(r, full);
             r.Message = $"'{m.Id}' との差分: 変更 {counts["modified"]} / 削除 {counts["deleted"]} / meta 変更 {counts["meta_changed"]} / " +
                         $"変更なし {counts["unchanged"]} / 追加 {addedCount}" + ((int)counts["error"] > 0 ? $" / 比較不能 {counts["error"]}" : "");
             return r;

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -14,33 +15,49 @@ namespace Naoking.ClaudeCreatorTools
     /// cct_dependency_report: what an asset set needs and who uses an asset, for packaging a modified gimmick/outfit for
     /// another avatar or project (no Missing Script, no references back into the source scene, every reference resolving
     /// inside the export set / a declared package / Unity built-ins, the VPM packages it needs) and for "who uses this?"
-    /// questions before deleting or replacing assets. Read-only in every mode: nothing is saved, imported or dirtied.
+    /// questions before deleting or replacing assets. Read-only in every mode: nothing is saved, imported or dirtied (the
+    /// loaded scenes' dirty flags are compared before/after and a change is reported as SCENE_DIRTIED).
     ///
     /// Modes:
     ///   dependencies     (default) AssetDatabase.GetDependencies of 'assets' (folders expanded) and/or the assets referenced
     ///                    by a scene 'target', grouped into inside_export_root / assets_outside_root (by Assets/A/B) /
-    ///                    packages (with installed version and VPM status) / builtin, with file sizes, a YAML GUID scan
-    ///                    for references that do not resolve, and a load-based scan of prefabs and other editable assets
-    ///                    for Missing Script / Missing references (also catches wrong fileIDs that a GUID scan cannot).
+    ///                    packages + required_packages (installed version, VPM status, referenced_by) / builtin, with file
+    ///                    sizes, a YAML GUID scan for references that do not resolve, and a load-based scan of prefabs and
+    ///                    other editable assets for Missing Script / Missing references (also catches wrong fileIDs that a
+    ///                    GUID scan cannot).
     ///   reverse          every file under search_root (default Assets) whose text (or .meta) contains the GUID of one of
     ///                    'assets', grouped by type, plus in-memory references from objects in the loaded scenes.
     ///   scene_references SerializedObject scan of every component under a scene 'target' for references to scene objects
     ///                    outside the target (they become None when the target is saved as a standalone prefab), Missing
     ///                    references/scripts/prefabs, references from outside into the target, and prefab-override status.
     ///
+    /// Every long loop is bounded by a time budget of timeout_seconds - 5 (25 s by default; menu runs pass timeout_seconds 305)
+    /// so an MCP call returns before its timeout; time_budget_seconds can only shorten it. When it runs out the remaining scans
+    /// are skipped and SCAN_INCOMPLETE says where. The essential checks (GUID scan, Missing scan) run before the optional
+    /// enrichment (referrer graph, per-input packages). Every mode outputs 'conclusive': false = some scan was partial, so a
+    /// "nothing missing" / "nothing uses it" verdict must not be trusted.
+    ///
+    /// Side effects: nothing in Assets/, Packages/ or the scenes changes. The report JSON and, in dependencies mode, the complete
+    /// dependency list (dependency_list_path: TSV of group, input, path, guid, type, bytes) are written under
+    /// Library/ClaudeCreatorTools/Reports unless save_report=false. The Missing scan loads up to 1000 prefabs/assets (and whatever
+    /// they reference) into editor memory like the Inspector would; Unity unloads them at the next UnloadUnusedAssets / scene change.
+    ///
     /// Issue codes:
     /// | code                          | severity        | meaning                                                                          |
     /// |-------------------------------|-----------------|----------------------------------------------------------------------------------|
-    /// | MISSING_GUID                  | error           | a text-serialized file (or .meta) references a GUID no asset in this project has |
+    /// | MISSING_GUID                  | error / warning | a text-serialized file references a GUID no asset in this project has (warning   |
+    /// |                               |                 | when only .meta importer settings reference it, e.g. a script icon)              |
     /// | MISSING_SCRIPT                | error           | GameObject(s) with a MonoBehaviour whose script is missing                        |
     /// | MISSING_PREFAB                | error           | nested prefab instance whose prefab asset is missing                              |
     /// | MISSING_REFERENCE             | warning         | ObjectReference shown as "Missing" (deleted object, or GUID ok but wrong fileID)  |
-    /// | SCRIPT_CLASS_NOT_FOUND        | warning         | dependency script whose class Unity cannot resolve (compile error / name mismatch)|
+    /// | SCRIPT_CLASS_NOT_FOUND        | warning / info  | dependency script whose class Unity cannot resolve (compile error / name mismatch)|
+    /// |                               |                 | (info: an input script nothing in the set references, e.g. a utility class file) |
     /// | EXTERNAL_SCENE_REFERENCE      | error           | reference from inside target to a scene object outside it (lost in a prefab)      |
     /// | PATH_RESOLVED_REFERENCE       | info            | same, but a Modular Avatar AvatarObjectReference that MA re-resolves by path      |
     /// | SCENE_ONLY_OBJECT             | warning         | reference to a Mesh/Material/... that exists only in the scene or in memory       |
     /// | INBOUND_SCENE_REFERENCE       | info            | object outside target references into target (that link is not exported)          |
     /// | PREFAB_HAS_OVERRIDES          | info            | target is (part of) a prefab instance with overrides; the source prefab lacks them|
+    /// | PART_OF_PREFAB_INSTANCE       | info            | target is a child inside a prefab instance (no overrides): save it as a new prefab|
     /// | OUTSIDE_EXPORT_ROOT           | warning         | dependency under Assets/ outside export_root (grouped by Assets/A/B)              |
     /// | ASMDEF_REQUIRED               | warning         | a script dependency compiles in an .asmdef outside the export set                 |
     /// | PACKAGE_DEPENDENCY            | info / warning  | dependency on a package (warning: not in declared_packages, or not VPM-managed)   |
@@ -49,14 +66,23 @@ namespace Naoking.ClaudeCreatorTools
     /// | LARGE_FILE                    | info            | dependency file larger than large_file_mb (export weight)                         |
     /// | BINARY_SERIALIZATION          | warning         | Asset Serialization is not Force Text: binary assets cannot be GUID-scanned       |
     /// | BINARY_FILES_SKIPPED          | info            | some files are binary (or not Unity YAML) and were not GUID-scanned               |
-    /// | SCAN_INCOMPLETE               | warning         | files skipped (too large / unreadable) or a cap was hit; results may be partial   |
+    /// | SCAN_INCOMPLETE               | warning         | files skipped (too large / unreadable), a cap or the time budget was hit, or an   |
+    /// |                               |                 | asset could not be loaded; results may be partial                                 |
     /// | UNSAVED_CHANGES               | warning         | input/dependency has unsaved in-memory changes; file-based results show disk state|
+    /// |                               |                 | (scene_references: the Prefab Mode root being checked is not saved yet)          |
     /// | INPUT_NOT_FOUND               | error           | requested asset path / GUID does not exist (skipped)                              |
-    /// | TARGET_USED                   | info            | reverse: target is referenced by N assets / scene objects                         |
-    /// | TARGET_UNUSED                 | info            | reverse: no reference found in search_root or loaded scenes (see caveats)         |
+    /// | TARGET_USED                   | info            | reverse: target is referenced by N assets (or only by other files of the target  |
+    /// |                               |                 | set: deleting the whole set is fine, deleting just this file is not)             |
+    /// | TARGET_UNUSED                 | info            | reverse: no reference from search_root, other targets or loaded scenes (caveats: |
+    /// |                               |                 | binary files, name-based use from code; check 'conclusive')                      |
     /// | USED_IN_OPEN_SCENE            | info            | reverse: a loaded scene object references the target in memory                    |
     /// | NAME_BASED_REFERENCE_POSSIBLE | info            | reverse: shaders/scripts/Resources can be used by name from code (not detectable) |
     /// | PACKAGE_LIST_FAILED           | warning         | the Package Manager list could not be read; package versions may be missing       |
+    /// | ISSUES_CAPPED                 | info            | more than 100 issues of one code: the rest are counted in issues_capped           |
+    /// | FILE_LIST_WRITE_FAILED        | warning         | dependencies: the dependency list TSV could not be written (report still returned)|
+    /// | SCENE_DIRTIED                 | warning         | a loaded scene became dirty during the run (should never happen; check the scene) |
+    /// | PLAY_MODE                     | warning         | run in Play mode: scene objects are the runtime copies (e.g. after NDMF / Modular |
+    /// |                               |                 | Avatar "Apply on Play"), not the saved/edit-mode scene                            |
     /// | INVALID_ARGUMENT              | (fail code)     | bad mode / export_root / search_root                                              |
     /// | NO_INPUT                      | (fail code)     | no usable asset (and no target) to analyse                                        |
     /// | TARGET_NOT_FOUND              | (fail code)     | target spec did not resolve to a GameObject                                       |
@@ -74,7 +100,35 @@ namespace Naoking.ClaudeCreatorTools
         const double DefaultMaxFileMb = 50;
         const double DefaultLargeFileMb = 4;
         const int MaxIssuesPerCode = 100;
+        const int TimeBudgetMarginSeconds = 5;
+
+        /// <summary>
+        /// timeout_seconds the menu items pass: no MCP call is waiting, but the progress bar cannot be cancelled, so the editor
+        /// never freezes indefinitely (the scans stop after <see cref="MenuTimeBudgetSeconds"/>).
+        /// </summary>
+        internal const int MenuTimeoutSeconds = 305;
+        internal const double MenuTimeBudgetSeconds = MenuTimeoutSeconds - TimeBudgetMarginSeconds;
+
+        /// <summary>Japanese names of the time-budget phases for SCAN_INCOMPLETE (the code stays in time_budget.stopped_at).</summary>
+        static readonly Dictionary<string, string> PhaseLabels = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["target_scan"] = "対象オブジェクトの参照収集",
+            ["guid_scan"] = "GUID 参照の走査",
+            ["load_scan"] = "Missing の読み込み確認",
+            ["referrer_graph"] = "参照元の集計",
+            ["package_usage"] = "パッケージごとの使用元の集計",
+            ["file_scan"] = "使用元ファイルの検索",
+            ["scene_scan"] = "シーン内の参照確認",
+            ["outbound_scan"] = "対象内の参照確認",
+            ["inbound_scan"] = "対象への参照確認",
+        };
         const int MaxVisitsPerObject = 200000;
+
+        /// <summary>
+        /// NDMF (installed with Modular Avatar) keeps this scene loaded additively for its preview: proxy renderers and bones with
+        /// HideFlags.DontSave, named like the originals. It is never saved, so its objects are not users or exportable content.
+        /// </summary>
+        const string NdmfPreviewSceneName = "___NDMF Preview___";
         const int ArrayPeekThreshold = 64;
 
         /// <summary>GUIDs of Unity's built-in resource files: references to them always resolve.</summary>
@@ -107,13 +161,34 @@ namespace Naoking.ClaudeCreatorTools
             var raw = args.GetString("mode", null);
             var mode = args.GetEnum("mode", ModeDependencies, ModeDependencies, ModeReverse, ModeSceneReferences);
             if (!string.IsNullOrWhiteSpace(raw) && !string.Equals(raw.Trim(), mode, StringComparison.OrdinalIgnoreCase))
-                return CctResult.Fail($"mode '{raw}' は不正です (dependencies / reverse / scene_references のいずれか)", "INVALID_ARGUMENT");
+                return CctResult.Fail($"mode '{raw}' は指定できません。dependencies / reverse / scene_references のいずれかを指定してください", "INVALID_ARGUMENT");
+
+            // Read-only guarantee: remember which loaded scenes were clean, and report any that the run dirtied (NDMF's preview
+            // scene is excluded: NDMF itself dirties and cleans it).
+            var cleanScenes = new HashSet<int>(CctTargets.LoadedScenes().Where(s => !s.isDirty && !IsTransientScene(s)).Select(s => s.handle));
+            CctResult r;
             switch (mode)
             {
-                case ModeReverse: return RunReverse(args);
-                case ModeSceneReferences: return RunSceneReferences(args);
-                default: return RunDependencies(args);
+                case ModeReverse: r = RunReverse(args); break;
+                case ModeSceneReferences: r = RunSceneReferences(args); break;
+                default: r = RunDependencies(args); break;
             }
+            // In Play mode the scene holds runtime copies (NDMF/MA "Apply on Play" has already merged armatures, removed MA
+            // components and baked meshes), so in-memory results do not describe what would be exported.
+            var targetSpec = args.GetString("target", null)?.Trim();
+            bool readsScene = mode == ModeSceneReferences ||
+                              (mode == ModeReverse && args.GetBool("scan_open_scenes", true)) ||
+                              (mode == ModeDependencies && !string.IsNullOrEmpty(targetSpec) &&
+                               !(CctPaths.IsAssetPath(targetSpec) && targetSpec.IndexOf(".unity:", StringComparison.OrdinalIgnoreCase) < 0));
+            if (readsScene && EditorApplication.isPlayingOrWillChangePlaymode)
+                r.AddIssue(CctSeverity.Warning, "PLAY_MODE",
+                    "Play モード中に実行しました。シーン内の結果は実行時の状態 (NDMF / Modular Avatar の Apply on Play 適用後など) で、保存・書き出しされる内容とは異なります。Play モードを終了してから再実行してください");
+            foreach (var s in CctTargets.LoadedScenes())
+                if (s.isDirty && cleanScenes.Contains(s.handle))
+                    r.AddIssue(CctSeverity.Warning, "SCENE_DIRTIED",
+                        $"実行中にシーン '{s.name}' が未保存状態になりました (このツールは変更しないはずです)。意図しない変更がないか確認し、不要なら保存せずに再読み込みしてください",
+                        value: s.path);
+            return r;
         }
 
         // ------------------------------------------------------------------ shared context
@@ -125,6 +200,7 @@ namespace Naoking.ClaudeCreatorTools
             public string Version;
             public string Source;
             public string ResolvedPath;
+            public List<string> DependsOn; // null until read (see Context.DependsOn)
         }
 
         /// <summary>Per-run state (nothing static survives between runs, so domain reloads cannot leave stale caches).</summary>
@@ -140,12 +216,74 @@ namespace Naoking.ClaudeCreatorTools
             readonly Dictionary<string, int> _issueCounts = new Dictionary<string, int>(StringComparer.Ordinal);
             readonly Dictionary<string, int> _issuesOmitted = new Dictionary<string, int>(StringComparer.Ordinal);
 
+            /// <summary>"C:/.../Project/" computed once: CctPaths.ProjectRoot re-reads Application.dataPath on every call, and a
+            /// reverse scan resolves two paths per file.</summary>
+            readonly string _projectRootSlash = CctPaths.ProjectRoot.TrimEnd('/') + "/";
+
+            /// <summary>Seconds the scans may take before they stop: timeout_seconds - 5, or less when time_budget_seconds asks for less.</summary>
+            public readonly double BudgetSeconds;
+            readonly Stopwatch _clock = Stopwatch.StartNew();
+
+            /// <summary>Scan phase at which the time budget ran out (null = every scan ran to completion).</summary>
+            public string StoppedAt { get; private set; }
+
+            /// <summary>time_budget_seconds asked for more than the call may take, so it was lowered to timeout_seconds - 5.</summary>
+            readonly bool _limitedByTimeout;
+
             public Context(CctResult r, CctArgs args)
             {
                 R = r;
                 MaxEntries = args.GetInt("max_entries", DefaultMaxEntries, 1, 2000);
                 var mb = args.GetDouble("max_file_mb", DefaultMaxFileMb);
                 MaxFileBytes = mb <= 0 || double.IsNaN(mb) ? 0 : (long)(mb * 1024 * 1024);
+                // The MCP server (HTTP) waits max(30, min(timeout_seconds, 3600)) s and cannot interrupt a synchronous handler:
+                // a call that overruns returns a timeout error while Unity stays blocked, and a blind retry runs it twice. So the
+                // scans always stop a few seconds before that limit; time_budget_seconds can only shorten it (an LLM passing
+                // time_budget_seconds=120 without timeout_seconds would otherwise outlive its own call). Menu runs pass a large
+                // timeout_seconds for the same reason.
+                var timeout = args.GetInt("timeout_seconds", 0, 0, 3600);
+                double callLimit = Math.Max(30, timeout) - TimeBudgetMarginSeconds;
+                var requested = args.GetDouble("time_budget_seconds", 0);
+                if (requested > 0 && !double.IsNaN(requested) && !double.IsInfinity(requested))
+                {
+                    BudgetSeconds = Math.Min(requested, callLimit);
+                    _limitedByTimeout = requested > callLimit;
+                }
+                else BudgetSeconds = callLimit;
+            }
+
+            /// <summary>True once the time budget is used up; the first call that notices records <paramref name="phase"/>.</summary>
+            public bool OutOfTime(string phase)
+            {
+                if (StoppedAt != null) return true;
+                if (BudgetSeconds <= 0 || _clock.Elapsed.TotalSeconds < BudgetSeconds) return false;
+                StoppedAt = phase;
+                return true;
+            }
+
+            public bool Complete => StoppedAt == null;
+
+            /// <summary>Every scan ran to the end, or the budget ran out only in one of <paramref name="optionalPhases"/>.</summary>
+            public bool CompleteExcept(params string[] optionalPhases) => StoppedAt == null || Array.IndexOf(optionalPhases, StoppedAt) >= 0;
+
+            /// <summary>Call once at the end: records the budget and, if it ran out, a SCAN_INCOMPLETE warning.</summary>
+            public void FlushTimeBudget()
+            {
+                var d = new Dictionary<string, object>
+                {
+                    ["seconds"] = Math.Round(BudgetSeconds, 1),
+                    ["exceeded"] = StoppedAt != null,
+                };
+                if (StoppedAt != null) d["stopped_at"] = StoppedAt;
+                if (_limitedByTimeout) d["limited_by_timeout_seconds"] = true;
+                R.Put("time_budget", d);
+                if (StoppedAt == null) return;
+                var label = PhaseLabels.TryGetValue(StoppedAt, out var l) ? l : StoppedAt;
+                R.AddIssue(CctSeverity.Warning, "SCAN_INCOMPLETE",
+                    $"時間制限 {Fmt(BudgetSeconds)} 秒に達したため「{label}」の途中で打ち切りました (この走査と、これより後の走査の結果は不完全です)。" +
+                    "MCP からは timeout_seconds を増やして (例: 240) 再実行し、それでも足りなければ対象のフォルダーや search_root を絞ってください" +
+                    $" (メニューからの実行は {Fmt(MenuTimeBudgetSeconds)} 秒まで)",
+                    value: StoppedAt);
             }
 
             public Dictionary<string, PackageEntry> Packages
@@ -191,6 +329,37 @@ namespace Naoking.ClaudeCreatorTools
                 return p;
             }
 
+            /// <summary>
+            /// "name range" entries from the package's package.json (vpmDependencies first, then UPM dependencies; com.unity.modules.*
+            /// left out): what the destination must also install, e.g. Modular Avatar -> nadena.dev.ndmf. Empty when unreadable.
+            /// </summary>
+            public List<string> DependsOn(PackageEntry p)
+            {
+                if (p == null) return new List<string>();
+                if (p.DependsOn != null) return p.DependsOn;
+                var list = new List<string>();
+                try
+                {
+                    var dir = !string.IsNullOrEmpty(p.ResolvedPath) ? p.ResolvedPath : CctPaths.Combine(CctPaths.ProjectRoot, "Packages", p.Name);
+                    var json = CctPaths.Combine(dir, "package.json");
+                    if (File.Exists(json) && CctJson.Parse(File.ReadAllText(json, Encoding.UTF8).TrimStart('\uFEFF')) is Dictionary<string, object> d)
+                        foreach (var section in new[] { "vpmDependencies", "dependencies" })
+                        {
+                            if (!d.TryGetValue(section, out var v) || !(v is Dictionary<string, object> deps)) continue;
+                            foreach (var kv in deps.OrderBy(x => x.Key, StringComparer.Ordinal))
+                            {
+                                if (kv.Key.StartsWith("com.unity.modules.", StringComparison.Ordinal)) continue;
+                                if (list.Any(e => e == kv.Key || e.StartsWith(kv.Key + " ", StringComparison.Ordinal))) continue;
+                                var range = kv.Value as string;
+                                list.Add(string.IsNullOrWhiteSpace(range) ? kv.Key : kv.Key + " " + range.Trim());
+                            }
+                        }
+                }
+                catch (Exception) { /* unreadable package.json: no dependency info */ }
+                p.DependsOn = list;
+                return list;
+            }
+
             /// <summary>Asset path -> file on disk (Packages/ resolved through the Package Manager, e.g. Library/PackageCache).</summary>
             public string ToPhysical(string assetPath)
             {
@@ -201,7 +370,7 @@ namespace Naoking.ClaudeCreatorTools
                     if (pkg != null && !string.IsNullOrEmpty(pkg.ResolvedPath))
                         return CctPaths.Normalize(pkg.ResolvedPath).TrimEnd('/') + assetPath.Substring("Packages/".Length + name.Length);
                 }
-                return CctPaths.AssetToAbsolute(assetPath);
+                return _projectRootSlash + assetPath;
             }
 
             /// <summary>
@@ -296,6 +465,8 @@ namespace Naoking.ClaudeCreatorTools
         {
             public readonly List<string> Files = new List<string>();
             public readonly List<string> Folders = new List<string>();
+            /// <summary>Files named directly (not found by expanding a folder): what the summary lists, the TSV/report has the rest.</summary>
+            public readonly List<string> ExplicitFiles = new List<string>();
             public readonly HashSet<string> FileSet = new HashSet<string>(StringComparer.Ordinal);
             public int FromFolders;
             public bool FromSelection;
@@ -304,6 +475,12 @@ namespace Naoking.ClaudeCreatorTools
             public void AddFile(string p)
             {
                 if (FileSet.Add(p)) Files.Add(p);
+            }
+
+            public void AddExplicitFile(string p)
+            {
+                AddFile(p);
+                if (!ExplicitFiles.Contains(p)) ExplicitFiles.Add(p);
             }
         }
 
@@ -337,7 +514,7 @@ namespace Naoking.ClaudeCreatorTools
                         set.AddFile(a);
                     }
                 }
-                else if (set.Files.Count < MaxInputFiles) set.AddFile(p);
+                else if (set.Files.Count < MaxInputFiles) set.AddExplicitFile(p);
                 else set.Truncated = true;
             }
             set.Files.Sort(StringComparer.Ordinal);
@@ -352,6 +529,24 @@ namespace Naoking.ClaudeCreatorTools
         /// </summary>
         static string CanonicalAssetPath(string raw, out bool isFolder)
         {
+            var p = CanonicalAssetPathExact(raw, out isFolder);
+            if (p != null || string.IsNullOrWhiteSpace(raw)) return p;
+            // Japanese names from archives made on macOS are often NFD (dakuten stored separately, e.g. "カ\u3099"), while a path
+            // retyped by Claude or the user is usually NFC; the AssetDatabase matches exact code points, so try both forms.
+            foreach (var form in new[] { NormalizationForm.FormC, NormalizationForm.FormD })
+            {
+                string alt;
+                try { alt = raw.Normalize(form); }
+                catch (ArgumentException) { continue; }
+                if (alt == raw) continue;
+                p = CanonicalAssetPathExact(alt, out isFolder);
+                if (p != null) return p;
+            }
+            return null;
+        }
+
+        static string CanonicalAssetPathExact(string raw, out bool isFolder)
+        {
             isFolder = false;
             if (string.IsNullOrWhiteSpace(raw)) return null;
             var p = CctPaths.Normalize(raw.Trim().Trim('"', '\'')).TrimEnd('/');
@@ -365,6 +560,11 @@ namespace Naoking.ClaudeCreatorTools
                 var root = CctPaths.ProjectRoot.TrimEnd('/') + "/";
                 if (p.StartsWith(root, StringComparison.OrdinalIgnoreCase)) p = p.Substring(root.Length);
                 if (p.StartsWith("./", StringComparison.Ordinal)) p = p.Substring(2);
+                // "assets/..." typed in lower case (Windows paths are case-insensitive): fix the root folder's spelling, the
+                // canonical spelling of the rest comes back from GUIDToAssetPath below.
+                if (string.Equals(p, "Assets", StringComparison.OrdinalIgnoreCase)) p = "Assets";
+                else if (p.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase)) p = "Assets/" + p.Substring(7);
+                else if (p.StartsWith("Packages/", StringComparison.OrdinalIgnoreCase)) p = "Packages/" + p.Substring(9);
                 if (!CctPaths.IsAssetPath(p) || p.Split('/').Any(s => s == "..")) return null;
                 if (AssetDatabase.IsValidFolder(p))
                 {
@@ -463,6 +663,13 @@ namespace Naoking.ClaudeCreatorTools
             return all.Take(max).Cast<object>().ToList();
         }
 
+        /// <summary>Puts a capped list under <paramref name="key"/> and, when entries were dropped, "&lt;key&gt;_omitted".</summary>
+        static void PutCapped<T>(CctResult r, string key, IEnumerable<T> items, int max)
+        {
+            r.Put(key, Cap(items, max, out var omitted));
+            if (omitted > 0) r.Put(key + "_omitted", omitted);
+        }
+
         /// <summary>"m_Bones.Array.data[12]" -> "m_Bones[12]" (readable); aggregate form uses "[]".</summary>
         static string PrettyPropertyPath(string propertyPath) => propertyPath?.Replace(".Array.data[", "[");
 
@@ -504,27 +711,57 @@ namespace Naoking.ClaudeCreatorTools
             return owner != null ? owner.GetType().Name + " '" + owner.name + "'" : "?";
         }
 
-        /// <summary>The loaded scenes plus the Prefab Mode stage scene (if one is open), for in-memory scans.</summary>
-        static List<UnityEngine.SceneManagement.Scene> ScenesToScan(out string stageAssetPath)
+        /// <summary>
+        /// The loaded scenes plus the Prefab Mode stage scene (if one is open), for in-memory scans. <paramref name="stageScene"/>
+        /// is that preview scene (default = none): compare scenes with it, not by an empty path, because an Untitled (never saved)
+        /// main scene has an empty path too.
+        /// </summary>
+        static List<UnityEngine.SceneManagement.Scene> ScenesToScan(out string stageAssetPath, out UnityEngine.SceneManagement.Scene stageScene)
         {
-            var list = CctTargets.LoadedScenes().ToList();
-            stageAssetPath = null;
+            var list = CctTargets.LoadedScenes().Where(s => !IsTransientScene(s)).ToList();
+            stageAssetPath = CurrentStageScene(out stageScene);
+            if (stageAssetPath != null) list.Add(stageScene);
+            return list;
+        }
+
+        /// <summary>Asset path of the open Prefab Mode stage and its preview scene; null when only the main stage is open.</summary>
+        static string CurrentStageScene(out UnityEngine.SceneManagement.Scene scene)
+        {
+            scene = default;
             try
             {
                 var stage = UnityEditor.SceneManagement.StageUtility.GetCurrentStage();
                 if (stage is UnityEditor.SceneManagement.PreviewSceneStage ps && ps.scene.IsValid() && ps.scene.isLoaded &&
                     stage != UnityEditor.SceneManagement.StageUtility.GetMainStage())
                 {
-                    list.Add(ps.scene);
-                    stageAssetPath = stage.assetPath;
+                    scene = ps.scene;
+                    return stage.assetPath ?? "";
                 }
             }
             catch (Exception) { /* no prefab stage support: main scenes only */ }
-            return list;
+            return null;
         }
 
+        /// <summary>
+        /// Root of a prefab instance whose prefab asset is missing. IsPrefabAssetMissing is true for every object of such an
+        /// instance (with a scene backup its children are kept), so only the topmost object of each instance is counted.
+        /// </summary>
+        static bool IsMissingPrefabInstanceRoot(GameObject go)
+        {
+            try
+            {
+                if (!PrefabUtility.IsPrefabAssetMissing(go)) return false;
+                var parent = go.transform.parent;
+                if (parent == null || !PrefabUtility.IsPrefabAssetMissing(parent.gameObject)) return true;
+                return PrefabUtility.GetPrefabInstanceHandle(parent.gameObject) != PrefabUtility.GetPrefabInstanceHandle(go);
+            }
+            catch (Exception) { return false; /* not a prefab instance */ }
+        }
+
+        /// <summary>Every GameObject of a scene except transient ones (see <see cref="IsTransient"/>).</summary>
         static IEnumerable<GameObject> AllGameObjects(UnityEngine.SceneManagement.Scene scene)
         {
+            if (IsTransientScene(scene)) yield break;
             GameObject[] roots;
             try { roots = scene.GetRootGameObjects(); }
             catch (Exception) { yield break; }
@@ -532,9 +769,15 @@ namespace Naoking.ClaudeCreatorTools
             {
                 if (root == null) continue;
                 foreach (var t in root.GetComponentsInChildren<Transform>(true))
-                    if (t != null) yield return t.gameObject;
+                    if (t != null && !IsTransient(t.gameObject)) yield return t.gameObject;
             }
         }
+
+        static bool IsTransientScene(UnityEngine.SceneManagement.Scene scene) => scene.IsValid() && scene.name == NdmfPreviewSceneName;
+
+        /// <summary>Editor-only objects that are never saved (DontSave, e.g. NDMF/MA preview proxies): not users, not exported.</summary>
+        static bool IsTransient(GameObject go) =>
+            go != null && ((go.hideFlags & HideFlags.DontSaveInEditor) != 0 || IsTransientScene(go.scene));
 
         static CctResult FailWith(CctResult partial, string message, string code, object details = null)
         {
@@ -717,9 +960,10 @@ namespace Naoking.ClaudeCreatorTools
         static void ScanChars(TextReader reader, bool wantKeys, HexHandler onHex)
         {
             const string RefPrefix = "guid: ";
+            const int TailLength = 7; // ring of the last 7 characters: "guid: " and the one before it
             var buf = new char[1 << 15];
             var run = new char[32];
-            var tail = new char[6]; // ring of the last 6 characters
+            var tail = new char[TailLength];
             int tailPos = 0;
             int runLen = 0;
             bool runStartOk = false, runIsRef = false;
@@ -742,11 +986,10 @@ namespace Naoking.ClaudeCreatorTools
                             runIsRef = false;
                             if (runStartOk && prev == ' ')
                             {
-                                runIsRef = true;
-                                for (int k = 0; k < 6; k++)
-                                {
-                                    if (tail[(tailPos + k) % 6] != RefPrefix[k]) { runIsRef = false; break; }
-                                }
+                                // "guid: " must be a whole key (not the end of e.g. "m_SourceGuid: "); tail[tailPos] is the oldest char.
+                                runIsRef = !IsWordChar(tail[tailPos]);
+                                for (int k = 0; k < RefPrefix.Length && runIsRef; k++)
+                                    if (tail[(tailPos + 1 + k) % TailLength] != RefPrefix[k]) runIsRef = false;
                             }
                         }
                         if (runLen < 32) run[runLen] = c;
@@ -760,7 +1003,7 @@ namespace Naoking.ClaudeCreatorTools
                     }
 
                     tail[tailPos] = c;
-                    if (++tailPos == 6) tailPos = 0;
+                    if (++tailPos == TailLength) tailPos = 0;
                     prev = c;
                     if (c == '\n')
                     {

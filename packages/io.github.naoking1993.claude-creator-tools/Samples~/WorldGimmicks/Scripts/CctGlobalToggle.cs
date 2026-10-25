@@ -15,7 +15,8 @@
 //   5. Master Only を ON にすると、インスタンスマスターだけが切り替えられます
 //      (他の人にはスイッチがインタラクト不可になります)。
 //   6. このスクリプトを載せた GameObject は常に Active にしておく
-//      (非アクティブだと同期を受け取れません)。また VRC Object Sync と同じ
+//      (非アクティブだと同期を受け取れません)。Targets にスイッチ自身を入れても無視されます
+//      (親 GameObject を入れるとスイッチごと非表示になり同期が止まるので入れないこと)。また VRC Object Sync と同じ
 //      GameObject には置かないこと (Manual 同期と ObjectSync の同居は SDK のビルドエラー)。
 //   UI ボタンから: On Click () → この GameObject → UdonBehaviour.SendCustomEvent → _Toggle / _TurnOn / _TurnOff
 //
@@ -167,7 +168,8 @@ namespace Naoking.ClaudeWorldGimmicks
             if (list == null) return;
             for (int i = 0; i < list.Length; i++)
             {
-                if (list[i] != null) list[i].SetActive(active);
+                // スイッチ自身は切り替えない (非アクティブになると同期を受け取れなくなる)。
+                if (list[i] != null && list[i] != gameObject) list[i].SetActive(active);
             }
         }
     }

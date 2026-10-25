@@ -10,7 +10,14 @@ namespace Naoking.ClaudeCreatorTools
 {
     public static partial class CctSnapshot
     {
-        const int PerKindIssueCap = 50;
+        /// <summary>Per-file info issues per kind; the restored/recreated/... lists carry every path anyway.</summary>
+        const int PerKindIssueCap = 10;
+
+        /// <summary>Restoring these makes Unity recompile and reload the domain once the call has returned.</summary>
+        static readonly HashSet<string> ScriptExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".cs", ".asmdef", ".asmref", ".dll", ".rsp",
+        };
 
         sealed class PlanItem
         {
@@ -20,6 +27,8 @@ namespace Naoking.ClaudeCreatorTools
             public bool WriteFile, WriteMeta, IsLoadedScene, SceneDirty, AssetDirty;
             public string SkipCode, SkipMessage, GuidNow;
             public bool Wrote, Failed;
+            /// <summary>blueprint_ids_now / blueprint_ids_snapshot when restoring would change the VRChat Blueprint ID.</summary>
+            public Dictionary<string, object> Blueprint;
 
             /// <summary>Actions that change something (files, imports or open scenes).</summary>
             public bool Actionable => Action == "overwrite" || Action == "recreate" || Action == "meta" || Action == "reload" || Action == "reimport";
@@ -42,15 +51,25 @@ namespace Naoking.ClaudeCreatorTools
             var m = LoadManifest(id, out var dir, out var failure);
             if (m == null) return failure;
             bool confirm = args.GetBool("confirm", false);
-            int maxEntries = args.GetInt("max_entries", 200, 1, 5000);
-            bool busy = EditorApplication.isPlayingOrWillChangePlaymode || EditorApplication.isCompiling || EditorApplication.isUpdating;
+            int maxEntries = args.GetInt("max_entries", DefaultMaxEntries, 1, 5000);
+            // A running light bake would be cancelled by unloading its scene and could write LightingData over restored files.
+            bool baking = Lightmapping.isRunning;
+            bool playing = EditorApplication.isPlayingOrWillChangePlaymode;
+            var busyReasons = new List<string>();
+            if (playing) busyReasons.Add("Play モード中");
+            if (EditorApplication.isCompiling) busyReasons.Add("コンパイル中");
+            if (EditorApplication.isUpdating) busyReasons.Add("アセットのインポート中");
+            if (baking) busyReasons.Add("ライトベイク中");
+            bool busy = busyReasons.Count > 0;
+            var busyText = string.Join("・", busyReasons);
             if (confirm && busy)
-                return CctResult.Fail("Play モード中・コンパイル中・インポート中は復元できません。Edit モードで処理が終わってから再実行してください", "EDITOR_BUSY",
+                return CctResult.Fail($"{busyText}のため復元できません。" + (playing ? "Play モードを終了し、" : "") + "処理が終わってから再実行してください", "EDITOR_BUSY",
                     new Dictionary<string, object>
                     {
-                        ["is_playing"] = EditorApplication.isPlayingOrWillChangePlaymode,
+                        ["is_playing"] = playing,
                         ["is_compiling"] = EditorApplication.isCompiling,
                         ["is_updating"] = EditorApplication.isUpdating,
+                        ["is_baking_lighting"] = baking,
                     });
 
             var r = CctResult.Ok("");
@@ -60,15 +79,14 @@ namespace Naoking.ClaudeCreatorTools
             r.Put("created_at", m.CreatedAt);
             WarnProjectRoot(m, r);
             if (busy)
-                r.AddIssue(CctSeverity.Warning, "EDITOR_BUSY", "現在 Play モード中・コンパイル中・インポート中のため、confirm=true の復元は拒否されます");
+                r.AddIssue(CctSeverity.Warning, "EDITOR_BUSY", $"現在{busyText}のため、このままでは confirm=true の復元は拒否されます (終わってから実行してください)");
 
             // ---- select entries
             var selected = SelectEntries(m, args.GetStringList("assets"), r);
             if (selected.Count == 0)
             {
                 var f = CctResult.Fail("復元対象がスナップショット内にありません", "NOT_IN_SNAPSHOT");
-                CopyIssues(r, f);
-                return f;
+                return WithContext(f, r, m);
             }
 
             // ---- plan
@@ -94,32 +112,34 @@ namespace Naoking.ClaudeCreatorTools
             if (addedCount > 0)
                 r.AddIssue(CctSeverity.Info, "FILES_ADDED",
                     $"スナップショット後に対象フォルダへ追加された {addedCount} 個のファイルは、restore では削除しません (diff で一覧できます)", value: addedCount);
+            var full = new Dictionary<string, object>();
+            ReportFilesCreatedByRestore(m, selected, r, maxEntries, full);
 
             r.Put("snapshot_dir", dir);
             r.Put("unchanged_count", plan.Count(it => it.Action == "unchanged"));
-            r.Put("skipped", Cap(plan.Where(it => it.Action == "skip").Select(it => (object)new Dictionary<string, object>
+            PutList(r, "skipped", plan.Where(it => it.Action == "skip").Select(it => (object)new Dictionary<string, object>
             {
                 ["asset_path"] = it.Entry.AssetPath,
                 ["code"] = it.SkipCode,
                 ["reason"] = it.SkipMessage,
-            }), maxEntries, out var skippedOmitted));
-            if (skippedOmitted > 0) r.Put("skipped_omitted", skippedOmitted);
+            }), maxEntries, full);
 
             if (!confirm)
             {
                 r.Put("dry_run", true);
-                r.Put("would_overwrite", Paths(actionable, "overwrite", maxEntries));
-                r.Put("would_recreate", Paths(actionable, "recreate", maxEntries));
-                r.Put("would_restore_meta", Paths(actionable, "meta", maxEntries));
-                r.Put("would_reimport", Paths(actionable, "reimport", maxEntries));
-                r.Put("would_reload_scenes", actionable.Where(it => it.NeedsSceneClose).Select(it => (object)new Dictionary<string, object>
+                PutList(r, "would_overwrite", Paths(actionable, "overwrite"), maxEntries, full);
+                PutList(r, "would_recreate", Paths(actionable, "recreate"), maxEntries, full);
+                PutList(r, "would_restore_meta", Paths(actionable, "meta"), maxEntries, full);
+                PutList(r, "would_reimport", Paths(actionable, "reimport"), maxEntries, full);
+                PutList(r, "would_reload_scenes", actionable.Where(it => it.NeedsSceneClose).Select(it => (object)new Dictionary<string, object>
                 {
                     ["asset_path"] = it.Path,
                     ["unsaved_changes_discarded"] = it.SceneDirty,
-                }).ToList());
-                r.Put("would_create_folders", foldersToCreate.Cast<object>().ToList());
+                }), maxEntries, full);
+                PutList(r, "would_create_folders", foldersToCreate.Cast<object>(), maxEntries, full);
+                PutFullLists(r, full);
                 r.AddIssue(CctSeverity.Warning, "CONFIRM_REQUIRED",
-                    "確認のための試行です。何も変更していません。上の内容で復元するには confirm=true を付けて再実行してください (復元前の状態は自動でスナップショットされます)", value: m.Id);
+                    "確認用の dry run です。まだ何も変更していません。この内容をユーザーに見せて了承を得てから、confirm=true を付けて再実行してください (復元前の状態は自動でスナップショットされます)", value: m.Id);
                 r.Message = $"[dry run] '{m.Id}' から復元すると: 上書き {Count(actionable, "overwrite")} / 再作成 {Count(actionable, "recreate")} / " +
                             $"meta {Count(actionable, "meta")} / シーン再読込 {actionable.Count(it => it.NeedsSceneClose)} / 再インポート {Count(actionable, "reimport")} / " +
                             $"変更なし {plan.Count(it => it.Action == "unchanged")} / スキップ {plan.Count(it => it.Action == "skip")} (未実行)";
@@ -128,13 +148,13 @@ namespace Naoking.ClaudeCreatorTools
 
             if (stageBlocked)
             {
-                var f = CctResult.Fail($"'{stagePath}' が Prefab モードで未保存のため復元を中止しました (何も変更していません)", "PREFAB_STAGE_UNSAVED");
-                CopyIssues(r, f);
-                return f;
+                var f = CctResult.Fail($"'{stagePath}' が Prefab モードで未保存のため復元を中止しました (何も変更していません)。Prefab モードで保存するか閉じてから再実行してください", "PREFAB_STAGE_UNSAVED");
+                return WithContext(f, r, m);
             }
             r.Put("dry_run", false);
             if (actionable.Count == 0)
             {
+                PutFullLists(r, full);
                 r.Put("pre_restore_snapshot_id", null);
                 r.Message = plan.Any(it => it.Action == "skip")
                     ? $"'{m.Id}': 復元できる対象がありません (スキップ {plan.Count(it => it.Action == "skip")} 件。issues を確認してください)"
@@ -143,8 +163,9 @@ namespace Naoking.ClaudeCreatorTools
             }
 
             // ---- 1. back up the current state of everything that will be touched
+            // An open scene whose file was deleted still exists in memory (possibly as its only copy), so it is backed up too.
             string preId = null;
-            var preSpecs = actionable.Where(it => it.Action != "recreate").Select(it => it.Path).ToList();
+            var preSpecs = actionable.Where(it => it.Action != "recreate" || it.IsLoadedScene).Select(it => it.Path).ToList();
             if (preSpecs.Count > 0)
             {
                 var preReq = new CaptureRequest
@@ -156,7 +177,7 @@ namespace Naoking.ClaudeCreatorTools
                     IncludeOpenScenes = false,
                     IncludeDependencies = false,
                     MaxTotalMb = double.MaxValue,
-                    PreSkipped = actionable.Where(it => it.Action == "recreate").Select(it => new Dictionary<string, object>
+                    PreSkipped = actionable.Where(it => it.Action == "recreate" && !it.IsLoadedScene).Select(it => new Dictionary<string, object>
                     {
                         ["asset_path"] = it.Path,
                         ["code"] = "MISSING_BEFORE_RESTORE",
@@ -170,20 +191,36 @@ namespace Naoking.ClaudeCreatorTools
                     var f = CctResult.Fail("復元前の現状スナップショットを作成できなかったため、復元を中止しました (何も変更していません)" +
                                            (preFailure != null ? ": " + preFailure.Message : ""), "PRE_RESTORE_FAILED",
                         new Dictionary<string, object> { ["pre_restore_snapshot_id"] = pre?.Id });
-                    CopyIssues(r, f);
+                    WithContext(f, r, m);
                     CopyIssues(preResult, f);
                     if (preFailure != null) CopyIssues(preFailure, f);
                     return f;
                 }
                 preId = pre.Id;
+                // Unloading a scene discards its in-memory state; that is only acceptable when the backup really holds it
+                // (SaveScene as copy can fail, and Capture then falls back to the file on disk).
+                var unbacked = actionable.Where(it => it.NeedsSceneClose && (it.SceneDirty || it.Action == "recreate"))
+                    .Where(it => !pre.Files.Any(f => f.SceneState == "in_memory" && string.Equals(f.AssetPath, it.Path, StringComparison.OrdinalIgnoreCase)))
+                    .Select(it => (object)it.Path).ToList();
+                if (unbacked.Count > 0)
+                {
+                    var f = CctResult.Fail("開いているシーンの未保存の変更を復元前スナップショットに保存できなかったため、復元を中止しました (何も変更していません)。" +
+                                           "シーンを保存するか、そのシーンを assets から外して再実行してください", "PRE_RESTORE_FAILED",
+                        new Dictionary<string, object> { ["pre_restore_snapshot_id"] = preId, ["scenes_not_backed_up"] = unbacked });
+                    WithContext(f, r, m);
+                    CopyIssues(preResult, f);
+                    return f;
+                }
                 foreach (var issue in preResult.Issues)
                 {
                     // Unsaved-asset warnings were already reported for the restore itself.
                     var code = issue.TryGetValue("code", out var c) ? c as string : null;
                     if (code != "ASSET_HAS_UNSAVED_CHANGES" && code != "PREFAB_STAGE_UNSAVED") r.Issues.Add(issue);
                 }
+                int recreateCount = actionable.Count(it => it.Action == "recreate" && !it.IsLoadedScene);
                 r.AddIssue(CctSeverity.Info, "PRE_RESTORE_SNAPSHOT",
-                    $"復元前の状態をスナップショット '{preId}' に保存しました (この復元を取り消すには restore id={preId})", value: preId);
+                    $"復元前の状態をスナップショット '{preId}' に保存しました (この復元を取り消すには restore id={preId}" +
+                    (recreateCount > 0 ? $"。ただし今回再作成する {recreateCount} 個のファイルは取り消しでは削除されません" : "") + ")", value: preId);
             }
             else
             {
@@ -217,14 +254,13 @@ namespace Naoking.ClaudeCreatorTools
             }
             finally
             {
-                ReopenScenes(arrangement, r, reloaded);
+                ReopenScenes(arrangement, r, reloaded, preId);
             }
             if (aborted)
             {
                 var f = CctResult.Fail("開いているシーンを一時的に閉じられなかったため、復元を中止しました (ファイルは変更していません)", "SCENE_CLOSE_FAILED",
                     new Dictionary<string, object> { ["pre_restore_snapshot_id"] = preId, ["reloaded_scenes"] = reloaded });
-                CopyIssues(r, f);
-                return f;
+                return WithContext(f, r, m);
             }
 
             // ---- 3. verify and report
@@ -238,7 +274,7 @@ namespace Naoking.ClaudeCreatorTools
             var imported = actionable.Where(it => it.Wrote || (it.Action == "reimport" && !it.Failed)).Select(it => it.Path).ToList();
             foreach (var p in FindDirtyLoadedAssets(imported).Take(30))
                 r.AddIssue(CctSeverity.Warning, "ASSET_STILL_DIRTY",
-                    $"'{p}' は再インポート後もメモリ上に未保存の変更が残っています。保存 (Ctrl+S / SaveAssets) すると復元内容が上書きされます。Unity を再起動するか該当アセットを再インポートしてください", asset: p);
+                    $"'{p}' は再インポート後もメモリ上に未保存の変更が残っています。このまま保存 (Ctrl+S や File > Save Project など) するとその変更で復元内容が上書きされます。保存せずに Project ウィンドウで右クリック → Reimport し、diff で一致を確認してください", asset: p);
 
             var restored = Done(actionable, "overwrite");
             var recreated = Done(actionable, "recreate");
@@ -249,15 +285,20 @@ namespace Naoking.ClaudeCreatorTools
             AddPerFileIssues(r, recreated, "FILE_RECREATED", "削除されていたファイルを再作成しました (GUID も復元)");
             AddPerFileIssues(r, metaRestored, "META_RESTORED", ".meta (GUID / インポート設定) を復元しました");
             AddPerFileIssues(r, reimported, "ASSET_REIMPORTED", "未保存のメモリ上の変更を破棄するため再インポートしました");
+            var scripts = actionable.Where(it => it.Wrote && ScriptExtensions.Contains(Path.GetExtension(it.Path))).Select(it => it.Path).ToList();
+            if (scripts.Count > 0)
+                r.AddIssue(CctSeverity.Info, "SCRIPTS_RESTORED",
+                    $"スクリプト / アセンブリ定義を {scripts.Count} 個復元したため、この呼び出しの後にコンパイルとドメインリロードが走ります。MCP が再接続してから次の操作をしてください",
+                    value: scripts.Count, asset: scripts[0]);
 
-            r.Put("restored", Cap(restored, maxEntries, out var o1));
-            r.Put("recreated", Cap(recreated, maxEntries, out var o2));
-            r.Put("meta_restored", Cap(metaRestored, maxEntries, out var o3));
-            r.Put("reimported", Cap(reimported, maxEntries, out var o4));
-            r.Put("reloaded_scenes", reloaded);
-            r.Put("created_folders", createdFolders.Cast<object>().ToList());
-            r.Put("failed", failed);
-            if (o1 + o2 + o3 + o4 > 0) r.Put("lists_omitted", o1 + o2 + o3 + o4);
+            PutList(r, "restored", restored, maxEntries, full);
+            PutList(r, "recreated", recreated, maxEntries, full);
+            PutList(r, "meta_restored", metaRestored, maxEntries, full);
+            PutList(r, "reimported", reimported, maxEntries, full);
+            PutList(r, "reloaded_scenes", reloaded, maxEntries, full);
+            PutList(r, "created_folders", createdFolders.Cast<object>(), maxEntries, full);
+            PutList(r, "failed", failed, maxEntries, full);
+            PutFullLists(r, full);
 
             int succeeded = restored.Count + recreated.Count + metaRestored.Count + reimported.Count + reloaded.Count;
             var summary = $"上書き {restored.Count} / 再作成 {recreated.Count} / meta {metaRestored.Count} / シーン再読込 {reloaded.Count} / 再インポート {reimported.Count}" +
@@ -266,11 +307,19 @@ namespace Naoking.ClaudeCreatorTools
             {
                 var f = CctResult.Fail($"'{m.Id}' からの復元はすべて失敗しました: {summary}", "RESTORE_FAILED",
                     new Dictionary<string, object> { ["failed"] = failed, ["pre_restore_snapshot_id"] = preId });
-                CopyIssues(r, f);
-                return f;
+                return WithContext(f, r, m);
             }
             r.Message = $"'{m.Id}' から復元しました: {summary}";
             return r;
+        }
+
+        /// <summary>A failed restore keeps the issues gathered so far and says which snapshot it was about.</summary>
+        static CctResult WithContext(CctResult f, CctResult r, Manifest m)
+        {
+            CopyIssues(r, f);
+            f.Put("action", "restore");
+            if (m != null) f.Put("id", m.Id);
+            return f;
         }
 
         static List<FileEntry> SelectEntries(Manifest m, List<string> subset, CctResult r)
@@ -282,8 +331,10 @@ namespace Naoking.ClaudeCreatorTools
             {
                 if (!TryNormalizeAssetPath(raw, out var spec, out var code))
                 {
-                    r.AddIssue(CctSeverity.Error, code == "SKIPPED_PACKAGE" ? "SKIPPED_PACKAGE" : code == "NOT_ASSET_PATH" ? "NOT_ASSET_PATH" : "PATH_OUTSIDE_PROJECT",
-                        $"復元対象に指定できないパスです: {raw}", value: raw);
+                    if (code == "SKIPPED_PACKAGE")
+                        r.AddIssue(CctSeverity.Warning, code, $"Packages/ 以下はスナップショットの対象外のため復元できません: {raw}", value: raw);
+                    else
+                        r.AddIssue(CctSeverity.Error, code ?? "INVALID_PATH", $"復元対象に指定できないパスです ('Assets/...' から始まるパスで指定してください): {raw}", value: raw);
                     continue;
                 }
                 var matches = m.Files.Where(f => string.Equals(f.AssetPath, spec, StringComparison.OrdinalIgnoreCase) ||
@@ -350,6 +401,18 @@ namespace Naoking.ClaudeCreatorTools
                 return Skip(it, "SNAPSHOT_CORRUPT", $"'{path}.meta' の保存コピーが見つからないか内容が manifest と一致しません", r, CctSeverity.Error);
             if ((it.WriteFile && exists && IsReadOnly(it.TargetAbs)) || (it.WriteMeta && File.Exists(metaAbs) && IsReadOnly(metaAbs)))
                 return Skip(it, "FILE_READ_ONLY", $"'{path}' (または .meta) が読み取り専用のため上書きしません (バージョン管理のロック等)", r, CctSeverity.Error);
+
+            // VRChat: an old scene/prefab brings back its old Blueprint ID, which silently changes where the next upload goes.
+            if (it.Action == "overwrite")
+            {
+                var bp = new Dictionary<string, object>();
+                var bpMessage = CompareBlueprintIds(it.StoredAbs, it.TargetAbs, path, bp, true);
+                if (bpMessage != null)
+                {
+                    it.Blueprint = bp;
+                    r.AddIssue(CctSeverity.Warning, "BLUEPRINT_ID_CHANGES", bpMessage, asset: path);
+                }
+            }
 
             if (it.WriteMeta && !string.IsNullOrEmpty(e.Guid))
             {
@@ -482,7 +545,12 @@ namespace Naoking.ClaudeCreatorTools
             AssetDatabase.StartAssetEditing();
             try
             {
-                foreach (var p in paths) AssetDatabase.ImportAsset(p, ImportAssetOptions.ForceUpdate);
+                // Files are already written: an import error must not lose the rest of the report (pre-restore id).
+                foreach (var p in paths)
+                {
+                    try { AssetDatabase.ImportAsset(p, ImportAssetOptions.ForceUpdate); }
+                    catch (Exception e) { r.AddIssue(CctSeverity.Warning, "RESTORE_FAILED", $"'{p}' の再インポートで例外: {e.Message}", asset: p); }
+                }
             }
             finally
             {
@@ -493,7 +561,9 @@ namespace Naoking.ClaudeCreatorTools
         /// <summary>
         /// Unloads (keeps in the Hierarchy) every loaded scene in <paramref name="paths"/>. Writing an open scene's file
         /// would make Unity ask "reload?" in a modal dialog, which blocks MCP. When no other scene would stay loaded, an
-        /// empty placeholder scene is added first because the last loaded scene cannot be unloaded.
+        /// empty placeholder scene is added first because the last loaded scene cannot be unloaded. Hidden sub-scenes do not
+        /// count: NDMF (Modular Avatar) keeps its "___NDMF Preview___" scene loaded as a sub-scene at all times, and it must
+        /// not end up as the only (active) scene.
         /// </summary>
         static bool CloseScenesForRestore(HashSet<string> paths, SceneArrangement arr, CctResult r)
         {
@@ -507,7 +577,7 @@ namespace Naoking.ClaudeCreatorTools
                 var s = SceneManager.GetSceneAt(i);
                 if (!s.IsValid() || !s.isLoaded) continue;
                 if (!string.IsNullOrEmpty(s.path) && paths.Contains(s.path)) toClose.Add(s);
-                else others++;
+                else if (!s.isSubScene) others++;
             }
             if (toClose.Count == 0) return true;
             if (others == 0)
@@ -549,8 +619,9 @@ namespace Naoking.ClaudeCreatorTools
         }
 
         /// <summary>Loads the unloaded scenes again in place (same Hierarchy slot), restores the active scene, removes the placeholder.</summary>
-        static void ReopenScenes(SceneArrangement arr, CctResult r, List<object> reloaded)
+        static void ReopenScenes(SceneArrangement arr, CctResult r, List<object> reloaded, string preId)
         {
+            var backupHint = preId != null ? $" (復元前の状態はスナップショット '{preId}' にあります)" : "";
             foreach (var path in arr.ClosedPaths)
             {
                 try
@@ -561,11 +632,11 @@ namespace Naoking.ClaudeCreatorTools
                         reloaded.Add(path);
                         r.AddIssue(CctSeverity.Info, "SCENE_RELOADED", $"シーン '{path}' をディスクから開き直しました (メモリ上の変更は破棄)", asset: path);
                     }
-                    else r.AddIssue(CctSeverity.Error, "SCENE_REOPEN_FAILED", $"シーン '{path}' を開き直せませんでした。手動で開いてください", asset: path);
+                    else r.AddIssue(CctSeverity.Error, "SCENE_REOPEN_FAILED", $"シーン '{path}' を開き直せませんでした。Hierarchy でシーンを右クリックして Load Scene で開いてください{backupHint}", asset: path);
                 }
                 catch (Exception e)
                 {
-                    r.AddIssue(CctSeverity.Error, "SCENE_REOPEN_FAILED", $"シーン '{path}' を開き直せませんでした: {e.Message}", asset: path);
+                    r.AddIssue(CctSeverity.Error, "SCENE_REOPEN_FAILED", $"シーン '{path}' を開き直せませんでした: {e.Message}。Hierarchy でシーンを右クリックして Load Scene で開いてください{backupHint}", asset: path);
                 }
             }
             try
@@ -580,7 +651,10 @@ namespace Naoking.ClaudeCreatorTools
             if (!arr.HasPlaceholder || !arr.Placeholder.IsValid()) return;
             int loaded = 0;
             for (int i = 0; i < SceneManager.sceneCount; i++)
-                if (SceneManager.GetSceneAt(i).isLoaded) loaded++;
+            {
+                var s = SceneManager.GetSceneAt(i);
+                if (s.isLoaded && !s.isSubScene) loaded++;
+            }
             bool closed = false;
             try { closed = loaded > 1 && EditorSceneManager.CloseScene(arr.Placeholder, true); }
             catch (Exception) { closed = false; }
@@ -588,8 +662,8 @@ namespace Naoking.ClaudeCreatorTools
                 r.AddIssue(CctSeverity.Warning, "SCENE_REOPEN_FAILED", "一時的に追加した空シーン (Untitled) を閉じられませんでした。不要なら Hierarchy から削除してください");
         }
 
-        static List<object> Paths(IEnumerable<PlanItem> items, string action, int max) =>
-            items.Where(it => it.Action == action).Take(max).Select(it =>
+        static List<object> Paths(IEnumerable<PlanItem> items, string action) =>
+            items.Where(it => it.Action == action).Select(it =>
             {
                 var d = new Dictionary<string, object>
                 {
@@ -597,6 +671,10 @@ namespace Naoking.ClaudeCreatorTools
                     ["size"] = it.Entry.Size,
                     ["unsaved_in_memory"] = it.AssetDirty || (it.IsLoadedScene && it.SceneDirty),
                 };
+                // The stored scene is the state that was unsaved at snapshot time: restoring writes it to disk for the first time.
+                if (it.Entry.SceneState == "in_memory") d["from_unsaved_scene_state"] = true;
+                if (it.Blueprint != null)
+                    foreach (var kv in it.Blueprint) d[kv.Key] = kv.Value;
                 // Restoring an old GUID breaks references that were re-pointed to the new one; make that visible.
                 if (it.GuidNow != null && !string.IsNullOrEmpty(it.Entry.Guid) && !string.Equals(it.GuidNow, it.Entry.Guid, StringComparison.OrdinalIgnoreCase))
                 {
@@ -607,6 +685,28 @@ namespace Naoking.ClaudeCreatorTools
             }).ToList();
 
         static int Count(IEnumerable<PlanItem> items, string action) => items.Count(it => it.Action == action);
+
+        /// <summary>
+        /// Undo of a restore (restoring its pre-restore snapshot) cannot remove the files that restore recreated, because
+        /// restore never deletes. List the ones that still exist so they can be deleted on purpose.
+        /// </summary>
+        static void ReportFilesCreatedByRestore(Manifest m, List<FileEntry> selected, CctResult r, int max, Dictionary<string, object> full)
+        {
+            if (m.Kind != "pre-restore") return;
+            if (!ReferenceEquals(selected, m.Files)) return; // a partial undo: which recreated files belong to it is unknown
+            var remaining = new List<object>();
+            foreach (var s in m.Skipped)
+            {
+                if (!(s.TryGetValue("code", out var c) && (c as string) == "MISSING_BEFORE_RESTORE")) continue;
+                if (!(s.TryGetValue("asset_path", out var p) && p is string path) || !TryNormalizeAssetPath(path, out var norm, out _)) continue;
+                if (File.Exists(AbsOf(norm))) remaining.Add(norm);
+            }
+            if (remaining.Count == 0) return;
+            PutList(r, "created_by_original_restore", remaining, max, full);
+            r.AddIssue(CctSeverity.Warning, "RECREATED_FILES_REMAIN",
+                $"これは復元の取り消し用スナップショットです。元の復元 ('{m.RestoreOf}') で再作成された {remaining.Count} 個のファイル (created_by_original_restore) は restore では削除されません。" +
+                "完全に元へ戻すには、ユーザーに確認してから Unity 上で削除してください", value: remaining.Count, asset: remaining[0] as string);
+        }
 
         static List<object> Done(IEnumerable<PlanItem> items, string action) =>
             items.Where(it => it.Action == action && !it.Failed && (it.Wrote || action == "reimport")).Select(it => (object)it.Path).ToList();

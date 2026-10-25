@@ -84,7 +84,7 @@ namespace Naoking.ClaudeCreatorTools
         sealed class FramingInfo
         {
             public Box Full, Upper, Face;
-            public string FaceSource, UpperSource;
+            public string FaceSource, UpperSource, HumanoidAnimator, HumanoidSource;
             public int RenderersUsed;
             public readonly List<string> Excluded = new List<string>();
 
@@ -98,6 +98,8 @@ namespace Naoking.ClaudeCreatorTools
                 ["face"] = Face.ToPlain(),
                 ["face_source"] = FaceSource,
                 ["upper_source"] = UpperSource,
+                ["humanoid_animator"] = HumanoidAnimator,
+                ["humanoid_source"] = HumanoidSource,
                 ["renderers_used"] = RenderersUsed,
                 ["excluded_renderers"] = Excluded.Take(20).Cast<object>().ToList(),
                 ["excluded_omitted"] = Math.Max(0, Excluded.Count - 20),
@@ -112,6 +114,13 @@ namespace Naoking.ClaudeCreatorTools
             Animator animator = root.GetComponent<Animator>();
             if (!IsHumanAnimator(animator))
                 animator = root.GetComponentsInChildren<Animator>(true).FirstOrDefault(IsHumanAnimator);
+            // A part of an avatar (hair, outfit, body mesh) has no Animator of its own: use the enclosing avatar's skeleton.
+            // Bone positions are world space, and an isolated clone sits at the source's world pose, so they stay valid.
+            for (var p = root.transform.parent; animator == null && p != null; p = p.parent)
+            {
+                var a = p.GetComponent<Animator>();
+                if (IsHumanAnimator(a)) animator = a;
+            }
             if (animator == null) return null;
 
             var info = new HumanoidInfo { AnimatorPath = CctTargets.GetPath(animator.transform) };
@@ -202,9 +211,9 @@ namespace Naoking.ClaudeCreatorTools
 
         static FramingInfo ComputeFraming(CaptureSession s, Options opt, CctResult r)
         {
-            var f = new FramingInfo();
             var frame = s.Frame;
             var hum = s.Humanoid;
+            var f = new FramingInfo { HumanoidAnimator = hum?.AnimatorPath, HumanoidSource = hum?.Source };
 
             var boxes = new List<KeyValuePair<FramingRenderer, Box>>();
             foreach (var fr in s.FramingRenderers)
@@ -307,7 +316,8 @@ namespace Naoking.ClaudeCreatorTools
                 f.FaceSource = "bounds_top_15pct";
                 if (needHead)
                     r.AddIssue(CctSeverity.Warning, "NO_HUMANOID_HEAD",
-                        "Humanoid の Animator (Head ボーン) が見つからないため、顔の構図は全体の上 15% で代用しました", path: CctTargets.GetPath(s.Source));
+                        "Humanoid の Animator (Head ボーン) が対象にも親にも見つからないため、顔の構図は全体の上 15% で代用しました (Humanoid でないモデルでは顔の位置を推定できません)",
+                        path: CctTargets.GetPath(s.Source));
             }
             if (hum?.Hips == null && opt.Framing == "upper")
                 r.AddIssue(CctSeverity.Warning, "NO_HUMANOID_HEAD",

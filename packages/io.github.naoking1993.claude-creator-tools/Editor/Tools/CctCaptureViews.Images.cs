@@ -298,6 +298,8 @@ namespace Naoking.ClaudeCreatorTools
                 }
             }
 
+            // A changed pixel (> 8 levels) can never be within 2 levels of the background in both images, so with a
+            // solid/transparent background every changed pixel is a foreground pixel.
             var result = new Dictionary<string, object>
             {
                 ["view"] = viewName,
@@ -306,11 +308,10 @@ namespace Naoking.ClaudeCreatorTools
                 ["mean_abs_diff_foreground"] = maskBackground ? Math.Round(fgCount > 0 ? sumFg / (3.0 * fgCount) : 0.0, 3) : (object)null,
                 ["foreground_pct"] = maskBackground ? Math.Round(100.0 * fgCount / n, 3) : (object)null,
                 ["changed_pct"] = Math.Round(100.0 * changed / n, 3),
+                ["changed_pct_foreground"] = maskBackground ? Math.Round(fgCount > 0 ? 100.0 * changed / fgCount : 0.0, 3) : (object)null,
                 ["changed_pixels"] = changed,
                 ["max_diff"] = maxDiff,
                 ["changed_bbox"] = changed > 0 ? new List<object> { x0, y0, x1 + 1, y1 + 1 } : null,
-                ["units"] = "8-bit sRGB channel levels 0-255 (not perceptual Delta E); changed = any channel differs by > 8; " +
-                            "bbox = [x0, y0, x1, y1) from the top-left; foreground = pixels not equal to the background colour in either image",
             };
 
             var side = BuildSideBySide(old, current, res, viewName, out int sideWidth);
@@ -332,6 +333,16 @@ namespace Naoking.ClaudeCreatorTools
         static bool Near(Color32 a, Color32 b) =>
             Math.Abs(a.r - b.r) <= 2 && Math.Abs(a.g - b.g) <= 2 && Math.Abs(a.b - b.b) <= 2;
 
+        /// <summary>Reported once per result instead of once per view.</summary>
+        const string ComparisonUnits =
+            "8-bit sRGB channel levels 0-255 (not perceptual Delta E). changed = any channel differs by > 8. *_foreground = only " +
+            "pixels that differ from the background colour (within 2 levels) in either image; prefer them over whole-frame values, " +
+            "which mostly measure the empty backdrop. changed_bbox = [x0, y0, x1, y1) in pixels from the top-left. compare_image = " +
+            "before | after; diff_image = after dimmed with changed pixels in red.";
+
+        /// <summary>Manifests scanned by compare_with=latest when looking for the newest capture of the same target.</summary>
+        const int LatestScanLimit = 100;
+
         /// <summary>A previous capture loaded from its manifest.json (resolved from a folder, the manifest, a file in it, or "latest").</summary>
         sealed class PreviousCapture
         {
@@ -339,15 +350,19 @@ namespace Naoking.ClaudeCreatorTools
             public string ManifestPath;
             public string Id;
             public Dictionary<string, object> Params = new Dictionary<string, object>();
+            public Dictionary<string, object> Target;
             public readonly Dictionary<string, Dictionary<string, object>> Views =
                 new Dictionary<string, Dictionary<string, object>>(StringComparer.Ordinal);
 
-            public static PreviousCapture Load(string spec, out string error)
+            /// <param name="targetKey">TargetKey() of the current target: 'latest' prefers the newest capture of that target.</param>
+            /// <param name="latestOfOtherTarget">'latest' found no capture of the target and fell back to the newest overall.</param>
+            public static PreviousCapture Load(string spec, string targetKey, out string error, out bool latestOfOtherTarget)
             {
                 string manifestPath;
+                latestOfOtherTarget = false;
                 try
                 {
-                    manifestPath = ResolveManifestPath(spec, out error);
+                    manifestPath = ResolveManifestPath(spec, targetKey, out error, out latestOfOtherTarget);
                 }
                 catch (Exception e)
                 {
@@ -380,6 +395,7 @@ namespace Naoking.ClaudeCreatorTools
                 };
                 prev.Id = m.TryGetValue("id", out var idv) && idv is string ids ? ids : Path.GetFileName(prev.Dir);
                 if (m.TryGetValue("params", out var pv) && pv is Dictionary<string, object> pd) prev.Params = pd;
+                if (m.TryGetValue("target", out var tv) && tv is Dictionary<string, object> td) prev.Target = td;
                 if (m.TryGetValue("views", out var vv) && vv is List<object> vl)
                 {
                     foreach (var item in vl)
@@ -391,9 +407,10 @@ namespace Naoking.ClaudeCreatorTools
                 return prev;
             }
 
-            static string ResolveManifestPath(string spec, out string error)
+            static string ResolveManifestPath(string spec, string targetKey, out string error, out bool latestOfOtherTarget)
             {
                 error = null;
+                latestOfOtherTarget = false;
                 var s = (spec ?? "").Trim().Trim('"', '\'');
                 if (s.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
                 {
@@ -403,18 +420,32 @@ namespace Naoking.ClaudeCreatorTools
                 if (string.Equals(s, "latest", StringComparison.OrdinalIgnoreCase))
                 {
                     var root = CctPaths.CapturesDir;
-                    var latest = Directory.Exists(root)
+                    // Folder ids start with yyyyMMdd-HHmmss; their 4-hex suffix is not chronological, so two captures in
+                    // the same second (MCP calls back to back) are ordered by the manifest's write time instead.
+                    var ordered = Directory.Exists(root)
                         ? Directory.GetDirectories(root)
                             .Where(d => File.Exists(Path.Combine(d, ManifestFileName)))
-                            .OrderByDescending(d => Path.GetFileName(d), StringComparer.Ordinal)
-                            .FirstOrDefault()
-                        : null;
-                    if (latest == null)
+                            .OrderByDescending(d => { var n = Path.GetFileName(d); return n.Length > 15 ? n.Substring(0, 15) : n; }, StringComparer.Ordinal)
+                            .ThenByDescending(d => File.GetLastWriteTimeUtc(Path.Combine(d, ManifestFileName)))
+                            .ToList()
+                        : new List<string>();
+                    if (ordered.Count == 0)
                     {
-                        error = "compare_with=latest ですが、比較できる過去のキャプチャがありません";
+                        error = "compare_with=latest ですが、比較できる過去のキャプチャがありません (先に compare_with なしで撮影してください)";
                         return null;
                     }
-                    return CctPaths.Combine(latest, ManifestFileName);
+                    // Newest capture of the same target first: a capture of another object in between (another avatar,
+                    // the original vs. the edited copy) must not silently become the baseline.
+                    if (targetKey != null)
+                    {
+                        foreach (var d in ordered.Take(LatestScanLimit))
+                        {
+                            var mp = CctPaths.Combine(d, ManifestFileName);
+                            if (ReadTargetKey(mp) == targetKey) return mp;
+                        }
+                        latestOfOtherTarget = true;
+                    }
+                    return CctPaths.Combine(ordered[0], ManifestFileName);
                 }
 
                 s = CctPaths.Normalize(s);
@@ -445,6 +476,18 @@ namespace Naoking.ClaudeCreatorTools
                 if (error == null)
                     error = $"compare_with '{spec}' のキャプチャが見つかりません (キャプチャフォルダか manifest.json のパス、Captures 下のフォルダ名、または latest を指定)";
                 return null;
+            }
+
+            static string ReadTargetKey(string manifestPath)
+            {
+                try
+                {
+                    return CctJson.Parse(File.ReadAllText(manifestPath, Encoding.UTF8)) is Dictionary<string, object> m &&
+                           m.TryGetValue("target", out var t) && t is Dictionary<string, object> td
+                        ? TargetKey(td)
+                        : null;
+                }
+                catch (Exception) { return null; } // unreadable manifests are simply skipped
             }
         }
 

@@ -82,6 +82,7 @@ namespace Naoking.ClaudeCreatorTools
                 MaxTotalMb = maxMb,
             };
 
+            int maxEntries = args.GetInt("max_entries", DefaultMaxEntries, 1, 5000);
             var r = CctResult.Ok("");
             var m = Capture(req, r, out var dir, out var failure);
             if (m == null)
@@ -108,12 +109,20 @@ namespace Naoking.ClaudeCreatorTools
                 ["scene_was_dirty"] = f.SceneWasDirty,
                 ["scene_state"] = f.SceneState,
             }).ToList());
-            r.Put("skipped", Cap(m.Skipped.Cast<object>(), 100, out var skippedOmitted));
-            if (skippedOmitted > 0) r.Put("skipped_omitted", skippedOmitted);
-            r.Put("files", Cap(m.Files.Select(f => (object)f.AssetPath), 300, out var filesOmitted));
-            if (filesOmitted > 0) r.Put("files_omitted", filesOmitted);
+            // Per extension, so Claude can see at a glance whether materials / clips / prefabs are covered.
+            var fileTypes = new Dictionary<string, object>();
+            foreach (var g in m.Files.GroupBy(f => Path.GetExtension(f.AssetPath).ToLowerInvariant()).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal))
+                fileTypes[g.Key.Length == 0 ? "(none)" : g.Key] = g.Count();
+            r.Put("file_types", fileTypes);
+            // Packages/ dependencies (SDK / MA / lilToon scripts and shaders) and hidden helper scenes stay in the manifest only.
+            var full = new Dictionary<string, object>();
+            PutList(r, "skipped", VisibleSkipped(m.Skipped), maxEntries, full);
+            r.Put("files", m.Files.Select(f => (object)f.AssetPath).Take(FullListMax).ToList()); // report only (not a summary key)
+            PutFullLists(r, full);
+            bool scenesOnly = req.Specs.Count == 0 && !req.IncludeDependencies;
             r.Message = $"スナップショット '{m.Id}' を作成しました: {m.Files.Count} ファイル / {Mb(m.TotalBytes)} MB" +
-                        (m.Incomplete ? " (一部コピー失敗あり)" : "");
+                        (m.Incomplete ? " (一部コピー失敗あり)" : "") +
+                        (scenesOnly ? "。シーンファイルのみです。共有マテリアル・アニメーション等も戻せるようにするには assets に指定するか include_dependencies=true で作成してください" : "");
             return r;
         }
 
@@ -135,6 +144,16 @@ namespace Naoking.ClaudeCreatorTools
             {
                 foreach (var s in CctTargets.LoadedScenes())
                 {
+                    // Hidden helper scenes of packages (NDMF's "___NDMF Preview___" is always loaded with Modular Avatar) are not
+                    // the user's work: record them in the manifest only.
+                    if (s.isSubScene && !string.IsNullOrEmpty(s.path) && s.path.StartsWith("Packages/", StringComparison.Ordinal))
+                    {
+                        ctx.Skipped.Add(new Dictionary<string, object>
+                        {
+                            ["asset_path"] = s.path, ["code"] = "SKIPPED_PACKAGE", ["reason"] = "hidden package scene", ["source"] = "hidden_scene",
+                        });
+                        continue;
+                    }
                     if (string.IsNullOrEmpty(s.path))
                     {
                         ctx.Skip("(Untitled)", "UNTITLED_SCENE_SKIPPED",
@@ -148,7 +167,8 @@ namespace Naoking.ClaudeCreatorTools
             if (req.IncludeDependencies && ctx.Order.Count > 0) AddDependencies(ctx, req.DependencyFilter);
 
             // Resolve existence / scene state, drop what cannot be captured, estimate size.
-            bool playing = EditorApplication.isPlaying;
+            // SaveScene throws in Play mode and while entering it, so scenes then come from disk.
+            bool playing = EditorApplication.isPlayingOrWillChangePlaymode;
             bool warnedPlay = false;
             var list = new List<Candidate>();
             foreach (var path in ctx.Order)
@@ -188,14 +208,15 @@ namespace Naoking.ClaudeCreatorTools
             if (list.Count == 0)
             {
                 failure = CctResult.Fail("スナップショットするファイルがありません (assets を指定するか、保存済みのシーンを開いてください)", "NOTHING_TO_SNAPSHOT",
-                    new Dictionary<string, object> { ["skipped"] = ctx.Skipped.Cast<object>().Take(50).ToList() });
+                    new Dictionary<string, object> { ["skipped"] = VisibleSkipped(ctx.Skipped).Take(50).ToList() });
                 return null;
             }
 
             long estimated = list.Sum(c => c.EstimatedBytes);
             if (estimated > req.MaxTotalMb * 1024.0 * 1024.0)
             {
-                failure = CctResult.Fail($"推定サイズ {Mb(estimated)} MB が上限 max_total_mb={req.MaxTotalMb} を超えるため中止しました (何もコピーしていません)",
+                failure = CctResult.Fail($"推定サイズ {Mb(estimated)} MB が上限 max_total_mb={req.MaxTotalMb} を超えるため中止しました (何もコピーしていません)。" +
+                                         "details.largest の大きいファイルを assets から外すか、dependency_filter='editable' にするか、max_total_mb を上げて再実行してください",
                     "SIZE_LIMIT", new Dictionary<string, object>
                     {
                         ["estimated_mb"] = Mb(estimated),
@@ -216,10 +237,11 @@ namespace Naoking.ClaudeCreatorTools
                 r.AddIssue(CctSeverity.Warning, "PREFAB_STAGE_UNSAVED",
                     $"'{stagePath}' は Prefab モードで未保存の変更があります。スナップショットはディスク上の内容です", asset: stagePath);
 
-            // Folder .meta files of every parent too, so a deleted folder tree comes back with its own GUIDs.
+            // Folder .meta files of every parent too, so a deleted folder tree comes back with its own GUIDs. (No early exit
+            // on an already known folder: folder specs add their own tree but not the folders above them.)
             foreach (var c in list)
                 for (var f = Parent(c.AssetPath); f != null && f.Length > "Assets".Length; f = Parent(f))
-                    if (!ctx.Folders.Add(f)) break;
+                    ctx.Folders.Add(f);
 
             var m = new Manifest
             {
@@ -260,6 +282,13 @@ namespace Naoking.ClaudeCreatorTools
                         CopyCandidate(c, index, m, filesDir, ref tempCreated, r);
                     }
                 }
+                if (m.Files.Count == 0)
+                {
+                    // A manifest with no files would look like a usable backup; the folder is removed in finally.
+                    failure = CctResult.Fail("ファイルを 1 つもコピーできなかったため、スナップショットを作成しませんでした (issues を確認してください)", "COPY_FAILED",
+                        new Dictionary<string, object> { ["skipped"] = VisibleSkipped(m.Skipped).Take(50).ToList() });
+                    return null;
+                }
                 CopyFolderMetas(ctx, m, dir, r);
                 WriteManifest(dir, m);
                 completed = true;
@@ -276,6 +305,10 @@ namespace Naoking.ClaudeCreatorTools
             return m;
         }
 
+        /// <summary>Skipped entries worth showing: Packages/ dependencies and hidden package scenes stay in the manifest only.</summary>
+        static IEnumerable<object> VisibleSkipped(IEnumerable<Dictionary<string, object>> skipped) =>
+            skipped.Where(x => !(x.TryGetValue("source", out var src) && ((src as string) == "dependency" || (src as string) == "hidden_scene"))).Cast<object>();
+
         static void AddSpec(CaptureContext ctx, string raw, string source)
         {
             if (!TryNormalizeAssetPath(raw, out var path, out var code))
@@ -286,18 +319,19 @@ namespace Naoking.ClaudeCreatorTools
                         ctx.Skip(path ?? raw, code, $"Packages/ 以下は VCC が管理するためスナップショットしません: {raw}", CctSeverity.Info);
                         break;
                     case "NOT_ASSET_PATH":
-                        ctx.Skip(raw, code, $"Assets/ 以下のパスではありません: {raw}", CctSeverity.Error);
+                        ctx.Skip(raw, code, $"Assets/ 以下のパスではありません ('Assets/...' から始まるパスで指定してください): {raw}", CctSeverity.Error);
                         break;
                     case "INVALID_PATH":
                         ctx.Skip(raw, code, $"パスに使えない文字が含まれています: {raw}", CctSeverity.Error);
                         break;
                     default:
-                        ctx.Skip(raw, "PATH_OUTSIDE_PROJECT", $"プロジェクト外を指すパス (絶対パスや '..') は使えません: {raw}", CctSeverity.Error);
+                        ctx.Skip(raw, "PATH_OUTSIDE_PROJECT", $"絶対パスや '..' を含むパスは使えません。'Assets/...' から始まるプロジェクト内のパスで指定してください: {raw}", CctSeverity.Error);
                         break;
                 }
                 return;
             }
             if (IsInTempFolder(path)) return;
+            path = CanonicalCase(path);
             var abs = AbsOf(path);
             if (Directory.Exists(abs))
             {
@@ -316,6 +350,31 @@ namespace Naoking.ClaudeCreatorTools
                 return;
             }
             ctx.Skip(path, "ASSET_NOT_FOUND", $"見つかりません: {path}", CctSeverity.Warning);
+        }
+
+        /// <summary>
+        /// On-disk spelling of an existing asset path. Windows finds "assets/avatar/body.mat" for "Assets/Avatar/Body.mat",
+        /// but Unity's asset paths are case-sensitive, so a typed path is corrected before it reaches the manifest.
+        /// </summary>
+        static string CanonicalCase(string assetPath)
+        {
+            try
+            {
+                var segments = assetPath.Split('/');
+                var abs = AbsOf("Assets");
+                var result = "Assets";
+                for (int i = 1; i < segments.Length; i++)
+                {
+                    var match = Directory.EnumerateFileSystemEntries(abs, segments[i]).FirstOrDefault();
+                    if (match == null) return assetPath;
+                    var name = Path.GetFileName(match);
+                    if (!string.Equals(name, segments[i], StringComparison.OrdinalIgnoreCase)) return assetPath; // 8.3 alias etc.
+                    result += "/" + name;
+                    abs = CctPaths.Combine(abs, name);
+                }
+                return result;
+            }
+            catch (Exception) { return assetPath; }
         }
 
         static void AddDependencies(CaptureContext ctx, string filter)
@@ -346,8 +405,10 @@ namespace Naoking.ClaudeCreatorTools
                         foreach (var o in EditorUtility.CollectDependencies(scene.GetRootGameObjects().Cast<Object>().ToArray()))
                         {
                             if (o == null || !EditorUtility.IsPersistent(o)) continue;
+                            // Built-in resources report "Library/unity default resources" / "Resources/unity_builtin_extra".
                             var p = AssetDatabase.GetAssetPath(o);
-                            if (!string.IsNullOrEmpty(p)) direct.Add(p);
+                            if (!string.IsNullOrEmpty(p) && (p.StartsWith("Assets/", StringComparison.Ordinal) || p.StartsWith("Packages/", StringComparison.Ordinal)))
+                                direct.Add(p);
                         }
                         if (direct.Count > 0)
                             foreach (var d in AssetDatabase.GetDependencies(direct.ToArray(), true)) deps.Add(d);
@@ -365,7 +426,10 @@ namespace Naoking.ClaudeCreatorTools
                 if (d.StartsWith("Packages/", StringComparison.Ordinal))
                 {
                     ctx.DependencyPackages++;
-                    ctx.Skip(d, "SKIPPED_PACKAGE", "依存先が Packages/ 以下 (VCC 管理)", null);
+                    ctx.Skipped.Add(new Dictionary<string, object>
+                    {
+                        ["asset_path"] = d, ["code"] = "SKIPPED_PACKAGE", ["reason"] = "依存先が Packages/ 以下 (VCC 管理)", ["source"] = "dependency",
+                    });
                     continue;
                 }
                 if (!d.StartsWith("Assets/", StringComparison.Ordinal)) continue; // built-in resources
@@ -507,8 +571,20 @@ namespace Naoking.ClaudeCreatorTools
 
         static bool EnsureTempFolder(ref bool created, CctResult r)
         {
-            if (AssetDatabase.IsValidFolder(TempFolder)) return true;
-            if (Directory.Exists(AbsOf(TempFolder))) return true; // on disk but not imported yet: usable, not ours to remove
+            if (created) return true;
+            if (AssetDatabase.IsValidFolder(TempFolder) || Directory.Exists(AbsOf(TempFolder)))
+            {
+                // Not created by this run (e.g. left by an editor crash mid-capture): usable, but never removed by the tool.
+                try
+                {
+                    bool reported = r.Issues.Any(i => (i.TryGetValue("code", out var c) ? c as string : null) == "TEMP_CLEANUP_FAILED");
+                    if (!reported && Directory.EnumerateFileSystemEntries(AbsOf(TempFolder)).Any())
+                        r.AddIssue(CctSeverity.Warning, "TEMP_CLEANUP_FAILED",
+                            $"以前の中断で一時フォルダ '{TempFolder}' に一時シーンが残っています。このツールは自分で作っていないフォルダを削除しないため、不要なら Unity 上で削除してください", asset: TempFolder);
+                }
+                catch (Exception) { /* informational */ }
+                return true;
+            }
             string guid = null;
             try { guid = AssetDatabase.CreateFolder("Assets", TempFolderName); }
             catch (Exception) { /* reported below */ }

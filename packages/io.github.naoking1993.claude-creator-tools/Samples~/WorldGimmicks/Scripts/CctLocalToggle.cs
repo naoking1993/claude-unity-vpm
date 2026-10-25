@@ -16,8 +16,8 @@
 //      Invert Targets には「Targets と逆の状態にしたい物」を登録できる
 //      (例: ミラー OFF の時だけ表示する「ミラー ON」の看板)。
 //   4. Initial On で参加時の状態を決める (ミラーは OFF 推奨: VRChat 公式ガイド)。
-//   5. スイッチ自身の GameObject を Targets に入れないこと
-//      (自分を非表示にすると二度と押せなくなります)。
+//   5. スイッチ自身の GameObject を Targets に入れても無視されます
+//      (自分を非表示にすると二度と押せなくなるため)。スイッチの親を入れた場合も同じく押せなくなるので注意。
 //   UI ボタンから使う場合: Button の On Click () に このスイッチの GameObject を入れ、
 //   UdonBehaviour > SendCustomEvent (string) を選び、_Toggle / _TurnOn / _TurnOff を入力。
 //
@@ -91,7 +91,8 @@ namespace Naoking.ClaudeWorldGimmicks
             if (list == null) return;
             for (int i = 0; i < list.Length; i++)
             {
-                if (list[i] != null) list[i].SetActive(active);
+                // スイッチ自身は切り替えない (非表示にすると二度と押せなくなる)。
+                if (list[i] != null && list[i] != gameObject) list[i].SetActive(active);
             }
         }
     }

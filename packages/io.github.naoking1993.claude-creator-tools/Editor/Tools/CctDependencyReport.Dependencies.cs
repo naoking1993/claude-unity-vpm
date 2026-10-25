@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text;
 using UnityEditor;
 using UnityEditor.Compilation;
 using UnityEngine;
@@ -109,10 +111,19 @@ namespace Naoking.ClaudeCreatorTools
                 var res = CctTargets.Resolve(targetSpec);
                 if (!res.Ok)
                     return FailWith(r, res.Error, "TARGET_NOT_FOUND", res.Candidates.Count > 0 ? res.Candidates.Cast<object>().ToList() : null);
+                if (IsTransient(res.GameObject))
+                    return FailWith(r, $"'{res.GameObject.name}' はプレビュー用の一時オブジェクト (NDMF / Modular Avatar のプレビュー等、保存されない) です。Hierarchy で元のオブジェクトを指定してください",
+                        "TARGET_NOT_FOUND");
                 r.Put("target", CctTargets.Describe(res.GameObject));
-                targetAssets = CollectHierarchyAssets(res.GameObject, out targetBuiltin);
-                r.Put("target_assets", Cap(targetAssets, ctx.MaxEntries, out var taOmitted));
-                if (taOmitted > 0) r.Put("target_assets_omitted", taOmitted);
+                var targetAssetPath = EditorUtility.IsPersistent(res.GameObject) ? AssetDatabase.GetAssetPath(res.GameObject) : null;
+                if (!string.IsNullOrEmpty(targetAssetPath))
+                    inputs.AddExplicitFile(targetAssetPath); // a prefab asset: analyse the file itself (GUID + Missing scans), like assets=[path]
+                else
+                {
+                    targetAssets = CollectHierarchyAssets(ctx, res.GameObject, out targetBuiltin);
+                    r.Put("target_assets", Cap(targetAssets, ctx.MaxEntries, out var taOmitted));
+                    if (taOmitted > 0) r.Put("target_assets_omitted", taOmitted);
+                }
             }
             var depRoots = inputs.Files.Concat(targetAssets).Distinct(StringComparer.Ordinal).ToList();
             if (depRoots.Count == 0)
@@ -134,7 +145,7 @@ namespace Naoking.ClaudeCreatorTools
             bool haveRoot = exportRoots.Count > 0;
             bool InExport(string path) => inputs.FileSet.Contains(path) || exportRoots.Any(root => IsUnder(path, root));
 
-            SerializationIsForceText(ctx);
+            bool forceText = SerializationIsForceText(ctx);
 
             // ---- dependencies
             string[] deps;
@@ -150,6 +161,9 @@ namespace Naoking.ClaudeCreatorTools
             var scripts = new List<object>();
             var asmdefs = new Dictionary<string, bool>(StringComparer.Ordinal);
             var large = new List<DepFile>();
+            var classMissing = new List<string>();
+            var sceneDeps = new List<string>();
+            var excludedScripts = new HashSet<string>(StringComparer.Ordinal);
             int scriptsExcluded = 0;
 
             using (var progress = new Progress("Claude Creator Tools: 依存関係を分類中", depList.Count, 300))
@@ -160,11 +174,17 @@ namespace Naoking.ClaudeCreatorTools
                     progress.Step(i, d);
                     var ext = Path.GetExtension(d);
                     bool isScript = string.Equals(ext, ".cs", StringComparison.OrdinalIgnoreCase) || string.Equals(ext, ".dll", StringComparison.OrdinalIgnoreCase);
-                    if (isScript) CheckScript(ctx, d, ext, scripts, asmdefs, InExport);
-
-                    if (d.StartsWith("Assets/", StringComparison.Ordinal))
+                    bool inAssets = d.StartsWith("Assets/", StringComparison.Ordinal);
+                    if (isScript && inAssets && !includeScripts && !rootSet.Contains(d))
                     {
-                        if (isScript && !includeScripts && !rootSet.Contains(d)) { scriptsExcluded++; continue; }
+                        scriptsExcluded++;
+                        excludedScripts.Add(d);
+                        continue;
+                    }
+                    if (isScript) CheckScript(d, ext, scripts, asmdefs, classMissing, InExport);
+
+                    if (inAssets)
+                    {
                         var f = new DepFile { Path = d, Type = TypeNameOf(d), Bytes = FileSize(ctx.ToPhysical(d)), IsScript = isScript };
                         f.Inside = InExport(d);
                         (f.Inside ? inside : outside).Add(f);
@@ -173,8 +193,7 @@ namespace Naoking.ClaudeCreatorTools
                         tb[1] += Math.Max(0, f.Bytes);
                         if (f.Bytes > largeBytes) large.Add(f);
                         if (string.Equals(ext, ".unity", StringComparison.OrdinalIgnoreCase) && !rootSet.Contains(d))
-                            ctx.Issue(CctSeverity.Warning, "SCENE_IN_DEPENDENCIES",
-                                "シーンファイルが依存に含まれています。ギミック/衣装の書き出しにシーン (アバター本体を含むことが多い) を同梱しないでください", asset: d);
+                            sceneDeps.Add(d); // reported once the referrer graph can say who pulls it in
                     }
                     else if (d.StartsWith("Packages/", StringComparison.Ordinal))
                     {
@@ -193,24 +212,6 @@ namespace Naoking.ClaudeCreatorTools
                 }
             }
 
-            // ---- direct-referrer graph (who pulls each file in) and per-input package usage
-            var referrers = BuildReferrers(ctx, depRoots, depList);
-            if (depRoots.Count <= MaxPerInputDependencyCalls)
-            {
-                foreach (var root in depRoots)
-                {
-                    string[] own;
-                    try { own = AssetDatabase.GetDependencies(root, true); }
-                    catch (Exception) { continue; }
-                    foreach (var name in own.Select(PackageNameOf).Where(n => n != null).Distinct(StringComparer.Ordinal))
-                    {
-                        if (!packages.TryGetValue(name, out var pu)) continue;
-                        pu.ReferencedBy++;
-                        if (pu.ReferencingInputs.Count < 3) pu.ReferencingInputs.Add(root);
-                    }
-                }
-            }
-
             // ---- GUID scan of text-serialized files (+ .meta) for references that resolve to nothing
             var stats = new ScanStats();
             var missingGuids = new Dictionary<string, MissingGuid>(StringComparer.Ordinal);
@@ -224,20 +225,68 @@ namespace Naoking.ClaudeCreatorTools
             var missingPrefabs = new List<LoadFinding>();
             var missingRefs = new List<LoadFinding>();
             var unsaved = new List<string>();
-            int loadScanned = LoadScan(ctx, scanList, rootSet, missingScripts, missingPrefabs, missingRefs, unsaved, out bool loadCapped);
+            int loadScanned = LoadScan(ctx, scanList, rootSet, missingScripts, missingPrefabs, missingRefs, unsaved, out bool loadCapped,
+                out int loadSkippedLarge, out int loadFailed);
             ScanLoadedInputScenes(ctx, depRoots, missingScripts, unsaved);
             CheckPrefabStage(depList, unsaved);
             foreach (var u in unsaved.Distinct(StringComparer.Ordinal))
                 ctx.Issue(CctSeverity.Warning, "UNSAVED_CHANGES",
                     "未保存の変更があります。依存関係と GUID 走査はディスク上の保存済み内容に基づくため、保存してから再実行してください", asset: u);
 
+            // ---- enrichment, after the essential scans so a time budget is spent on them first: the direct-referrer graph
+            // (who pulls each file in) and per-input package usage
+            var referrers = BuildReferrers(ctx, depRoots, depList);
+            bool haveReferencedBy = depRoots.Count <= MaxPerInputDependencyCalls;
+            if (haveReferencedBy)
+            {
+                foreach (var root in depRoots)
+                {
+                    if (ctx.OutOfTime("package_usage")) { haveReferencedBy = false; break; }
+                    string[] own;
+                    try { own = AssetDatabase.GetDependencies(root, true); }
+                    catch (Exception) { continue; }
+                    foreach (var name in own.Select(PackageNameOf).Where(n => n != null).Distinct(StringComparer.Ordinal))
+                    {
+                        if (!packages.TryGetValue(name, out var pu)) continue;
+                        pu.ReferencedBy++;
+                        if (pu.ReferencingInputs.Count < 3) pu.ReferencingInputs.Add(root);
+                    }
+                }
+            }
+
+            // A class-less script is only a Missing Script risk when something uses it: a folder input also brings in utility
+            // files (static classes, interfaces, name mismatches) that are never attached as components. Scripts collected from a
+            // scene target's components are used by definition, so only explicit inputs can be "unused".
+            foreach (var path in classMissing)
+            {
+                bool used = !inputs.FileSet.Contains(path) || referrers.Of(path).Any(p => p != path);
+                if (used)
+                    ctx.Issue(CctSeverity.Warning, "SCRIPT_CLASS_NOT_FOUND",
+                        "依存スクリプトのクラスを解決できません (コンパイルエラー、またはクラス名とファイル名の不一致)。このスクリプトを使うコンポーネントは Missing Script になります", asset: path);
+                else
+                    ctx.Issue(CctSeverity.Info, "SCRIPT_CLASS_NOT_FOUND",
+                        "入力のスクリプトにファイル名と同じ名前のクラスが見つかりません。コンポーネントとして使っていない補助スクリプト (static クラス等) なら問題ありません" +
+                        (referrers.Capped ? " (参照元の集計が途中までのため、使用の有無は未確認)" : ""), asset: path);
+            }
+
+            foreach (var scene in sceneDeps)
+            {
+                var from = referrers.Of(scene).Where(p => p != scene).Take(3).ToList();
+                ctx.Issue(CctSeverity.Warning, "SCENE_IN_DEPENDENCIES",
+                    "シーンファイルが依存に含まれています" + (from.Count > 0 ? $" (参照元: {string.Join(", ", from)})" : "") +
+                    "。ギミック/衣装の書き出しにシーン (アバター本体を含むことが多い) を同梱しないでください。シーンを参照しているアセットのフィールドを外すか、そのアセットを書き出し対象から外してください",
+                    asset: scene);
+            }
+
             // ---- issues + output
             ReportMissing(ctx, missingGuids, missingScripts, missingPrefabs, missingRefs);
             var outsideGroups = ReportOutside(ctx, outside, haveRoot, referrers, InExport);
-            var packageRows = ReportPackages(ctx, packages, declared, referrers, InExport, depRoots.Count <= MaxPerInputDependencyCalls);
-            foreach (var kv in asmdefs.Where(kv => !kv.Value).Take(MaxIssuesPerCode))
-                ctx.Issue(CctSeverity.Warning, "ASMDEF_REQUIRED",
-                    "依存スクリプトはこの Assembly Definition でコンパイルされます。書き出し範囲外なので一緒に同梱してください (GetDependencies には現れません)", asset: kv.Key);
+            var packageRows = ReportPackages(ctx, packages, declared, referrers, haveReferencedBy);
+            foreach (var kv in asmdefs.Where(kv => !kv.Value))
+                ctx.Issue(CctSeverity.Warning, "ASMDEF_REQUIRED", haveRoot
+                        ? "依存スクリプトはこの Assembly Definition でコンパイルされます。書き出し範囲外なので一緒に同梱してください (GetDependencies には現れません)"
+                        : "依存スクリプトはこの Assembly Definition でコンパイルされます。スクリプトを書き出すときはこの .asmdef も同梱してください (GetDependencies には現れません)",
+                    asset: kv.Key);
             foreach (var f in large.OrderByDescending(x => x.Bytes).Take(MaxLargeFileIssues))
                 ctx.Issue(CctSeverity.Info, "LARGE_FILE", $"大きなファイル {Fmt(Mb(f.Bytes))} MB ({f.Type}): 書き出しサイズに影響します",
                     value: Mb(f.Bytes), asset: f.Path);
@@ -245,12 +294,18 @@ namespace Naoking.ClaudeCreatorTools
                 ctx.Issue(CctSeverity.Info, "NO_EXPORT_ROOT",
                     "export_root (書き出すフォルダー) が指定されていないため、範囲内/範囲外の判定はしていません (入力ファイルだけを範囲内として集計)");
             ReportScanStats(ctx, stats, loadCapped, depList.Count);
+            if (loadSkippedLarge > 0)
+                ctx.Issue(CctSeverity.Warning, "SCAN_INCOMPLETE",
+                    $"max_file_mb ({Fmt(ctx.MaxFileBytes / 1048576.0)} MB) を超える入力以外のアセット {loadSkippedLarge} 件は読み込まず、Missing 参照を確認していません (LightingData・ベイク済みメッシュ等。max_file_mb で変更可)",
+                    value: loadSkippedLarge);
 
             long insideBytes = inside.Sum(f => Math.Max(0, f.Bytes));
             long outsideBytes = outside.Sum(f => Math.Max(0, f.Bytes));
-            r.Put("inputs", Cap(inputs.Files.Select(p => new Dictionary<string, object> { ["path"] = p, ["type"] = TypeNameOf(p) }), ctx.MaxEntries, out var inOmitted));
-            r.Put("input_count", inputs.Files.Count);
+            // Files named directly + the folders given; the files found inside those folders are in the TSV (input = 1).
+            r.Put("inputs", Cap(inputs.ExplicitFiles.Select(p => new Dictionary<string, object> { ["path"] = p, ["type"] = TypeNameOf(p) }), ctx.MaxEntries, out var inOmitted));
             if (inOmitted > 0) r.Put("inputs_omitted", inOmitted);
+            if (inputs.Folders.Count > 0) PutCapped(r, "input_folders", inputs.Folders, ctx.MaxEntries);
+            r.Put("input_count", inputs.Files.Count);
             if (inputs.FromFolders > 0) r.Put("inputs_from_folders", inputs.FromFolders);
             if (inputs.FromSelection) r.Put("inputs_from_selection", true);
             r.Put("export_roots", exportRoots.ToList());
@@ -291,26 +346,89 @@ namespace Naoking.ClaudeCreatorTools
             });
             r.Put("missing_guids", Cap(missingGuids.Values.OrderByDescending(m => m.Files.Count).Select(MissingRow), ctx.MaxEntries, out var mgOmitted));
             if (mgOmitted > 0) r.Put("missing_guids_omitted", mgOmitted);
-            r.Put("missing_scripts", Cap(missingScripts.Select(m => m.ToPlain()), ctx.MaxEntries, out _));
-            r.Put("missing_prefabs", Cap(missingPrefabs.Select(m => m.ToPlain()), ctx.MaxEntries, out _));
-            r.Put("missing_references", Cap(missingRefs.Select(m => m.ToPlain()), ctx.MaxEntries, out _));
-            r.Put("scripts", Cap(scripts, ctx.MaxEntries, out var scriptsOmitted));
-            if (scriptsOmitted > 0) r.Put("scripts_omitted", scriptsOmitted);
-            r.Put("asmdefs", asmdefs.Select(kv => (object)new Dictionary<string, object> { ["path"] = kv.Key, ["inside_export"] = kv.Value }).ToList());
-            r.Put("large_files", large.OrderByDescending(f => f.Bytes).Take(ctx.MaxEntries).Select(FileRow).ToList());
+            PutCapped(r, "missing_scripts", missingScripts.Select(m => m.ToPlain()), ctx.MaxEntries);
+            PutCapped(r, "missing_prefabs", missingPrefabs.Select(m => m.ToPlain()), ctx.MaxEntries);
+            PutCapped(r, "missing_references", missingRefs.Select(m => m.ToPlain()), ctx.MaxEntries);
+            PutCapped(r, "scripts", scripts, ctx.MaxEntries);
+            PutCapped(r, "asmdefs", asmdefs.OrderBy(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal)
+                .Select(kv => new Dictionary<string, object> { ["path"] = kv.Key, ["inside_export"] = kv.Value }), ctx.MaxEntries);
+            PutCapped(r, "large_files", large.OrderByDescending(f => f.Bytes).Select(FileRow), ctx.MaxEntries);
             var scan = stats.ToPlain(ctx.MaxEntries);
             scan["assets_load_scanned"] = loadScanned;
             scan["load_scan_capped"] = loadCapped;
+            scan["load_scan_skipped_large"] = loadSkippedLarge;
             scan["referrer_graph_nodes"] = referrers.Nodes;
+            scan["referrer_graph_capped"] = referrers.Capped;
             r.Put("scan", scan);
             if (unsaved.Count > 0) r.Put("unsaved", unsaved.Distinct(StringComparer.Ordinal).ToList());
+            // The enrichment phases run last, so a budget that ran out there leaves the Missing/GUID verdict intact.
+            bool essentialComplete = ctx.CompleteExcept("referrer_graph", "package_usage");
+            bool conclusive = essentialComplete && forceText && !inputs.Truncated && !loadCapped && loadSkippedLarge == 0 && loadFailed == 0 &&
+                              stats.TooLarge.Count == 0 && stats.Failed.Count == 0;
+            r.Put("conclusive", conclusive);
+            WriteDependencyList(ctx, args, depList, inputs.FileSet, InExport, excludedScripts, inside.Concat(outside));
             ctx.FlushIssueCaps();
+            ctx.FlushTimeBudget();
 
             int missingScriptCount = missingScripts.Sum(m => m.Count);
             r.Message = $"依存 {depList.Count} 件: 範囲内 {inside.Count} ({Fmt(Mb(insideBytes))} MB) / 範囲外 {outside.Count} ({Fmt(Mb(outsideBytes))} MB) / " +
-                        $"パッケージ {packages.Count} 種 / 組み込み {builtinPaths.Count}。欠落 GUID {missingGuids.Count} / Missing Script {missingScriptCount} / " +
-                        $"Missing 参照 {missingRefs.Sum(m => m.Count)}";
+                        $"パッケージ {packages.Count} 種 / 組み込み {builtinPaths.Count + targetBuiltin}。欠落 GUID {missingGuids.Count} / " +
+                        $"Missing Script {missingScriptCount} / Missing Prefab {missingPrefabs.Sum(m => m.Count)} / Missing 参照 {missingRefs.Sum(m => m.Count)}" +
+                        (!conclusive ? " (走査が不完全なため未確定: SCAN_INCOMPLETE / BINARY_SERIALIZATION 参照)"
+                            : ctx.Complete ? "" : " (参照元・パッケージ使用元の集計だけ途中まで)");
             return r;
+        }
+
+        /// <summary>
+        /// Writes every dependency (group, input flag, path, GUID, type, bytes) as UTF-8 TSV next to the reports, so the complete
+        /// export set / manifest is available without raising max_entries: Claude reads the file with its own file tools. Skipped
+        /// when save_report=false. Only Library/ClaudeCreatorTools/Reports is written, like the JSON report itself.
+        /// </summary>
+        static void WriteDependencyList(Context ctx, CctArgs args, List<string> depList, HashSet<string> inputs, Func<string, bool> inExport,
+            HashSet<string> excludedScripts, IEnumerable<DepFile> assetFiles)
+        {
+            if (!args.GetBool("save_report", true)) return;
+            try
+            {
+                var known = new Dictionary<string, DepFile>(StringComparer.Ordinal);
+                foreach (var f in assetFiles) known[f.Path] = f;
+                var rows = new List<string[]>();
+                foreach (var path in depList)
+                {
+                    string group;
+                    if (excludedScripts.Contains(path)) group = "excluded_script";
+                    else if (path.StartsWith("Assets/", StringComparison.Ordinal)) group = inExport(path) ? "inside" : "outside";
+                    else if (path.StartsWith("Packages/", StringComparison.Ordinal)) group = "package:" + PackageNameOf(path);
+                    else group = "builtin";
+                    known.TryGetValue(path, out var df);
+                    bool isBuiltin = group == "builtin";
+                    rows.Add(new[]
+                    {
+                        group,
+                        inputs.Contains(path) ? "1" : "0",
+                        path,
+                        isBuiltin ? "" : AssetDatabase.AssetPathToGUID(path),
+                        df?.Type ?? (isBuiltin ? "" : TypeNameOf(path)),
+                        (df?.Bytes ?? (isBuiltin ? -1 : FileSize(ctx.ToPhysical(path)))).ToString(CultureInfo.InvariantCulture),
+                    });
+                }
+                int Rank(string g) => g == "inside" ? 0 : g == "outside" ? 1 : g.StartsWith("package:", StringComparison.Ordinal) ? 2 : g == "builtin" ? 3 : 4;
+                var sb = new StringBuilder(rows.Count * 96 + 64);
+                sb.Append("group\tinput\tpath\tguid\ttype\tbytes\n");
+                foreach (var row in rows.OrderBy(x => Rank(x[0])).ThenBy(x => x[0], StringComparer.Ordinal).ThenBy(x => x[2], StringComparer.Ordinal))
+                    sb.Append(string.Join("\t", row)).Append('\n');
+                var dir = CctPaths.EnsureDir(CctPaths.ReportsDir);
+                var subject = args.GetString("report_name");
+                var file = CctPaths.Combine(dir, ToolName + (string.IsNullOrEmpty(subject) ? "" : "-" + CctPaths.SafeName(subject)) +
+                                                 "-files-" + CctPaths.NewId() + ".tsv");
+                File.WriteAllText(file, sb.ToString(), new UTF8Encoding(false));
+                ctx.R.Put("dependency_list_path", CctPaths.ToDisplayPath(file));
+                ctx.R.Put("dependency_list_rows", rows.Count);
+            }
+            catch (Exception e)
+            {
+                ctx.Issue(CctSeverity.Warning, "FILE_LIST_WRITE_FAILED", "依存ファイル一覧 (TSV) を保存できませんでした: " + e.Message);
+            }
         }
 
         static object FileRow(DepFile f) => new Dictionary<string, object>
@@ -334,7 +452,7 @@ namespace Naoking.ClaudeCreatorTools
         /// of every prefab instance root inside it (those stay nested when the hierarchy is saved as a prefab). Uses
         /// GetAssetPath(instanceID) so referenced assets are not loaded just to be listed.
         /// </summary>
-        static List<string> CollectHierarchyAssets(GameObject root, out int builtinCount)
+        static List<string> CollectHierarchyAssets(Context ctx, GameObject root, out int builtinCount)
         {
             var list = new List<string>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -349,7 +467,8 @@ namespace Naoking.ClaudeCreatorTools
             }
             foreach (var t in root.GetComponentsInChildren<Transform>(true))
             {
-                if (t == null) continue;
+                if (t == null || IsTransient(t.gameObject)) continue;
+                if (ctx.OutOfTime("target_scan")) break;
                 try
                 {
                     if (PrefabUtility.IsAnyPrefabInstanceRoot(t.gameObject))
@@ -372,7 +491,8 @@ namespace Naoking.ClaudeCreatorTools
             return list;
         }
 
-        static void CheckScript(Context ctx, string path, string ext, List<object> scripts, Dictionary<string, bool> asmdefs, Func<string, bool> inExport)
+        static void CheckScript(string path, string ext, List<object> scripts, Dictionary<string, bool> asmdefs, List<string> classMissing,
+            Func<string, bool> inExport)
         {
             var row = new Dictionary<string, object> { ["path"] = path };
             var asm = AssemblyOf(path, ext);
@@ -387,8 +507,7 @@ namespace Naoking.ClaudeCreatorTools
                     if (ms != null && ms.GetClass() == null)
                     {
                         row["class_found"] = false;
-                        ctx.Issue(CctSeverity.Warning, "SCRIPT_CLASS_NOT_FOUND",
-                            "依存スクリプトのクラスを解決できません (コンパイルエラー、またはクラス名とファイル名の不一致)。このスクリプトを使うコンポーネントは Missing Script になります", asset: path);
+                        classMissing.Add(path); // reported once the referrer graph says whether anything uses it
                     }
                 }
                 catch (Exception) { /* unloadable script: the GUID scan / load scan reports the effect */ }
@@ -449,6 +568,7 @@ namespace Naoking.ClaudeCreatorTools
             {
                 for (int i = 0; i < nodes.Count; i++)
                 {
+                    if (ctx.OutOfTime("referrer_graph")) { result.Capped = true; break; }
                     var node = nodes[i];
                     progress.Step(i, node);
                     string[] direct;
@@ -492,6 +612,7 @@ namespace Naoking.ClaudeCreatorTools
             {
                 for (int i = 0; i < files.Count; i++)
                 {
+                    if (ctx.OutOfTime("guid_scan")) break;
                     var path = files[i];
                     progress.Step(i, path);
                     var ext = Path.GetExtension(path);
@@ -525,10 +646,18 @@ namespace Naoking.ClaudeCreatorTools
 
         /// <summary>Loads prefabs and editable assets (read-only) and checks for Missing Script / Prefab / references.</summary>
         static int LoadScan(Context ctx, List<string> files, HashSet<string> roots, List<LoadFinding> missingScripts,
-            List<LoadFinding> missingPrefabs, List<LoadFinding> missingRefs, List<string> unsaved, out bool capped)
+            List<LoadFinding> missingPrefabs, List<LoadFinding> missingRefs, List<string> unsaved, out bool capped, out int skippedLarge,
+            out int failed)
         {
+            failed = 0;
             var list = files.Where(p => LoadScanExtensions.Contains(Path.GetExtension(p)) &&
                                         (roots.Contains(p) || p.StartsWith("Assets/", StringComparison.Ordinal))).ToList();
+            // One LoadAssetAtPath cannot be interrupted by the time budget and stays in memory: skip huge non-input files
+            // (LightingData, baked meshes, terrain data), which hold few user references anyway.
+            int before = list.Count;
+            if (ctx.MaxFileBytes > 0)
+                list = list.Where(p => roots.Contains(p) || FileSize(ctx.ToPhysical(p)) <= ctx.MaxFileBytes).ToList();
+            skippedLarge = before - list.Count;
             capped = list.Count > MaxLoadScanFiles;
             if (capped) list = list.Take(MaxLoadScanFiles).ToList();
             int scanned = 0;
@@ -537,6 +666,7 @@ namespace Naoking.ClaudeCreatorTools
             {
                 for (int i = 0; i < list.Count; i++)
                 {
+                    if (ctx.OutOfTime("load_scan")) break;
                     var path = list[i];
                     progress.Step(i, path);
                     try
@@ -549,6 +679,7 @@ namespace Naoking.ClaudeCreatorTools
                     }
                     catch (Exception e)
                     {
+                        failed++;
                         ctx.Issue(CctSeverity.Warning, "SCAN_INCOMPLETE", $"アセットを読み込めず Missing 確認できませんでした: {e.GetType().Name}: {e.Message}", asset: path);
                     }
                 }
@@ -576,11 +707,7 @@ namespace Naoking.ClaudeCreatorTools
                     ms.Count += m - 1;
                     ms.Add(m > 1 ? $"{rel} ({m})" : rel);
                 }
-                try
-                {
-                    if (PrefabUtility.IsPrefabAssetMissing(go)) mp.Add(rel);
-                }
-                catch (Exception) { /* API refused this object: skip */ }
+                if (IsMissingPrefabInstanceRoot(go)) mp.Add(rel);
                 foreach (var c in go.GetComponents<Component>())
                 {
                     if (c == null) continue;
@@ -639,14 +766,9 @@ namespace Naoking.ClaudeCreatorTools
 
         static void CheckPrefabStage(List<string> deps, List<string> unsaved)
         {
-            ScenesToScan(out var stagePath);
+            var stagePath = CurrentStageScene(out var stageScene);
             if (string.IsNullOrEmpty(stagePath) || !deps.Contains(stagePath)) return;
-            try
-            {
-                var stage = UnityEditor.SceneManagement.StageUtility.GetCurrentStage() as UnityEditor.SceneManagement.PreviewSceneStage;
-                if (stage != null && stage.scene.IsValid() && stage.scene.isDirty) unsaved.Add(stagePath);
-            }
-            catch (Exception) { /* no stage info */ }
+            if (stageScene.IsValid() && stageScene.isDirty) unsaved.Add(stagePath);
         }
 
         static readonly Dictionary<string, string> FieldHints = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -677,18 +799,24 @@ namespace Naoking.ClaudeCreatorTools
                 // Importer settings (.meta: script icons, remapped model materials) degrade gracefully; asset bodies break.
                 bool onlyMeta = m.Files.All(f => f.EndsWith(".meta", StringComparison.OrdinalIgnoreCase));
                 ctx.Issue(onlyMeta ? CctSeverity.Warning : CctSeverity.Error, "MISSING_GUID",
-                    $"GUID {m.Guid} の参照先がこのプロジェクトにありません ({(hint.Length > 0 ? hint : "参照")})。参照元 {file}:{line}{more}",
+                    $"GUID {m.Guid} の参照先がこのプロジェクトにありません ({(hint.Length > 0 ? hint : "参照")})。参照元 {file}:{line}{more}。" +
+                    (onlyMeta
+                        ? "インポート設定 (.meta: スクリプトのアイコン、モデルの外部マテリアル等) の参照なので壊れはしませんが、導入先でも欠けたままです"
+                        : "元のアセット (またはそれを含むパッケージ) を導入するか、参照を設定し直してから書き出してください"),
                     value: m.Guid, asset: file);
             }
             foreach (var f in missingScripts)
                 ctx.Issue(CctSeverity.Error, "MISSING_SCRIPT",
-                    $"Missing Script {f.Count} 個 (例: {string.Join(", ", f.Samples.Take(3))})。導入先でも壊れたコンポーネントになります", value: f.Count, asset: f.Asset);
+                    $"Missing Script {f.Count} 個 (例: {string.Join(", ", f.Samples.Take(3))})。導入先でも壊れたコンポーネントになります。" +
+                    "必要なスクリプト/パッケージを導入するか、不要なら Missing のコンポーネントを削除してから書き出してください", value: f.Count, asset: f.Asset);
             foreach (var f in missingPrefabs)
                 ctx.Issue(CctSeverity.Error, "MISSING_PREFAB",
-                    $"元プレハブが見つからないネストプレハブ {f.Count} 個 (例: {string.Join(", ", f.Samples.Take(3))})", value: f.Count, asset: f.Asset);
+                    $"元プレハブが見つからないネストプレハブ {f.Count} 個 (例: {string.Join(", ", f.Samples.Take(3))})。" +
+                    "元プレハブ (またはそのパッケージ) を導入し直すか、そのインスタンスを削除してから書き出してください", value: f.Count, asset: f.Asset);
             foreach (var f in missingRefs)
                 ctx.Issue(CctSeverity.Warning, "MISSING_REFERENCE",
-                    $"Missing 参照 {f.Count} 個 (削除されたアセット、または GUID は有効でもサブアセットの fileID が無効)。例: {string.Join(", ", f.Samples.Take(3))}",
+                    $"Missing 参照 {f.Count} 個 (削除されたアセット、または GUID は有効でもサブアセットの fileID が無効)。例: {string.Join(", ", f.Samples.Take(3))}。" +
+                    "参照を設定し直すか、不要なら None にしてから書き出してください",
                     value: f.Count, asset: f.Asset);
         }
 
@@ -725,7 +853,7 @@ namespace Naoking.ClaudeCreatorTools
         }
 
         static Tuple<List<object>, List<object>> ReportPackages(Context ctx, Dictionary<string, PackageUse> packages, List<string> declared,
-            Referrers referrers, Func<string, bool> inExport, bool haveReferencedBy)
+            Referrers referrers, bool haveReferencedBy)
         {
             var detailed = new List<object>();
             var compact = new List<object>();
@@ -739,6 +867,7 @@ namespace Naoking.ClaudeCreatorTools
                 var installedVia = vpmManaged ? "vpm" : source;
                 var usedFrom = pu.Samples.SelectMany(referrers.Of).Where(p => !p.StartsWith("Packages/", StringComparison.Ordinal))
                     .Distinct(StringComparer.Ordinal).Take(3).ToList();
+                var dependsOn = source == "builtin" ? new List<string>() : ctx.DependsOn(info);
                 var row = new Dictionary<string, object>
                 {
                     ["name"] = pu.Name,
@@ -750,6 +879,7 @@ namespace Naoking.ClaudeCreatorTools
                     ["assemblies"] = pu.Assemblies.OrderBy(a => a, StringComparer.Ordinal).Cast<object>().ToList(),
                     ["examples"] = pu.Samples.Cast<object>().ToList(),
                 };
+                if (dependsOn.Count > 0) row["depends_on"] = dependsOn.Cast<object>().ToList();
                 if (usedFrom.Count > 0) row["used_from"] = usedFrom.Cast<object>().ToList();
                 if (haveReferencedBy) row["referencing_inputs"] = pu.ReferencingInputs.Cast<object>().ToList();
                 detailed.Add(row);
@@ -761,6 +891,8 @@ namespace Naoking.ClaudeCreatorTools
                     ["referenced_by"] = haveReferencedBy ? (object)pu.ReferencedBy : null,
                     ["files"] = pu.Files,
                 };
+                // What the package itself needs (e.g. Modular Avatar -> NDMF): the install order for the destination.
+                if (dependsOn.Count > 0) c["depends_on"] = dependsOn.Cast<object>().ToList();
                 compact.Add(c);
 
                 if (source == "builtin") continue; // com.unity.modules.*: part of every Unity install
@@ -779,9 +911,10 @@ namespace Naoking.ClaudeCreatorTools
                 }
                 var label = string.IsNullOrEmpty(info?.DisplayName) ? pu.Name : $"{pu.Name} ({info.DisplayName})";
                 var users = haveReferencedBy ? $"入力 {pu.ReferencedBy} 件から参照、" : "";
+                var needs = dependsOn.Count > 0 ? $"。このパッケージ自体の依存: {string.Join(", ", dependsOn.Take(5))}" : "";
                 ctx.Issue(severity, "PACKAGE_DEPENDENCY",
                     $"パッケージ {label} が必要です ({users}依存ファイル {pu.Files} 件、このプロジェクトの版 {info?.Version ?? "不明"} / {installedVia})。" +
-                    "導入先にも同じパッケージを入れてください (版は検証済みの版で、最低対応版ではありません)" + note,
+                    "導入先にも同じパッケージを入れてください (表示の版はこのプロジェクトで動いている版で、最低対応版ではありません)" + needs + note,
                     path: "Packages/" + pu.Name, value: info?.Version);
             }
             return Tuple.Create(detailed, compact);

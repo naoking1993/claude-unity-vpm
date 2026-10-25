@@ -39,7 +39,10 @@ namespace Naoking.ClaudeCreatorTools
     /// | PATH_OUTSIDE_PROJECT       | error           | absolute path or '..' segment; skipped                                       |
     /// | NOT_ASSET_PATH             | error           | path is not under Assets/; skipped                                           |
     /// | INVALID_PATH               | error           | path contains invalid characters; skipped                                    |
-    /// | SKIPPED_PACKAGE            | info            | Packages/ path; managed by VCC, not snapshotted                              |
+    /// | SKIPPED_PACKAGE            | info / warning  | Packages/ path; managed by VCC, not snapshotted (warning for a restore       |
+    /// |                            |                 | subset). Hidden Packages/ sub-scenes (NDMF's "___NDMF Preview___", always    |
+    /// |                            |                 | loaded with Modular Avatar) and Packages/ dependencies only go to the        |
+    /// |                            |                 | manifest's skipped list; dependencies are counted by one info issue          |
     /// | ASSET_NOT_FOUND            | warning         | path does not exist; skipped                                                 |
     /// | UNTITLED_SCENE_SKIPPED     | warning         | an open Untitled scene has no file and cannot be snapshotted                 |
     /// | SCENE_CAPTURED_FROM_MEMORY | info            | open scene had unsaved changes; its in-memory state was stored               |
@@ -49,31 +52,42 @@ namespace Naoking.ClaudeCreatorTools
     /// | ASSET_HAS_UNSAVED_CHANGES  | warning         | asset is loaded with unsaved in-memory changes the file does not contain     |
     /// | PREFAB_STAGE_UNSAVED       | warning / fail  | prefab open in Prefab Mode has unsaved changes (restore refuses)             |
     /// | DEPENDENCIES_FAILED        | warning         | AssetDatabase.GetDependencies threw; dependencies may be incomplete          |
-    /// | COPY_FAILED                | error           | a file could not be read/copied; the snapshot is marked incomplete           |
+    /// | COPY_FAILED                | error / fail    | a file could not be read/copied (snapshot incomplete); fail when none copied |
     /// | TEMP_CLEANUP_FAILED        | warning         | the temporary scene copy / temp folder could not be removed                  |
     /// | SCENE_HAS_UNSAVED_CHANGES  | warning         | diff: open scene differs in memory from disk (save it to diff that state)    |
     /// | FILES_ADDED                | info            | diff/restore: files now under a snapshotted folder that the snapshot lacks   |
     /// | PROJECT_ROOT_DIFFERS       | warning         | the snapshot was taken in a different project folder                         |
-    /// | NOT_IN_SNAPSHOT            | warning         | restore: a requested path is not in the snapshot                             |
+    /// | BLUEPRINT_ID_CHANGES       | warning         | diff/restore: a .unity/.prefab holds a different VRChat Blueprint ID         |
+    /// |                            |                 | (PipelineManager.blueprintId, incl. prefab overrides) than the snapshot;     |
+    /// |                            |                 | restoring it changes the upload target                                       |
+    /// | NOT_IN_SNAPSHOT            | warning / fail  | restore: a requested path is not in the snapshot (fail when none matched)    |
     /// | SNAPSHOT_CORRUPT           | error           | restore: stored copy missing or its SHA-256 differs from the manifest        |
     /// | FILE_READ_ONLY             | error           | restore: target file is read-only (e.g. VCS lock); not overwritten           |
     /// | GUID_CONFLICT              | warning         | restore: the snapshot's GUID is now used by another asset                    |
-    /// | EDITOR_BUSY                | (fail code)     | restore refused while playing, compiling or importing                       |
+    /// | EDITOR_BUSY                | (fail code)     | restore refused while playing, compiling, importing or baking lighting      |
     /// | PRE_RESTORE_SNAPSHOT       | info            | restore: id of the automatic pre-restore snapshot                            |
-    /// | PRE_RESTORE_FAILED         | (fail code)     | restore aborted because the current state could not be backed up first      |
+    /// | PRE_RESTORE_FAILED         | (fail code)     | restore aborted: current state (incl. unsaved open-scene changes) not backed up|
     /// | MISSING_BEFORE_RESTORE     | (skipped entry) | pre-restore manifest: file did not exist before the restore recreated it     |
+    /// | RECREATED_FILES_REMAIN     | warning         | restore of a pre-restore snapshot (undo): files the original restore         |
+    /// |                            |                 | recreated still exist; restore never deletes, so delete them for a full undo |
     /// | FILE_RESTORED              | info            | restore: file content overwritten from the snapshot                          |
     /// | FILE_RECREATED             | info            | restore: missing file recreated from the snapshot                            |
     /// | META_RESTORED              | info            | restore: only the .meta (GUID / importer settings) was written back          |
     /// | SCENE_RELOADED             | info            | restore: open scene reloaded from disk (in-memory changes discarded)         |
+    /// | SCRIPTS_RESTORED           | info            | restore: .cs/.asmdef/.asmref/.dll/.rsp written; compile + domain reload follow|
     /// | ASSET_REIMPORTED           | info            | restore: unchanged file force-reimported to drop unsaved in-memory changes   |
-    /// | RESTORE_FAILED             | error           | restore: writing a file failed                                               |
+    /// | RESTORE_FAILED             | error / fail    | restore: writing/importing a file failed (fail when nothing succeeded)       |
     /// | RESTORE_VERIFY_FAILED      | error           | restore: SHA-256 after writing differs from the snapshot                     |
     /// | GUID_MISMATCH_AFTER_RESTORE| warning         | restore: AssetDatabase reports a different GUID than the snapshot after import|
     /// | ASSET_STILL_DIRTY          | warning         | restore: asset still has unsaved in-memory changes after the reimport        |
     /// | SCENE_CLOSE_FAILED         | (fail code)     | restore: an open scene could not be unloaded before writing; nothing written |
-    /// | SCENE_REOPEN_FAILED        | error           | restore: a scene could not be reopened afterwards (open it manually)         |
+    /// | SCENE_REOPEN_FAILED        | error / warning | restore: a scene could not be reopened afterwards (open it manually);        |
+    /// |                            |                 | warning when only the temporary empty scene could not be closed              |
     /// | DELETE_FAILED              | (fail code)     | delete: the snapshot folder could not be removed                             |
+    /// | EXCEPTION / NO_RESULT      | (fail code)     | from CctRunner: unexpected exception (details.stack)                         |
+    ///
+    /// Response lists (skipped, changes, added, would_*, restored, ...) are capped at max_entries with a
+    /// "&lt;key&gt;_omitted" count; the saved report then has the complete list under full_lists.&lt;key&gt;.
     /// </summary>
     public static partial class CctSnapshot
     {
@@ -87,6 +101,9 @@ namespace Naoking.ClaudeCreatorTools
         const int BufferSize = 1 << 16;
         const long LineDiffMaxBytes = 32L * 1024 * 1024;
         const int DirtyCheckMax = 2000;
+        /// <summary>Upper bound for the complete lists kept in the report (full_lists), so a huge project cannot bloat it.</summary>
+        const int FullListMax = 20000;
+        const int DefaultMaxEntries = 50;
 
         /// <summary>dependency_filter "editable": text/native assets an MCP session typically changes.</summary>
         static readonly HashSet<string> EditableExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
@@ -122,6 +139,7 @@ namespace Naoking.ClaudeCreatorTools
             r.Put("snapshots_dir", root);
             var rows = new List<Dictionary<string, object>>();
             int noManifest = 0;
+            long allBytes = 0;
             if (Directory.Exists(root))
             {
                 foreach (var dirAbs in Directory.GetDirectories(root))
@@ -145,6 +163,7 @@ namespace Naoking.ClaudeCreatorTools
                         if (!string.IsNullOrEmpty(m.RestoreOf)) row["restore_of"] = m.RestoreOf;
                         if (m.Incomplete) row["incomplete"] = true;
                         rows.Add(row);
+                        allBytes += m.TotalBytes;
                     }
                     catch (Exception e)
                     {
@@ -153,13 +172,14 @@ namespace Naoking.ClaudeCreatorTools
                 }
             }
             if (noManifest > 0)
-                r.AddIssue(CctSeverity.Info, "MANIFEST_INVALID", $"manifest.json の無いフォルダが {noManifest} 個あります (作成途中で中断されたもの)。一覧には含めません", value: noManifest);
+                r.AddIssue(CctSeverity.Info, "MANIFEST_INVALID", $"manifest.json の無いフォルダが {noManifest} 個あります (作成途中で中断されたもの)。一覧には含めません。不要なら {root} から手動で削除できます", value: noManifest);
 
             var sorted = rows.OrderByDescending(x => SortKey(x["created_at"] as string)).ThenByDescending(x => (string)x["id"], StringComparer.Ordinal).ToList();
             r.Put("total_count", sorted.Count);
+            r.Put("total_mb_all", Mb(allBytes));
             r.Put("snapshots", sorted.Take(limit).Cast<object>().ToList());
             if (sorted.Count > limit) r.Put("omitted", sorted.Count - limit);
-            r.Message = sorted.Count == 0 ? "スナップショットはまだありません" : $"スナップショット {sorted.Count} 件 (新しい順に {Math.Min(limit, sorted.Count)} 件を表示)";
+            r.Message = sorted.Count == 0 ? "スナップショットはまだありません" : $"スナップショット {sorted.Count} 件 / 合計 {Mb(allBytes)} MB (新しい順に {Math.Min(limit, sorted.Count)} 件を表示)";
             return r;
         }
 
@@ -170,7 +190,7 @@ namespace Naoking.ClaudeCreatorTools
                 return CctResult.Fail("id を指定してください (list で確認できます)", "INVALID_ID", new Dictionary<string, object> { ["id"] = id });
             var dir = SnapshotDir(id);
             if (!Directory.Exists(dir))
-                return CctResult.Fail($"スナップショット '{id}' が見つかりません", "SNAPSHOT_NOT_FOUND", new Dictionary<string, object> { ["snapshots_dir"] = CctPaths.SnapshotsDir });
+                return CctResult.Fail($"スナップショット '{id}' が見つかりません (cct_snapshot action=list で確認できます)", "SNAPSHOT_NOT_FOUND", new Dictionary<string, object> { ["snapshots_dir"] = CctPaths.SnapshotsDir });
 
             var r = CctResult.Ok("");
             r.Put("action", "delete");
@@ -190,8 +210,8 @@ namespace Naoking.ClaudeCreatorTools
             if (!args.GetBool("confirm", false))
             {
                 r.Put("dry_run", true);
-                r.AddIssue(CctSeverity.Warning, "CONFIRM_REQUIRED", "確認のための試行です。何も削除していません。削除するには confirm=true を付けて再実行してください", value: id);
-                r.Message = $"[dry run] スナップショット '{id}' を削除します (未実行)";
+                r.AddIssue(CctSeverity.Warning, "CONFIRM_REQUIRED", "確認用の dry run です。まだ何も削除していません。削除してよいかユーザーに確認してから confirm=true を付けて再実行してください", value: id);
+                r.Message = $"[dry run] スナップショット '{id}'" + (m != null ? $" ({m.CreatedAt} / {m.Files.Count} ファイル / {Mb(m.TotalBytes)} MB)" : "") + " を削除します (未実行)";
                 return r;
             }
 
@@ -394,7 +414,7 @@ namespace Naoking.ClaudeCreatorTools
             var path = CctPaths.Combine(dir, ManifestName);
             if (!File.Exists(path))
             {
-                failure = CctResult.Fail($"スナップショット '{id}' が見つかりません", "SNAPSHOT_NOT_FOUND",
+                failure = CctResult.Fail($"スナップショット '{id}' が見つかりません (cct_snapshot action=list で確認できます)", "SNAPSHOT_NOT_FOUND",
                     new Dictionary<string, object> { ["snapshots_dir"] = CctPaths.SnapshotsDir });
                 return null;
             }
@@ -798,5 +818,77 @@ namespace Naoking.ClaudeCreatorTools
             omitted = Math.Max(0, all.Count - max);
             return all.Take(max).ToList();
         }
+
+        /// <summary>
+        /// Puts the first <paramref name="max"/> items under <paramref name="key"/> (the summary response keeps it). When the
+        /// list is longer, adds "&lt;key&gt;_omitted" and keeps the complete list in <paramref name="full"/>, which goes to the
+        /// report only (data key full_lists), so the response stays small and nothing is lost.
+        /// </summary>
+        static void PutList(CctResult r, string key, IEnumerable<object> items, int max, Dictionary<string, object> full)
+        {
+            var all = items.ToList();
+            r.Put(key, all.Take(max).ToList());
+            if (all.Count <= max) return;
+            r.Put(key + "_omitted", all.Count - max);
+            full[key] = all.Take(FullListMax).ToList();
+        }
+
+        static void PutFullLists(CctResult r, Dictionary<string, object> full)
+        {
+            if (full.Count > 0) r.Put("full_lists", full);
+        }
+
+        // ------------------------------------------------------------------ VRChat Blueprint IDs
+
+        /// <summary>
+        /// VRChat Blueprint IDs in a text-serialized scene/prefab: VRC.Core.PipelineManager's "blueprintId: ..." lines and
+        /// prefab-instance overrides ("propertyPath: blueprintId" + "value: ..."). Read as text, so the SDK is not needed and
+        /// nothing is loaded. "" stands for an empty ID. Null when the file is not a YAML .unity/.prefab or is too big.
+        /// </summary>
+        static List<string> BlueprintIds(string abs, string assetPath)
+        {
+            var ext = Path.GetExtension(assetPath ?? "");
+            if (!string.Equals(ext, ".unity", StringComparison.OrdinalIgnoreCase) && !string.Equals(ext, ".prefab", StringComparison.OrdinalIgnoreCase)) return null;
+            try
+            {
+                if (abs == null || !File.Exists(abs) || new FileInfo(abs).Length > LineDiffMaxBytes || !IsYaml(abs)) return null;
+                var ids = new SortedSet<string>(StringComparer.Ordinal);
+                bool overrideValueNext = false;
+                foreach (var raw in ReadLines(abs))
+                {
+                    var line = raw.Trim();
+                    if (overrideValueNext)
+                    {
+                        overrideValueNext = false;
+                        if (line.StartsWith("value:", StringComparison.Ordinal)) ids.Add(line.Substring(6).Trim());
+                        continue;
+                    }
+                    if (line.StartsWith("blueprintId:", StringComparison.Ordinal)) ids.Add(line.Substring(12).Trim());
+                    else if (line == "propertyPath: blueprintId") overrideValueNext = true;
+                }
+                return ids.ToList();
+            }
+            catch (Exception) { return null; }
+        }
+
+        /// <summary>
+        /// Compares the Blueprint IDs of the stored copy and the current file; when they differ, adds blueprint_ids_now /
+        /// blueprint_ids_snapshot to <paramref name="info"/> and returns a ready Japanese message, else null.
+        /// </summary>
+        static string CompareBlueprintIds(string storedAbs, string currentAbs, string assetPath, Dictionary<string, object> info, bool forRestore)
+        {
+            var snap = BlueprintIds(storedAbs, assetPath);
+            var now = BlueprintIds(currentAbs, assetPath);
+            if (snap == null || now == null || snap.SequenceEqual(now)) return null;
+            if (snap.Count == 0 || now.Count == 0) return null; // no PipelineManager on one side: nothing to keep
+            info["blueprint_ids_now"] = now.Cast<object>().ToList();
+            info["blueprint_ids_snapshot"] = snap.Cast<object>().ToList();
+            return forRestore
+                ? $"'{assetPath}' を復元すると VRChat の Blueprint ID が {FormatIds(now)} から {FormatIds(snap)} に戻り、次のアップロード先が変わります。" +
+                  $"復元後に PipelineManager の Blueprint ID を {FormatIds(now)} に設定し直すか、assets でこのファイルを除いて復元してください"
+                : $"'{assetPath}' の VRChat Blueprint ID がスナップショット ({FormatIds(snap)}) と現在 ({FormatIds(now)}) で異なります。restore するとスナップショット側に戻ります";
+        }
+
+        static string FormatIds(List<string> ids) => string.Join(", ", ids.Select(x => x.Length == 0 ? "(空)" : x));
     }
 }

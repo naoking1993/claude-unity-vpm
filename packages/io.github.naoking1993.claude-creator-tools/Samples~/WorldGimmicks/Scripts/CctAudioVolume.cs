@@ -3,19 +3,23 @@
 // ----------------------------------------------------------------------------
 // 目的:
 //   登録した AudioSource の音量を、UI の Slider で自分の画面 (耳) だけ変更します。
-//   シーンに置いた時の各 AudioSource の音量を 100% とし、スライダー値 0〜1 を掛けます。
+//   シーンに置いた時の各 AudioSource の音量を 100% とし、スライダーの位置 (左端 0 〜 右端 1) を掛けます。
 //   任意で「%」表示 (TextMeshPro) と、VRChat の PlayerData による設定の保存ができます。
 //
 // セットアップ:
 //   1. Canvas を作る (World Space 推奨)。VRChat で UI を操作するには Canvas に
 //      VRC Ui Shape コンポーネントが必要。Canvas のレイヤーは Default
 //      (UI レイヤーはメニューを開いていないと操作できない: VRChat の仕様)。
-//   2. Canvas に Slider を置き、Min Value = 0, Max Value = 1, Value = 1 (=100%) にする。
-//   3. 任意の GameObject (例: Slider 自身) に CctAudioVolume を Add Component し、
-//      Audio Sources, Slider, (任意) Percent Label を登録。
+//   2. Canvas に Slider を置く。左端 = 0%、右端 = 100% として扱うので Min / Max Value は何でもよい
+//      (おすすめは Min 0 / Max 1)。Value を右端 (Max Value) にしておくと 100% で始まります。
+//   3. ワールド開始時から Active な GameObject (例: Canvas 自身や、常に表示される空の GameObject) に
+//      CctAudioVolume を Add Component し、Audio Sources, Slider, (任意) Percent Label を登録。
+//      ※ 最初は非表示の設定パネルの中には付けないこと。Udon は Start 前 (= 非アクティブの間) に届いた
+//        イベントを捨てるため、入室時の OnPlayerRestored を受け取れず、保存が働かないことがあります
+//        (Slider 自体は非表示のパネルにあっても OK)。
 //   4. Slider の On Value Changed (Single) の + を押し、CctAudioVolume を付けた GameObject を入れ、
 //      UdonBehaviour > SendCustomEvent (string) を選んで「_OnSliderChanged」と入力。
-//      (UI イベントから Udon に値は渡せないので、スクリプト側で slider.value を読みます)
+//      (UI イベントから Udon に値は渡せないので、スクリプト側でスライダーの位置を読みます)
 //   5. 保存したい場合は Persistence Key に、ワールド内で一意なキー名 (例: "CctAudioVolume.BGM") を入れる。
 //      空欄なら保存しません。複数の CctAudioVolume を置く場合はキーを別々にする。
 //
@@ -49,7 +53,7 @@ namespace Naoking.ClaudeWorldGimmicks
         [Tooltip("音量を変える AudioSource。シーンに置いた時の音量を 100% とします")]
         public AudioSource[] audioSources;
 
-        [Tooltip("音量スライダー (Min 0 / Max 1 / Value 1 = 100%)。On Value Changed から _OnSliderChanged を呼ぶ")]
+        [Tooltip("音量スライダー (左端 = 0%、右端 = 100%)。On Value Changed から _OnSliderChanged を呼ぶ")]
         public Slider slider;
 
         [Tooltip("(任意) 「80%」のように表示するテキスト (TextMeshPro)")]
@@ -71,6 +75,19 @@ namespace Naoking.ClaudeWorldGimmicks
         private void Start()
         {
             Initialize();
+            // 非アクティブで始まった等で OnPlayerRestored を受け取れなかった場合の救済:
+            // キーが既に存在する = 自分のデータは読み込み済み なので、その値を使う。
+            if (!_restored) TryRestoreFromExistingKey();
+        }
+
+        private void TryRestoreFromExistingKey()
+        {
+            if (string.IsNullOrEmpty(persistenceKey)) return;
+            VRCPlayerApi local = Networking.LocalPlayer;
+            if (!Utilities.IsValid(local)) return;
+            if (!PlayerData.HasKey(local, persistenceKey)) return;
+            _restored = true;
+            ApplySaved(local);
         }
 
         private void Initialize()
@@ -83,7 +100,7 @@ namespace Naoking.ClaudeWorldGimmicks
             {
                 _baseVolumes[i] = audioSources[i] != null ? audioSources[i].volume : 0f;
             }
-            if (slider != null) _level = Mathf.Clamp01(slider.value);
+            if (slider != null) _level = Mathf.Clamp01(slider.normalizedValue);
             ApplyLevel();
         }
 
@@ -92,7 +109,8 @@ namespace Naoking.ClaudeWorldGimmicks
         {
             Initialize();
             if (slider == null) return;
-            _level = Mathf.Clamp01(slider.value);
+            // normalizedValue = Min〜Max のどこにいるか (0〜1)。Min/Max を 0〜100 などにしていても正しく動く。
+            _level = Mathf.Clamp01(slider.normalizedValue);
             ApplyLevel();
             QueueSave();
         }
@@ -101,14 +119,19 @@ namespace Naoking.ClaudeWorldGimmicks
         {
             if (!Utilities.IsValid(player) || !player.isLocal) return;
             Initialize();
+            if (_restored) return; // Start で既存キーから復元済み
             _restored = true;
-            if (string.IsNullOrEmpty(persistenceKey)) return;
+            ApplySaved(player);
+        }
 
+        private void ApplySaved(VRCPlayerApi player)
+        {
+            if (string.IsNullOrEmpty(persistenceKey)) return;
             float saved;
             if (PlayerData.TryGetFloat(player, persistenceKey, out saved))
             {
                 _level = Mathf.Clamp01(saved);
-                if (slider != null) slider.SetValueWithoutNotify(_level);
+                if (slider != null) slider.SetValueWithoutNotify(Mathf.Lerp(slider.minValue, slider.maxValue, _level));
                 ApplyLevel();
             }
         }
