@@ -86,6 +86,7 @@ namespace Naoking.ClaudeCreatorTools
     /// | INVALID_ARGUMENT              | (fail code)     | bad mode / export_root / search_root                                              |
     /// | NO_INPUT                      | (fail code)     | no usable asset (and no target) to analyse                                        |
     /// | TARGET_NOT_FOUND              | (fail code)     | target spec did not resolve to a GameObject                                       |
+    /// | AMBIGUOUS_TARGET              | (fail code)     | target spec matched several GameObjects; details lists the candidates             |
     /// | DEPENDENCIES_FAILED           | (fail code)     | AssetDatabase.GetDependencies threw                                               |
     /// </summary>
     public static partial class CctDependencyReport

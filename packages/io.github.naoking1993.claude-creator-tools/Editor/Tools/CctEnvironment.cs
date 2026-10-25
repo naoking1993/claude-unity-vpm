@@ -10,6 +10,14 @@ namespace Naoking.ClaudeCreatorTools
     /// cct_environment: what Claude should know before touching a project - Unity version, project path,
     /// open scenes and dirty state, play mode, VRChat SDK / MA / NDMF / AAO / lilToon / UdonSharp versions,
     /// and which avatar/world roots exist. Read-only.
+    ///
+    /// Issue codes (stable):
+    /// | code                | severity | meaning |
+    /// |---------------------|----------|---------|
+    /// | PLAY_MODE           | warning  | the editor is in Play mode; changes made now are lost when Play stops |
+    /// | SCENE_UNSAVED       | info     | a loaded scene has unsaved changes (value = scene path) |
+    /// | PACKAGE_LIST_FAILED | warning  | PackageInfo.GetAllRegisteredPackages threw; data.packages is empty |
+    /// data.project_kind: "avatar" | "world" | "avatar+world" | "no_vrchat_sdk" (which VRChat SDK component types exist).
     /// </summary>
     public static class CctEnvironment
     {

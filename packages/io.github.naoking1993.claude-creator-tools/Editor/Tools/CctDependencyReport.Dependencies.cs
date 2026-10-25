@@ -110,7 +110,7 @@ namespace Naoking.ClaudeCreatorTools
             {
                 var res = CctTargets.Resolve(targetSpec);
                 if (!res.Ok)
-                    return FailWith(r, res.Error, "TARGET_NOT_FOUND", res.Candidates.Count > 0 ? res.Candidates.Cast<object>().ToList() : null);
+                    return FailWith(r, res.Error, res.Candidates.Count > 0 ? "AMBIGUOUS_TARGET" : "TARGET_NOT_FOUND", res.Candidates.Count > 0 ? res.Candidates.Cast<object>().ToList() : null);
                 if (IsTransient(res.GameObject))
                     return FailWith(r, $"'{res.GameObject.name}' はプレビュー用の一時オブジェクト (NDMF / Modular Avatar のプレビュー等、保存されない) です。Hierarchy で元のオブジェクトを指定してください",
                         "TARGET_NOT_FOUND");

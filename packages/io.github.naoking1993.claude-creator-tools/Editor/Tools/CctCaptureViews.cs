@@ -43,6 +43,7 @@ namespace Naoking.ClaudeCreatorTools
     /// | code                      | severity | meaning |
     /// |---------------------------|----------|---------|
     /// | TARGET_NOT_FOUND          | error    | target spec did not resolve (result fails) |
+    /// | AMBIGUOUS_TARGET          | error    | target spec matched several objects; details.candidates lists them (result fails) |
     /// | INVALID_ARGUMENT          | error    | no valid view requested (result fails) |
     /// | UNKNOWN_VIEW              | warning  | a requested view / preset name was ignored |
     /// | PARAM_ADJUSTED            | info/warn| a parameter was clamped, unknown, or replaced by its default |
@@ -186,7 +187,7 @@ namespace Naoking.ClaudeCreatorTools
 
             var resolved = CctTargets.Resolve(args.GetString("target"));
             if (!resolved.Ok)
-                return FailWith(r, resolved.Error, "TARGET_NOT_FOUND", null,
+                return FailWith(r, resolved.Error, resolved.Candidates.Count > 0 ? "AMBIGUOUS_TARGET" : "TARGET_NOT_FOUND", null,
                     resolved.Candidates.Count > 0 ? resolved.Candidates.Cast<object>().ToList() : null);
             var target = resolved.GameObject;
             var targetInfo = CctTargets.Describe(target);

@@ -615,9 +615,9 @@ namespace Naoking.ClaudeCreatorTools
                     }
                 }
                 r.Put("program_assets_planned", planned);
-                r.AddIssue(CctSeverity.Warning, "CONFIRM_REQUIRED", "ドライランです。何も書き込んでいません。confirm=true で実行します");
+                r.AddIssue(CctSeverity.Warning, "CONFIRM_REQUIRED", "確認用のドライランです。まだ何も書き込んでいません。plan をユーザーに見せて了承を得てから confirm=true を付けて再実行してください");
                 int writes = plan.Count(IsWrite);
-                r.Message = $"ドライラン: {dest} に {writes} ファイルを書き込み予定 / スキップ {plan.Count - writes} / Program Asset 作成予定 {planned.Count} (confirm=true で実行)";
+                r.Message = $"[ドライラン] {dest} に {writes} ファイルを書き込み予定 / スキップ {plan.Count - writes} / Program Asset 作成予定 {planned.Count} (confirm=true で実行)";
                 return r;
             }
 

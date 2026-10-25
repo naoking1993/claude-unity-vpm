@@ -139,8 +139,8 @@ namespace Naoking.ClaudeCreatorTools
                 PutList(r, "would_create_folders", foldersToCreate.Cast<object>(), maxEntries, full);
                 PutFullLists(r, full);
                 r.AddIssue(CctSeverity.Warning, "CONFIRM_REQUIRED",
-                    "確認用の dry run です。まだ何も変更していません。この内容をユーザーに見せて了承を得てから、confirm=true を付けて再実行してください (復元前の状態は自動でスナップショットされます)", value: m.Id);
-                r.Message = $"[dry run] '{m.Id}' から復元すると: 上書き {Count(actionable, "overwrite")} / 再作成 {Count(actionable, "recreate")} / " +
+                    "確認用のドライランです。まだ何も変更していません。この内容をユーザーに見せて了承を得てから、confirm=true を付けて再実行してください (復元前の状態は自動でスナップショットされます)", value: m.Id);
+                r.Message = $"[ドライラン] '{m.Id}' から復元すると: 上書き {Count(actionable, "overwrite")} / 再作成 {Count(actionable, "recreate")} / " +
                             $"meta {Count(actionable, "meta")} / シーン再読込 {actionable.Count(it => it.NeedsSceneClose)} / 再インポート {Count(actionable, "reimport")} / " +
                             $"変更なし {plan.Count(it => it.Action == "unchanged")} / スキップ {plan.Count(it => it.Action == "skip")} (未実行)";
                 return r;

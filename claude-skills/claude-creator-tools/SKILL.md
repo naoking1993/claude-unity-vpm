@@ -43,11 +43,11 @@ description: 自作VPMパッケージ Claude Creator Tools のMCPツール cct_e
 
 - 戻り値は要約。`data.message`（日本語の1行）→ `data.issue_counts` → `data.issues`（error から順、既定30件まで、超えた数は `issues_omitted`）→ ツールごとの要約キー → `data.report_path`、の順に読む。
 - 全文は `report_path` の JSON（`<プロジェクト>/Library/ClaudeCreatorTools/Reports/`）にある。要約で足りないときだけ開き、Grep で必要なキーに絞る。`detail: "full"` で全文を会話に流さない。
-- 失敗すると `success: false`。原因のコードは `data.code`（`TARGET_NOT_FOUND`・`AMBIGUOUS_TARGET`・`EDITOR_BUSY` など）で、候補は `data.candidates` か `data.details` にある。
+- 失敗すると `success: false`。原因のコードは `data.code`（`TARGET_NOT_FOUND`・`AMBIGUOUS_TARGET`・`INVALID_ARGUMENT`・`EDITOR_BUSY` など）。対象の候補は `data.candidates`（`cct_avatar_audit`・`cct_animator_inspect`）か `data.details`（`cct_capture_views` は `details.candidates`、`cct_dependency_report` は `details`）に並ぶ。推測で選ばず、ユーザーに選んでもらう。
 - issue の `code` は変わらない英字のコード、`message` は日本語の説明。コードの意味は [ツールの仕様](references/tool-reference.md)。
 - 画像は会話に返らない。PNG の絶対パスが返るので Read で開く。最初は `contact_sheet`（全ビューを並べた1枚）だけを開く。
-- 対象の指定（`target`）：`""` か `"selection"` は選択中のもの、`"/Root/Child"` は階層パス、`"#12345"` は instance ID（ドメインリロードで変わる）、ほかにシーン内でユニークな名前、`"Assets/.../X.prefab"`。候補が複数あると失敗して候補を返すので、ユーザーに選んでもらってから呼び直す。
-- 時間：1回の呼び出しは既定30秒で打ち切られる。大きいアバター・ワールド、`post_build`、高解像度の撮影には `timeout_seconds`（例 120）を渡す。打ち切られても Unity 側で処理が続くことがあるので、書き込み系は再送せず `list`・`diff` で状態を確かめる。
+- 対象の指定（`target`）：`""` か `"selection"` は選択中のもの、`"/Root/Child"` は階層パス、`"#12345"` は instance ID（ドメインリロードで変わる）、ほかにシーン内でユニークな名前、`"Assets/.../X.prefab"`。候補が複数あると `AMBIGUOUS_TARGET` で失敗するので、ユーザーに選んでもらってから呼び直す。
+- 時間：1回の呼び出しは既定30秒で打ち切られる。大きいアバター・ワールド、`post_build`、高解像度の撮影には `timeout_seconds`（例 120）を渡す。240 より大きくしない（Claude Code は HTTP の MCP 呼び出しから5分間何も返らないと中断する）。打ち切られても Unity 側で処理が続くことがあるので、書き込み系は再送せず `list`・`diff` で状態を確かめる。
 
 ## 作業に応じて読む
 

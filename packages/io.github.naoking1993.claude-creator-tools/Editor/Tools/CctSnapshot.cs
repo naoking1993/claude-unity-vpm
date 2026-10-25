@@ -210,8 +210,8 @@ namespace Naoking.ClaudeCreatorTools
             if (!args.GetBool("confirm", false))
             {
                 r.Put("dry_run", true);
-                r.AddIssue(CctSeverity.Warning, "CONFIRM_REQUIRED", "確認用の dry run です。まだ何も削除していません。削除してよいかユーザーに確認してから confirm=true を付けて再実行してください", value: id);
-                r.Message = $"[dry run] スナップショット '{id}'" + (m != null ? $" ({m.CreatedAt} / {m.Files.Count} ファイル / {Mb(m.TotalBytes)} MB)" : "") + " を削除します (未実行)";
+                r.AddIssue(CctSeverity.Warning, "CONFIRM_REQUIRED", "確認用のドライランです。まだ何も削除していません。削除してよいかユーザーに確認してから confirm=true を付けて再実行してください", value: id);
+                r.Message = $"[ドライラン] スナップショット '{id}'" + (m != null ? $" ({m.CreatedAt} / {m.Files.Count} ファイル / {Mb(m.TotalBytes)} MB)" : "") + " を削除します (未実行)";
                 return r;
             }
 

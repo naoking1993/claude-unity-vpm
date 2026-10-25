@@ -26,7 +26,7 @@ namespace Naoking.ClaudeCreatorTools
         static readonly string[] OrientationNames = { "Any", "Grip", "Gun" };
         static readonly string[] PickupVersionNames = { "Version_1_0", "Version_1_1" };
         static readonly string[] MobilityNames = { "Mobile", "Immobilize", "ImmobilizeForVehicle" };
-        // VRCUnityVideoPlayer private enum VideoRenderMode { RenderTexture, MaterialOverride } (decompiled reference only).
+        // VRCUnityVideoPlayer private enum VideoRenderMode: RenderTexture=0, MaterialOverride=1 (FieldCheck enum, SDK 3.10.5 DLL).
         const int VideoRenderModeRenderTexture = 0;
 
         // "Bad things happen when you put more than 2 video players in a room" / "more than 1 mirror"
@@ -711,7 +711,8 @@ namespace Naoking.ClaudeCreatorTools
 
         static void AuditVideoPlayers(Ctx ctx, Dictionary<string, object> d)
         {
-            // Screens / speakers reference their player through a private serialized field (decompiled reference: videoPlayer).
+            // Screens / speakers reference their player through the private serialized field 'videoPlayer' (not covered by
+            // FieldCheck; if it is absent, HasProps adds SDK_FIELD_NOT_FOUND and the no-screen / no-speaker checks are skipped).
             var screensFor = new Dictionary<Object, int>();
             var speakersFor = new Dictionary<Object, int>();
             bool avproLinksKnown = true;

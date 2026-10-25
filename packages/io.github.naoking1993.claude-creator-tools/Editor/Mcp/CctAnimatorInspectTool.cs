@@ -94,7 +94,7 @@ namespace Naoking.ClaudeCreatorTools.Mcp
             [ToolParameter("Write the full JSON report under Library/ClaudeCreatorTools/Reports (default true)", Required = false, DefaultValue = "true")]
             public bool save_report { get; set; }
 
-            [ToolParameter("MCP call timeout in seconds (default 30, max 3600); read by the MCP server, not by the tool", Required = false, DefaultValue = "30")]
+            [ToolParameter("MCP call timeout in seconds (default 30, max 3600); read by the MCP server, and by this tool: the scan stops at about 60% of it (TRUNCATED)", Required = false, DefaultValue = "30")]
             public int timeout_seconds { get; set; }
         }
 

@@ -25,10 +25,10 @@ namespace Naoking.ClaudeCreatorTools.Mcp
                       "Scans stop at timeout_seconds - 5 (25 s by default); for a whole-project reverse search or a big folder pass " +
                       "timeout_seconds=240. Run in edit mode (PLAY_MODE warns). Writes only reports (Library/ClaudeCreatorTools). " +
                       "Parameters: mode = 'dependencies' | 'reverse' | 'scene_references'; " +
-                      "assets = asset paths, folders (= every file inside) or 32-hex GUIDs (default: Project-window selection); " +
+                      "assets = JSON array of asset paths, folders (= every file inside) or 32-hex GUIDs (default: Project-window selection); " +
                       "export_root = dependencies: comma-separated export folder(s) (default: folders in assets, else no inside/outside verdict); " +
                       "include_scripts = dependencies: false skips .cs/.dll under Assets/ (default true); " +
-                      "declared_packages = dependencies: packages the destination already has (names or 'com.vrchat.*'), others become warnings; " +
+                      "declared_packages = dependencies: JSON array of packages the destination already has (names or 'com.vrchat.*'), others become warnings; " +
                       "target = scene_references: scene GameObject ('/Avatar/Gimmick', '#instanceId', unique name; default: Hierarchy selection); " +
                       "dependencies: optional scene object or prefab asset added to the inputs; " +
                       "search_root = reverse: comma-separated folder(s) to search (default 'Assets'); " +
